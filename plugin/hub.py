@@ -75,6 +75,10 @@ REPLY_EXCERPT = 280
 PICKER_SECONDS = 10 * 60
 MAX_PERSONA = 20_000
 _KEY_ENV = re.compile(r"^[A-Z][A-Z0-9_]{1,62}(_API_KEY|_KEY|_TOKEN)$")
+# petdex slugs, and the ones Hermes gives pets it hatches: one plain path segment.
+_PET_SLUG = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}")
+# Thumbnails of pets not installed yet mean a petdex download each; a few at a time.
+PET_THUMB_FETCHES = 3
 REPLY_CONTEXT = 4000
 # Raster formats only: SVG is a document that can carry script.
 INLINE_IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/bmp"}
@@ -112,6 +116,8 @@ ROUTE_POLICY = {
     "h_models": "owner", "h_providers": "owner", "h_identity": "owner", "h_memory": "owner", "h_usage": "owner",
     "h_model_default": "owner_signed", "h_provider_key": "owner_signed", "h_provider_key_delete": "owner_signed",
     "h_identity_put": "owner_signed", "h_memory_edit": "owner_signed",
+    "h_pet": "device", "h_pet_sheet": "public", "h_pet_thumb": "public", "h_pets": "owner", "h_pet_catalog": "owner",
+    "h_pet_display": "owner_signed", "h_pet_adopt": "owner_signed", "h_pet_remove": "owner_signed",
     "h_system": "owner", "h_system_updates": "owner", "h_jobs": "owner", "h_job": "owner", "h_logs": "owner",
     "h_schedule": "owner", "h_schedule_parse": "owner",
     "h_pause": "owner_signed", "h_restart": "owner_signed", "h_update": "owner_signed",
@@ -236,6 +242,7 @@ class Hub:
         self.started_at = time.time()
         self._tasks: Set[asyncio.Task] = set()
         self._update_check: Dict[str, Any] = {}
+        self._pet_thumbs = asyncio.Semaphore(PET_THUMB_FETCHES)
         # Reconnects MCP servers (Hermes's /reload-mcp), installed by the adapter. Server changes wait for it.
         self.reload_mcp: Optional[Callable[[], Awaitable[str]]] = None
         self.mcp_changed = False
@@ -305,6 +312,14 @@ class Hub:
         r.add_get("/api/memory", self.h_memory)
         r.add_post("/api/memory", self.h_memory_edit)
         r.add_get("/api/usage", self.h_usage)
+        r.add_get("/api/pet", self.h_pet)
+        r.add_get("/api/pets", self.h_pets)
+        r.add_get("/api/pets/catalog", self.h_pet_catalog)
+        r.add_put("/api/pets/display", self.h_pet_display)
+        r.add_post("/api/pets/{slug}/adopt", self.h_pet_adopt)
+        r.add_delete("/api/pets/{slug}", self.h_pet_remove)
+        r.add_get("/api/pets/{slug}/sheet", self.h_pet_sheet)
+        r.add_get("/api/pets/{slug}/thumb", self.h_pet_thumb)
         r.add_get("/api/system", self.h_system)
         r.add_get("/api/system/updates", self.h_system_updates)
         r.add_post("/api/system/pause", self.h_pause)
@@ -554,6 +569,7 @@ class Hub:
                 "control": self.hermes is not None, "goals": self.chat_goal is not None, "search": True, "files": True,
                 "abilities": self.hermes is not None, "commands": self.commands_provider is not None,
                 "sessions": self.hermes is not None and self._has(self.hermes, "sessions_available"),
+                "pets": self.hermes is not None and self._has(self.hermes, "pets_available"),
                 "connection_status": True}
 
     def about(self) -> Dict[str, Any]:
@@ -1672,6 +1688,151 @@ class Hub:
         except ValueError:
             return _error(400, "days must be a number")
         return _json(await self._call(self._need_hermes().usage, days))
+
+    # -- the agent's pet: its animated face, from Hermes's pet store and petdex.dev ---------------
+
+    def pet_signature(self, slug: str) -> str:
+        """Pet images load in image views that can't send the device token, so their links are signed."""
+        key = self.store.secret("media_key").encode()
+        return hmac.new(key, f"pet:{slug}".encode(), hashlib.sha256).hexdigest()[:32]
+
+    def _pet_thumb_url(self, slug: str) -> str:
+        return f"/api/pets/{quote(slug)}/thumb?sig={self.pet_signature(slug)}"
+
+    def _pet_view(self, sheet: Dict[str, Any]) -> Dict[str, Any]:
+        """A pet as the app draws it: its spritesheet is a signed link, never a path on the server."""
+        slug = sheet["slug"]
+        view = {k: v for k, v in sheet.items() if k != "path"}
+        view["sheet_url"] = f"/api/pets/{quote(slug)}/sheet?rev={sheet['revision']}&sig={self.pet_signature(slug)}"
+        view["thumb_url"] = self._pet_thumb_url(slug)
+        return view
+
+    def _pet_slug(self, request: web.Request) -> str:
+        slug = request.match_info["slug"]
+        if not _PET_SLUG.fullmatch(slug):
+            raise web.HTTPNotFound(text=json.dumps({"error": "No such pet."}), content_type="application/json")
+        return slug
+
+    def _pet_link_ok(self, request: web.Request, slug: str) -> bool:
+        return self.hermes is not None and hmac.compare_digest(request.query.get("sig", ""), self.pet_signature(slug))
+
+    async def _pet_changed(self) -> None:
+        """Every phone redraws the agent's face: members see the same pet as owners."""
+        await self.broadcast({"type": "pet.update"})
+
+    async def h_pet(self, request: web.Request) -> web.Response:
+        """The pet showing for this bot, or none."""
+        self._require(request)
+        h = self.hermes
+        if h is None or not self._has(h, "pets_available"):
+            return _json({"pet": None})
+        try:
+            sheet = await asyncio.to_thread(h.active_pet)
+        except Exception:
+            logger.debug("[winglet] couldn't read the active pet", exc_info=True)
+            sheet = None
+        return _json({"pet": self._pet_view(sheet) if sheet else None})
+
+    async def h_pets(self, request: web.Request) -> web.Response:
+        self._require(request)
+        data = await self._call(self._need_hermes().pets)
+        for pet in data["pets"]:
+            pet["thumb_url"] = self._pet_thumb_url(pet["slug"])
+        return _json(data)
+
+    async def h_pet_catalog(self, request: web.Request) -> web.Response:
+        self._require(request)
+        try:
+            offset = max(0, int(request.query.get("offset") or 0))
+        except ValueError:
+            return _error(400, "offset must be a number")
+        data = await self._call(self._need_hermes().pet_catalog, request.query.get("q", "").strip()[:100], offset)
+        for pet in data["pets"]:
+            pet["thumb_url"] = self._pet_thumb_url(pet["slug"])
+        return _json(data)
+
+    async def h_pet_sheet(self, request: web.Request) -> web.StreamResponse:
+        slug = self._pet_slug(request)
+        if not self._pet_link_ok(request, slug):
+            return _error(404, "not found")
+        try:
+            sheet = await asyncio.to_thread(self.hermes.pet_sheet, slug)
+        except Exception:
+            sheet = None
+        if not sheet:
+            return _error(404, "not found")
+        # A link names the version of the sheet it was made for, so that version never changes.
+        current = request.query.get("rev") == sheet["revision"]
+        return web.FileResponse(sheet["path"], headers={
+            "Content-Type": sheet["mime"], "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, max-age=31536000, immutable" if current else "private, no-cache",
+            "Content-Security-Policy": "default-src 'none'; sandbox"})
+
+    async def h_pet_thumb(self, request: web.Request) -> web.Response:
+        slug = self._pet_slug(request)
+        if not self._pet_link_ok(request, slug):
+            return _error(404, "not found")
+        async with self._pet_thumbs:
+            try:
+                data = await asyncio.to_thread(self.hermes.pet_thumbnail, slug)
+            except Exception:
+                logger.debug("[winglet] pet thumbnail failed", exc_info=True)
+                data = None
+        if not data:
+            return _error(404, "not found")
+        return web.Response(body=data, headers={
+            "Content-Type": "image/png", "Cache-Control": "private, max-age=604800", "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox"})
+
+    async def h_pet_display(self, request: web.Request) -> web.Response:
+        device = self._require(request)
+        on = bool((await self._body(request)).get("enabled"))
+        pet = await self._call(self._need_hermes().show_pet, on)
+        self.audit("pet", device, f"showed {pet['name']}" if pet else "turned the pet off")
+        await self._pet_changed()
+        return _json({"enabled": on, "pet": pet})
+
+    async def h_pet_adopt(self, request: web.Request) -> web.Response:
+        """Make a pet the agent's face. One that isn't installed yet comes from petdex, as a job."""
+        device = self._require(request)
+        h = self._need_hermes()
+        slug = self._pet_slug(request)
+        body = await self._body(request)
+        if await self._call(h.pet_installed, slug):
+            pet = await self._call(h.adopt_pet, slug)
+            self.audit("pet", device, f"chose {pet['name']}")
+            await self._pet_changed()
+            return _json({"pet": pet})
+        job = await self._begin_job(request, device, "pet_install", {"pet": slug, "message": f"Getting {slug} from petdex…"},
+                                    body=body)
+        if isinstance(job, web.Response):
+            return job
+        self.audit("pet", device, f"adopted {slug} from petdex")
+        self._spawn(self._adopt_pet(job["id"], slug))
+        return _json({"job": job}, status=202)
+
+    async def _adopt_pet(self, job_id: str, slug: str) -> None:
+        h = self._need_hermes()
+        try:
+            pet = await asyncio.to_thread(h.adopt_pet, slug)
+        except h.HermesRefused as exc:
+            await self._finish_job(job_id, "failed", _clip(str(exc), 300))
+            return
+        except Exception:
+            logger.warning("[winglet] pet install failed", exc_info=True)
+            await self._finish_job(job_id, "failed", "The pet couldn't be installed. The server log has the details.")
+            return
+        await self._finish_job(job_id, "succeeded", f"{pet['name']} is your agent's pet now.", pet=pet["slug"])
+        await self._pet_changed()
+
+    async def h_pet_remove(self, request: web.Request) -> web.Response:
+        device = self._require(request)
+        slug = self._pet_slug(request)
+        if not await self._call(self._need_hermes().remove_pet, slug):
+            return _error(404, "That pet isn't installed.")
+        self.audit("pet", device, f"removed {slug}")
+        await self._pet_changed()
+        return _json({"ok": True})
 
     # -- control center: health, pause, restart, updates, logs, schedule --------------------------
 

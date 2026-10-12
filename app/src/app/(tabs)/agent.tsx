@@ -4,10 +4,10 @@ import { Platform } from 'react-native';
 import { Redirect, router } from 'expo-router';
 import { ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { BotAvatar } from '../../components/BotAvatar';
+import { AgentFace } from '../../components/AgentFace';
 import { BotSwitcher } from '../../components/BotSwitcher';
 import {
-  Activity, BarChart, Bell, Brain, CalendarClock, Cpu, Fingerprint, HeartPulse, Info, Key, MessageCircle, MessageSquareText, Palette, Plug, Plus, ScrollText,
+  Activity, BarChart, Bell, Brain, CalendarClock, Cpu, Fingerprint, HeartPulse, Info, Key, MessageCircle, MessageSquareText, Palette, PawPrint, Plug, Plus, ScrollText,
   ShieldCheck, Smartphone, Sparkles, SquareTerminal, UserRoundPen,
 } from '../../components/icons';
 import { shortModel } from '../../components/PickerCard';
@@ -16,7 +16,6 @@ import { useTabBarSpace } from '../../components/TabBar';
 import { ListGroup, ListRow, SectionHeader, Toggle } from '../../components/ui';
 import { lockAvailable, unlock } from '../../lib/appLock';
 import { useAppUpdate } from '../../lib/appUpdateCheck';
-import { moodOf } from '../../lib/agent';
 import { connectionView } from '../../lib/connection';
 import { usePrefs } from '../../lib/prefs';
 import { homeChat, isOwner, type ServerState, useApp } from '../../lib/store';
@@ -49,7 +48,7 @@ export default function AgentTab() {
       <ScrollView contentContainerStyle={[s.content, { paddingTop: insets.top + 8, paddingBottom: (wide ? 24 : tabSpace) + 8 }]}>
         <View style={s.topRow}>{wide ? null : <BotSwitcher />}</View>
         <View style={s.profile}>
-          <BotAvatar name={server.bot.name} size={88} mood={moodOf(rt)} animated glow />
+          <AgentFace server={server} size={88} animated glow />
           <Text style={s.name} accessibilityRole="header">{server.bot.title}</Text>
           {server.bot.description ? <Text style={s.description}>{server.bot.description}</Text> : null}
           <View style={s.statusChip}>
@@ -145,6 +144,10 @@ function BrainRows({ server, rt }: { server: Server; rt?: ServerState }) {
         value={info?.configured.model ? shortModel(info.configured.model) : undefined} onPress={() => router.push('/model')} />
       <ListRow icon={<Key size={18} color={t.colors.onAccentSoft} />} title="Providers" onPress={() => router.push('/providers')} />
       <ListRow icon={<UserRoundPen size={18} color={t.colors.onAccentSoft} />} title="Persona" subtitle="Who it is and how it talks" onPress={() => router.push('/persona')} />
+      {rt?.info?.features?.pets ? (
+        <ListRow icon={<PawPrint size={18} color={t.colors.onAccentSoft} />} title="Pet" subtitle="Its animated face"
+          value={rt.pet?.name} onPress={() => router.push('/pets')} />
+      ) : null}
       <ListRow icon={<Brain size={18} color={t.colors.onAccentSoft} />} title="Memory" subtitle="What it remembers about you" onPress={() => router.push('/memory')} />
       <ListRow icon={<BarChart size={18} color={t.colors.onAccentSoft} />} title="Usage" subtitle="Tokens and cost" onPress={() => router.push('/usage')} />
     </ListGroup>

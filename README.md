@@ -69,6 +69,8 @@ the open-source agent by Nous Research, running on **your own machine or server*
 - **Models.** Switch the model for one chat from its header, or set the default. Add providers and API keys
   from the phone; keys are encrypted for your server before they leave the phone.
 - **Persona, memory and usage.** Edit who it is, see and fix what it remembers, and track tokens and cost.
+- **A pet.** Give your agent an animated face from the [petdex](https://petdex.dev) gallery. It waves when
+  a reply lands, runs while it works and waits when it needs you, on every phone paired with the bot.
 - **Goals.** Give a chat an outcome and Hermes keeps working on it, turn after turn, until its judge says
   it's done. Add requirements, pause it, and follow its progress in the chat and on Home.
 - **Skills, tools and MCP servers.** Turn skills on and off, read them, and install Hermes's official ones.
@@ -265,6 +267,7 @@ hermes -p researcher winglet pair
 **Next**
 - [x] The Android app tells you when a new version is out, and installs it for you
 - [x] Smaller Android downloads: one APK per CPU
+- [x] Pets: an animated face for your agent, from the petdex gallery
 - [ ] Live screen: watch the agent's computer and take over when it needs you
 - [ ] Real-time voice
 - [ ] Widgets and backups

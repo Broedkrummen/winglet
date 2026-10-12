@@ -338,3 +338,38 @@ test('the protocol check flags an app that is too old for its server', async () 
   assert.equal(rt.compat, 'update-app');
   assert.equal(rt.info.hermes_version, 'x');
 });
+
+test("the agent's pet loads on connect, follows changes, and is remembered for offline starts", async () => {
+  const h = harness();
+  await h.connect();
+  const boba = { slug: 'boba', name: 'Boba', sheet_url: '/api/pets/boba/sheet?rev=1&sig=x' };
+  let pet: any = boba;
+  const asked: string[] = [];
+  h.setRequest(async (_, route) => {
+    asked.push(route);
+    return route === '/api/pet' ? { pet } : { items: [], pending: 0, messages: [], deleted_ids: [] };
+  });
+  // A server without pets isn't asked, and shows the orb.
+  await h.hello();
+  assert.equal(h.store.getState().runtime.s.pet, null);
+  assert.ok(!asked.includes('/api/pet'));
+
+  h.event({ type: 'hello', chats: [], pending: 0, features: { pets: true } });
+  await h.tick();
+  assert.equal(h.store.getState().runtime.s.pet.slug, 'boba');
+  assert.equal(h.cache.get('pet:s').slug, 'boba');
+
+  pet = null;
+  h.event({ type: 'pet.update' });
+  await h.tick();
+  assert.equal(h.store.getState().runtime.s.pet, null);
+
+  // Offline, the face stays as it was.
+  pet = boba;
+  h.event({ type: 'pet.update' });
+  await h.tick();
+  h.setRequest(async () => { throw new ApiError('offline', 0); });
+  h.event({ type: 'pet.update' });
+  await h.tick();
+  assert.equal(h.store.getState().runtime.s.pet.slug, 'boba');
+});

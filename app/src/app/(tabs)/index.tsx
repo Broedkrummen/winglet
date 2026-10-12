@@ -4,6 +4,7 @@ import { Platform, RefreshControl, ScrollView, Text, TextInput, useWindowDimensi
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, RadialGradient, Rect, Stop } from 'react-native-svg';
+import { AgentFace } from '../../components/AgentFace';
 import { BotAvatar, botColor } from '../../components/BotAvatar';
 import { BotSwitcher } from '../../components/BotSwitcher';
 import { ConnectionBanner } from '../../components/ConnectionBanner';
@@ -12,7 +13,7 @@ import { ArrowUp, Hash, MessageSquarePlus, Plus, Sparkles, Square } from '../../
 import { InboxCard } from '../../components/InboxCards';
 import { useTabBarSpace } from '../../components/TabBar';
 import { Chip, IconButton, SectionHeader, Tap } from '../../components/ui';
-import { ago, chatName, greeting, headline, moodOf, pendingItems, workingChats } from '../../lib/agent';
+import { ago, chatName, greeting, headline, pendingItems, workingChats } from '../../lib/agent';
 import { api } from '../../lib/api';
 import { haptic } from '../../lib/haptics';
 import { plainText } from '../../lib/text';
@@ -75,7 +76,6 @@ function HomeFor({ server }: { server: Server }) {
     return () => clearInterval(id);
   }, []);
 
-  const mood = moodOf(rt);
   const head = headline(rt, server.bot.title);
   const pending = pendingItems(rt);
   const elsewhere = servers.filter((x) => x.id !== server.id).reduce((n, x) => n + (runtime[x.id]?.pending ?? 0), 0);
@@ -108,7 +108,7 @@ function HomeFor({ server }: { server: Server }) {
           </View>
 
           <View style={s.presence}>
-            <BotAvatar name={server.bot.name} size={108} mood={mood} animated glow />
+            <AgentFace server={server} size={108} animated glow />
             <Text style={s.greeting}>{greeting()}</Text>
             <Text style={s.headline} accessibilityRole="header" accessibilityLiveRegion="polite">{head.title}</Text>
             <Text style={s.detail}>{head.detail}</Text>

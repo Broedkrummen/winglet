@@ -10,7 +10,6 @@ import Animated, {
   withSpring, withTiming, ZoomIn,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { moodOf } from '../lib/agent';
 import { mediaUrl } from '../lib/api';
 import { connectionView } from '../lib/connection';
 import { exportChat } from '../lib/exportChat';
@@ -24,6 +23,7 @@ import { plainText } from '../lib/text';
 import { FIXED } from '../lib/theme';
 import { makeStyles, useTheme } from '../lib/themeContext';
 import type { InboxItem, Message, ReplyRef, Server } from '../lib/types';
+import { AgentFace } from './AgentFace';
 import { BotAvatar, botColor, UserAvatar } from './BotAvatar';
 import { Composer } from './Composer';
 import { ConnectionBanner } from './ConnectionBanner';
@@ -149,7 +149,7 @@ export function ChatView({ server, chatId, showBack, embedded }: { server: Serve
               <ChevronLeft size={26} color={t.colors.text} />
             </IconButton>
           ) : <View style={{ width: 4 }} />}
-          <BotAvatar name={server.bot.name} size={38} mood={moodOf(runtime)} animated={typing} />
+          <AgentFace server={server} size={38} animated={typing} />
           <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={s.headerTitle} numberOfLines={1} accessibilityRole="header">{title}</Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
@@ -646,7 +646,7 @@ function TypingRow({ server }: { server: Server }) {
   const s = useStyles();
   return (
     <Animated.View entering={FadeIn.duration(200)} style={[s.lane, s.typing]} accessibilityLiveRegion="polite" accessibilityLabel={`${server.bot.title} is working`}>
-      <BotAvatar name={server.bot.name} size={30} mood="working" animated />
+      <AgentFace server={server} size={30} mood="working" animated />
       <View style={s.typingBubble}><Dots /></View>
     </Animated.View>
   );
@@ -681,7 +681,7 @@ function EmptyChat({ server, chatId, top, bottom }: { server: Server; chatId: st
   return (
     <View style={[s.center, { flex: 1, paddingTop: top, paddingBottom: bottom, paddingHorizontal: 28, gap: 12 }]}>
       <Animated.View entering={ZoomIn.springify().damping(14)}>
-        <BotAvatar name={server.bot.name} size={92} mood="idle" animated glow />
+        <AgentFace server={server} size={92} mood="idle" animated glow />
       </Animated.View>
       <Text style={s.emptyTitle}>{home ? 'Updates from your routines' : `Say hi to ${server.bot.title}`}</Text>
       <Text style={s.emptyText}>

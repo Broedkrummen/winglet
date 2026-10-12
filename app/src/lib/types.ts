@@ -153,12 +153,12 @@ export type PauseState = { reason: string | null; engaged_at: string | null } | 
 /** A restart, update or install, which may outlive the server process that started it. */
 export type Job = {
   id: string;
-  kind: 'restart' | 'hermes_update' | 'winglet_update' | 'skill_install' | 'skill_uninstall' | 'mcp_install';
+  kind: 'restart' | 'hermes_update' | 'winglet_update' | 'skill_install' | 'skill_uninstall' | 'mcp_install' | 'pet_install';
   state: 'running' | 'succeeded' | 'failed' | 'unknown';
   device_id: string;
   detail: {
     message?: string; lines?: string[]; command?: string; from?: string; to?: string; finished_at?: number;
-    skill?: string; server?: string;
+    skill?: string; server?: string; pet?: string;
   };
   created_at: number;
   updated_at: number;
@@ -329,3 +329,23 @@ export type SessionMessage = {
 
 export type SessionTranscript = { session: SessionRow; messages: SessionMessage[]; truncated: boolean };
 
+
+/** A pet's spritesheet and how to cut it into frames: one row per animation, `frames` real frames in each. */
+export type PetSheet = {
+  slug: string; name: string; revision: string; mime: string;
+  frame_w: number; frame_h: number; columns: number; rows: number;
+  /** Row names top to bottom: Hermes's (idle, wave, run…) on older sheets, petdex's (waving, running…) on newer. */
+  state_rows: string[];
+  frames_per_state: number;
+  /** Real frames per state, when the server could count them; a missing state uses frames_per_state. */
+  frames: Partial<Record<string, number>>;
+  loop_ms: number;
+  sheet_url: string; thumb_url: string;
+};
+
+export type InstalledPet = { slug: string; name: string; description: string; generated: boolean; thumb_url: string };
+
+export type PetList = { enabled: boolean; active: string; pets: InstalledPet[] };
+
+/** A pet in the petdex gallery. */
+export type CatalogPet = { slug: string; name: string; kind: string; by: string; curated: boolean; installed: boolean; thumb_url: string };

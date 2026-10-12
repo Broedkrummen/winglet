@@ -1,4 +1,5 @@
 import Constants from 'expo-constants';
+import * as Device from 'expo-device';
 import { Platform } from 'react-native';
 import { create } from 'zustand';
 import { type AppUpdate, checkIsFresh, newestUpdate, type Release, RELEASES_URL } from './appUpdate';
@@ -39,7 +40,7 @@ export const useAppUpdate = create<State>((set, get) => ({
     try {
       const res = await fetch(RELEASES_URL, { headers: { Accept: 'application/vnd.github+json' }, signal: controller.signal });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const update = newestUpdate((await res.json()) as Release[], current);
+      const update = newestUpdate((await res.json()) as Release[], current, Device.supportedCpuArchitectures);
       const checkedAt = Date.now();
       set({ update, checkedAt, failed: false });
       // Keep a successful result even if this device cannot save the cache.

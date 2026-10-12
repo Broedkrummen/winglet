@@ -14,6 +14,7 @@ function harness(over: Record<string, any> = {}) {
   const modules: Record<string, unknown> = {
     'expo-constants': { expoConfig: { version: '0.2.0' } },
     'react-native': { Platform: { OS: over.platform ?? 'android' } },
+    'expo-device': { supportedCpuArchitectures: ['arm64-v8a', 'armeabi-v7a'] },
     zustand: { create: (init: any) => {
       state = init((patch: any) => Object.assign(state, patch), () => state);
       return { getState: () => state };

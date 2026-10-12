@@ -9,9 +9,11 @@ import { useEffect } from 'react';
 import { AppState, Platform, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { UpdatePrompt } from '../components/AppUpdate';
 import { LockScreen } from '../components/LockScreen';
 import { ShareListener } from '../components/ShareListener';
 import { Toasts } from '../components/Toasts';
+import { clearUpdateDownloads } from '../lib/appInstall';
 import { lockOnStart, onAppVisibility } from '../lib/appLock';
 import { useAppUpdate } from '../lib/appUpdateCheck';
 import { watchNetwork } from '../lib/network';
@@ -37,6 +39,7 @@ export default function RootLayout() {
     loadPrefs();
     init();
     registerServiceWorker();
+    if (Platform.OS === 'android') clearUpdateDownloads();
     return detach;
   }, [init, loadPrefs]);
 
@@ -91,6 +94,7 @@ function Navigator() {
       </Stack>
       <ShareListener />
       <Toasts />
+      <UpdatePrompt />
       <LockScreen />
     </SafeAreaProvider>
   );

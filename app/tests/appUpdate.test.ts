@@ -12,17 +12,18 @@ const load = (file: string, require: (m: string) => unknown = () => ({})) => {
   return exports;
 };
 const version = load('version.ts');
-const { newestUpdate, checkIsFresh, CHECK_EVERY_MS } = load('appUpdate.ts', () => version);
+const { newestUpdate, pickApk, releaseNotes, checkIsFresh, CHECK_EVERY_MS } = load('appUpdate.ts', () => version);
 
-const apk = (name: string) => ({ name, browser_download_url: `https://dl/${name}` });
+const apk = (name: string) => ({ name, browser_download_url: `https://dl/${name}`, size: name.length });
 const rel = (tag: string, over: any = {}) => ({
-  tag_name: tag, html_url: `https://gh/${tag}`, prerelease: tag.includes('-'),
+  tag_name: tag, html_url: `https://gh/${tag}`, prerelease: tag.includes('-'), body: `Winglet ${tag}.`,
   assets: [apk(`winglet-${tag.slice(1)}.apk`), apk(`winglet-plugin-${tag.slice(1)}.zip`)], ...over,
 });
 
 test('offers the newest full release above this one', () => {
   const releases = [rel('v0.2.1'), rel('v0.3.0-beta.1'), rel('v0.2.0'), rel('v0.1.2')];
-  assert.deepEqual({ ...newestUpdate(releases, '0.2.0') }, { version: '0.2.1', page: 'https://gh/v0.2.1', apk: 'https://dl/winglet-0.2.1.apk' });
+  assert.deepEqual({ ...newestUpdate(releases, '0.2.0') },
+    { version: '0.2.1', page: 'https://gh/v0.2.1', apk: 'https://dl/winglet-0.2.1.apk', apkSize: 17, notes: 'Winglet v0.2.1.' });
   assert.equal(newestUpdate(releases, '0.2.1'), null);
   assert.equal(newestUpdate(releases, '0.3.0'), null);
 });
@@ -38,12 +39,34 @@ test('betas are offered only to people already on a beta', () => {
 test('drafts, odd tags and debug-key builds are ignored', () => {
   assert.equal(newestUpdate([rel('v9.0.0', { draft: true }), rel('nightly'), rel('v1.2')], '0.2.0'), null);
   const debug = rel('v0.2.1', { assets: [apk('winglet-dev-abc1234-debugkey.apk')] });
-  assert.deepEqual({ ...newestUpdate([debug], '0.2.0') }, { version: '0.2.1', page: 'https://gh/v0.2.1', apk: undefined });
+  const found = newestUpdate([debug], '0.2.0');
+  assert.equal(found.version, '0.2.1');
+  assert.equal(found.apk, undefined);
 });
 
-test('per-CPU releases hand out the 64-bit ARM build', () => {
-  const split = rel('v0.2.1', { assets: [apk('winglet-0.2.1-armeabi-v7a.apk'), apk('winglet-0.2.1-arm64-v8a.apk')] });
-  assert.equal(newestUpdate([split], '0.2.0')?.apk, 'https://dl/winglet-0.2.1-arm64-v8a.apk');
+test('per-CPU releases hand out the build for this phone', () => {
+  const split = [apk('winglet-0.3.0-armeabi-v7a.apk'), apk('winglet-0.3.0-arm64-v8a.apk'), apk('winglet-plugin-0.3.0.zip')];
+  const name = (abis?: string[] | null) => pickApk(split, abis)?.name;
+  assert.equal(name(['arm64-v8a', 'armeabi-v7a', 'armeabi']), 'winglet-0.3.0-arm64-v8a.apk');
+  assert.equal(name(['armeabi-v7a', 'armeabi']), 'winglet-0.3.0-armeabi-v7a.apk');
+  // Unknown CPUs: the 64-bit ARM build, which fits nearly every phone.
+  assert.equal(name(null), 'winglet-0.3.0-arm64-v8a.apk');
+  assert.equal(name([]), 'winglet-0.3.0-arm64-v8a.apk');
+  // An x86 emulator gets nothing it can't install.
+  assert.equal(name(['x86_64']), undefined);
+  // Older releases had one universal APK, which fits every phone.
+  assert.equal(pickApk([apk('winglet-0.2.0.apk')], ['x86_64'])?.name, 'winglet-0.2.0.apk');
+  assert.equal(pickApk([apk('winglet-0.2.0.apk')], ['armeabi-v7a'])?.name, 'winglet-0.2.0.apk');
+  assert.equal(newestUpdate([rel('v0.3.0', { assets: split })], '0.2.0', ['armeabi-v7a'])?.apk, 'https://dl/winglet-0.3.0-armeabi-v7a.apk');
+});
+
+test("a release's summary is its first paragraph, on one line", () => {
+  assert.equal(releaseNotes('Winglet 0.3: pets,\nand smaller APKs.\n\n**Install:** download it.\n\n## What\'s new'), 'Winglet 0.3: pets, and smaller APKs.');
+  assert.equal(releaseNotes('## What\'s new\n- Pets'), undefined);
+  assert.equal(releaseNotes(''), undefined);
+  assert.equal(releaseNotes(null), undefined);
+  const long = releaseNotes('word '.repeat(200));
+  assert.ok(long.length <= 401 && long.endsWith('word…'));
 });
 
 test('a stored check is reused only by the same app version, for half a day', () => {

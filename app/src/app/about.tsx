@@ -2,8 +2,9 @@ import Constants from 'expo-constants';
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Linking, Text, View } from 'react-native';
+import { InstallButton } from '../components/AppUpdate';
 import { BotAvatar } from '../components/BotAvatar';
-import { Activity, CircleArrowUp, Download, ExternalLink, HardDrive, RefreshCw } from '../components/icons';
+import { Activity, CircleArrowUp, ExternalLink, HardDrive, RefreshCw } from '../components/icons';
 import { Logo } from '../components/Logo';
 import { Screen } from '../components/Screen';
 import { Button, Card, ListGroup, ListRow, SectionHeader, Toggle } from '../components/ui';
@@ -99,10 +100,9 @@ function AppUpdateCard({ appVersion }: { appVersion: string }) {
           {status ? <Text style={update ? s.good : s.note}>{status}</Text> : null}
           {update ? (
             <>
-              <Button title={`Download ${update.version}`} icon={<Download size={16} color={t.colors.onAccent} />}
-                onPress={() => Linking.openURL(update.apk ?? update.page)} />
-              {update.apk ? <Button title="What's new" variant="secondary" onPress={() => Linking.openURL(update.page)} /> : null}
-              <Text style={s.small}>It installs over this version and keeps your bots and chats.</Text>
+              {update.notes ? <Text style={s.note}>{update.notes}</Text> : null}
+              <InstallButton update={update} />
+              <Button title="What's new" variant="secondary" icon={<ExternalLink size={16} color={t.colors.text} />} onPress={() => Linking.openURL(update.page)} />
             </>
           ) : (
             <Button title="Check now" variant="secondary" loading={checking} icon={<RefreshCw size={16} color={t.colors.text} />} onPress={() => check(true)} />

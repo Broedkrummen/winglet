@@ -24,8 +24,8 @@ and tap you on the shoulder when they need you.
 
 ---
 
-> **Status: v0.2 beta.** Everything below works end to end against a real Hermes gateway, and every
-> release builds the Android APK and the iPhone/desktop web app. It's a beta, so expect rough edges, and
+> **Status: v0.2.** Everything below works end to end against a real Hermes gateway, and every
+> release builds the Android APK and the iPhone/desktop web app. It's still early, so expect rough edges, and
 > please [open an issue](../../issues) when you hit one.
 
 ## What is this?
@@ -174,9 +174,10 @@ display:
 
 ### 2. On your phone
 
-- **Android:** download `winglet-<version>.apk` from [Releases](../../releases), open it, and allow the
-  install. Scan the QR code from step 1. The app tells you when a new version is out (About → App updates).
-  Want automatic installs? Add this repo to [Obtainium](https://github.com/ImranR98/Obtainium).
+- **Android:** download `winglet-<version>-arm64-v8a.apk` from [Releases](../../releases) (the
+  `armeabi-v7a` one is for older 32-bit phones), open it, and allow the install. Scan the QR code from step 1.
+  When a new version is out, the app asks when you open it and installs it for you if you tap **Update**.
+  Prefer an app store for updates? Add this repo to [Obtainium](https://github.com/ImranR98/Obtainium).
 - **iPhone:** scan the QR code with the Camera app. It opens Winglet in Safari: tap
   **Share → Add to Home Screen**, open Winglet from your Home Screen, and enter the pairing code.
   Notifications need iOS 16.4+ and an **https** address (see below).
@@ -262,7 +263,8 @@ hermes -p researcher winglet pair
 - [x] A sessions browser: read and search every conversation
 
 **Next**
-- [x] The Android app tells you when a new version is out
+- [x] The Android app tells you when a new version is out, and installs it for you
+- [x] Smaller Android downloads: one APK per CPU
 - [ ] Live screen: watch the agent's computer and take over when it needs you
 - [ ] Real-time voice
 - [ ] Widgets and backups

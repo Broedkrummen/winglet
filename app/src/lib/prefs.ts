@@ -15,10 +15,12 @@ export type Prefs = {
   busyMode: 'steer' | 'queue' | 'interrupt';
   /** Ask for the phone's fingerprint, face or PIN when opening Winglet (Android app only). */
   appLock: boolean;
+  /** Look on GitHub for a newer app (Android app only). */
+  updateCheck: boolean;
 };
 
 export const DEFAULT_PREFS: Prefs = {
-  theme: 'system', accent: 'iris', layout: 'bubbles', motion: 'system', transparency: 'system', haptics: true, busyMode: 'steer', appLock: false,
+  theme: 'system', accent: 'iris', layout: 'bubbles', motion: 'system', transparency: 'system', haptics: true, busyMode: 'steer', appLock: false, updateCheck: true,
 };
 
 const KEY = 'winglet.prefs';

@@ -13,6 +13,7 @@ import { LockScreen } from '../components/LockScreen';
 import { ShareListener } from '../components/ShareListener';
 import { Toasts } from '../components/Toasts';
 import { lockOnStart, onAppVisibility } from '../lib/appLock';
+import { useAppUpdate } from '../lib/appUpdateCheck';
 import { watchNetwork } from '../lib/network';
 import { attachPersistence } from '../lib/persist';
 import { usePrefs } from '../lib/prefs';
@@ -28,6 +29,8 @@ export default function RootLayout() {
   const setNetwork = useApp((s) => s.setNetwork);
   const prefsLoaded = usePrefs((s) => s.loaded);
   const loadPrefs = usePrefs((s) => s.load);
+  const updateCheck = usePrefs((s) => s.loaded && s.prefs.updateCheck);
+  const checkForUpdate = useAppUpdate((s) => s.check);
 
   useEffect(() => {
     const detach = attachPersistence();
@@ -44,6 +47,10 @@ export default function RootLayout() {
   }, [prefsLoaded]);
 
   useEffect(() => {
+    if (updateCheck) checkForUpdate();
+  }, [updateCheck, checkForUpdate]);
+
+  useEffect(() => {
     if (Platform.OS === 'web') {
       const onVis = () => setForeground(document.visibilityState === 'visible');
       document.addEventListener('visibilitychange', onVis);
@@ -52,6 +59,8 @@ export default function RootLayout() {
     const sub = AppState.addEventListener('change', (s) => {
       setForeground(s === 'active');
       onAppVisibility(s === 'active');
+      // Phones keep the app open for days; the check itself only goes to GitHub twice a day.
+      if (s === 'active' && usePrefs.getState().prefs.updateCheck) useAppUpdate.getState().check();
     });
     return () => sub.remove();
   }, [setForeground]);

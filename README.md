@@ -175,8 +175,8 @@ display:
 ### 2. On your phone
 
 - **Android:** download `winglet-<version>.apk` from [Releases](../../releases), open it, and allow the
-  install. Scan the QR code from step 1. Want auto-updates? Add this repo to
-  [Obtainium](https://github.com/ImranR98/Obtainium).
+  install. Scan the QR code from step 1. The app tells you when a new version is out (About → App updates).
+  Want automatic installs? Add this repo to [Obtainium](https://github.com/ImranR98/Obtainium).
 - **iPhone:** scan the QR code with the Camera app. It opens Winglet in Safari: tap
   **Share → Add to Home Screen**, open Winglet from your Home Screen, and enter the pairing code.
   Notifications need iOS 16.4+ and an **https** address (see below).
@@ -248,7 +248,7 @@ hermes -p researcher winglet pair
 - [x] Chat with streaming, Markdown, files and images
 - [x] Inbox, push notifications, approvals and answers from the phone
 
-**v0.2 beta: Every day** ✅
+**v0.2: Every day** ✅
 - [x] Fast reconnects, clear connection states, an offline queue, drafts and a chat cache
 - [x] The new look: themes, accents, glass, motion, haptics, wide layout
 - [x] Photos, files and voice notes, replies, a media viewer, export, mute and quiet hours
@@ -256,14 +256,15 @@ hermes -p researcher winglet pair
 - [x] Model per chat, default model, providers, persona, memory and usage
 - [x] Control center: health, pause, restart, updates, logs and schedule
 - [x] Goals, message search, and each chat's files and photos
-
-**Next**
 - [x] Skills, toolsets and MCP servers from the phone, and limits on members' tools
 - [x] Connection settings in one place
 - [x] Share into Winglet from other apps
+- [x] A sessions browser: read and search every conversation
+
+**Next**
+- [x] The Android app tells you when a new version is out
 - [ ] Live screen: watch the agent's computer and take over when it needs you
 - [ ] Real-time voice
-- [x] A sessions browser: read and search every conversation
 - [ ] Widgets and backups
 
 The full plan, with priorities and the work behind each item, is in [docs/APP_PLAN.md](docs/APP_PLAN.md).

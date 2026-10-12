@@ -15,6 +15,7 @@ import { api } from '../../lib/api';
 import { useTabBarSpace } from '../../components/TabBar';
 import { ListGroup, ListRow, SectionHeader, Toggle } from '../../components/ui';
 import { lockAvailable, unlock } from '../../lib/appLock';
+import { useAppUpdate } from '../../lib/appUpdateCheck';
 import { moodOf } from '../../lib/agent';
 import { connectionView } from '../../lib/connection';
 import { usePrefs } from '../../lib/prefs';
@@ -36,6 +37,7 @@ export default function AgentTab() {
   const runtime = useApp((st) => st.runtime);
   const network = useApp((st) => st.network);
   const prefs = usePrefs((st) => st.prefs);
+  const appUpdate = useAppUpdate((st) => st.update);
   if (!servers.length) return <Redirect href="/pair" />;
   const server = servers.find((x) => x.id === selection.serverId) ?? servers[0];
   const rt = runtime[server.id];
@@ -120,7 +122,8 @@ export default function AgentTab() {
         <ListGroup>
           <ListRow icon={<Palette size={18} color={t.colors.onAccentSoft} />} title="Appearance" value={`${themeLabel} · ${ACCENTS[prefs.accent].label}`} onPress={() => router.push('/appearance')} />
           <ListRow icon={<Bell size={18} color={t.colors.onAccentSoft} />} title="Notifications" onPress={() => router.push('/notifications')} />
-          <ListRow icon={<Info size={18} color={t.colors.onAccentSoft} />} title="About & storage" onPress={() => router.push('/about')} />
+          <ListRow icon={<Info size={18} color={appUpdate ? t.colors.success : t.colors.onAccentSoft} />} iconColor={appUpdate ? t.colors.success : undefined}
+            title="About & storage" value={appUpdate ? `Update to ${appUpdate.version}` : undefined} onPress={() => router.push('/about')} />
         </ListGroup>
         <Text style={s.footer}>Winglet {Constants.expoConfig?.version ?? ''} · open source · not affiliated with Nous Research</Text>
       </ScrollView>

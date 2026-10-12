@@ -11,6 +11,6 @@ module.exports = ({ config }) => {
     ...config,
     version,
     android: { ...config.android, versionCode: major * 10000 + minor * 100 + patch },
-    plugins: [...(config.plugins ?? []), './plugins/withReleaseSigning'],
+    plugins: [...(config.plugins ?? []), './plugins/withReleaseSigning', './plugins/withApkSplits', './plugins/withInstallPackages'],
   };
 };

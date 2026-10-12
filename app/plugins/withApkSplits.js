@@ -1,5 +1,5 @@
 // Release builds made with WINGLET_SPLIT_APKS=1 produce one APK per CPU (arm64-v8a, armeabi-v7a)
-// instead of one universal APK, roughly halving the download (see docs/RELEASING.md). Every split
+// instead of one universal APK, a quarter to a third smaller (see docs/RELEASING.md). Every split
 // keeps the same versionCode: each phone installs only the one for its CPU, so updates still apply.
 // Local builds without the variable are unchanged.
 const { withAppBuildGradle } = require('expo/config-plugins');

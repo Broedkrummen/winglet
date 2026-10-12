@@ -41,7 +41,8 @@ export const useAppInstall = create<State>((set, get) => ({
       await openInstaller(downloaded).catch(() => set({ phase: 'error', error: "Android's installer didn't open." }));
       return;
     }
-    abort = new AbortController();
+    const controller = new AbortController();
+    abort = controller;
     set({ phase: 'downloading', progress: 0, version: update.version, error: undefined });
     try {
       const dir = updatesDir();
@@ -50,9 +51,14 @@ export const useAppInstall = create<State>((set, get) => ({
       if (file.exists) file.delete();
       await File.downloadFileAsync(update.apk, file, {
         idempotent: true,
-        signal: abort.signal,
+        signal: controller.signal,
         onProgress: ({ bytesWritten, totalBytes }) => set({ progress: totalBytes > 0 ? Math.min(1, bytesWritten / totalBytes) : null }),
       });
+      // Native completion can race with cancellation and resolve instead of rejecting.
+      if (controller.signal.aborted) {
+        set({ phase: 'idle', progress: null });
+        return;
+      }
       if (update.apkSize && file.size !== update.apkSize) {
         file.delete();
         throw new Error('The download was incomplete. Try again.');
@@ -61,7 +67,7 @@ export const useAppInstall = create<State>((set, get) => ({
       set({ phase: 'ready', progress: 1 });
       await openInstaller(file);
     } catch (e) {
-      if (abort?.signal.aborted) {
+      if (controller.signal.aborted) {
         set({ phase: 'idle', progress: null });
         return;
       }

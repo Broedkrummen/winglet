@@ -31,8 +31,9 @@ export function UpdatePrompt() {
   useEffect(() => {
     getJSON<string | null>(SKIP_KEY, null).catch(() => null).then(setSkipped);
   }, []);
-  if (!appUpdateSupported || !enabled || !update || skipped === undefined) return null;
-  const visible = !locked && update.version !== skipped && !putOff.has(update.version);
+  // Unmount the native modal immediately when locked; Sheet otherwise animates closed over the lock.
+  if (!appUpdateSupported || !enabled || !update || skipped === undefined || locked) return null;
+  const visible = update.version !== skipped && !putOff.has(update.version);
   // Swiping the sheet away mid-download lets the download finish and the installer open.
   const later = () => {
     putOff.add(update.version);

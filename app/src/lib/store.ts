@@ -6,7 +6,7 @@ import { cacheGet, cacheRemove, cacheSet } from './cache';
 import { markFailed, mergeMessages } from './messages';
 import { getJSON, setJSON } from './storage';
 import { NEEDS_VERIFY } from './verify';
-import type { Attachment, Chat, ConnStatus, DraftFile, InboxItem, Job, Me, Message, PauseState, PetSheet, ReplyRef, Server, ServerInfo } from './types';
+import type { Attachment, BotRow, Chat, ConnStatus, DraftFile, InboxItem, Job, Me, Message, PauseState, PetSheet, ReplyRef, Server, ServerInfo } from './types';
 
 const SERVERS_KEY = 'winglet.servers';
 const SELECTION_KEY = 'winglet.selection';
@@ -14,6 +14,8 @@ const TYPING_TTL_MS = 8000;
 const HISTORY_LIMIT = 30;
 /** The wire protocol this app speaks, and the oldest server protocol it still works with. */
 export const APP_PROTOCOL = 1;
+/** Server fields a server's other bots share with it. */
+const SHARED_FIELDS = new Set(['url', 'token', 'deviceId', 'fingerprint', 'wsAuth']);
 export const MIN_SERVER_PROTOCOL = 1;
 
 export type Toast = { id: string; serverId: string; title: string; body: string; href?: string };
@@ -89,6 +91,8 @@ type AppState = {
   loadMessages: (serverId: string, chatId: string, older?: boolean) => Promise<boolean>;
   loadInbox: (serverId: string) => Promise<void>;
   loadPet: (serverId: string) => Promise<void>;
+  /** Match a server's other bots to the list it sent: add new ones, drop removed ones, keep names current. */
+  syncBots: (serverId: string, bots: BotRow[]) => Promise<void>;
   sendMessage: (serverId: string, chatId: string, text: string, opts?: string | SendOptions) => Promise<void>;
   updateDraftFiles: (serverId: string, chatId: string, fn: (files: DraftFile[]) => DraftFile[]) => void;
   setReplyTo: (serverId: string, chatId: string, ref?: ReplyRef) => void;
@@ -269,6 +273,7 @@ export const useApp = create<AppState>((set, get) => {
         }
         get().loadInbox(serverId);
         get().loadPet(serverId);
+        if (Array.isArray(ev.bots) && server && !server.parent) get().syncBots(serverId, ev.bots as BotRow[]);
         // A member can't open the shared main chat: point them at their own (also after a role change).
         const sel = get().selection;
         if (sel.serverId === serverId && sel.chatId && !chats[sel.chatId]) get().select(serverId, homeChat(get().runtime[serverId]));
@@ -328,6 +333,9 @@ export const useApp = create<AppState>((set, get) => {
       case 'pet.update':
         get().loadPet(serverId);
         break;
+      case 'system.bots':
+        if (Array.isArray(ev.bots) && server && !server.parent) get().syncBots(serverId, ev.bots as BotRow[]);
+        break;
       case 'system.job':
         if (ev.job) patch(serverId, () => ({ job: ev.job as Job }));
         break;
@@ -365,6 +373,9 @@ export const useApp = create<AppState>((set, get) => {
         set(state => ({ servers: state.servers.map(s => s.id === server.id ? updated : s) }));
         note(server.id, 'address-changed');
         await persist();
+        // Its other bots are at the same new address.
+        const shared = Object.fromEntries(Object.entries(updated).filter(([k]) => SHARED_FIELDS.has(k)));
+        for (const child of get().servers.filter((s) => s.parent === server.id)) await get().updateServer(child.id, shared, true);
       },
     });
     connections.set(server.id, conn);
@@ -443,14 +454,61 @@ export const useApp = create<AppState>((set, get) => {
       const current = get().servers.find((s) => s.id === serverId);
       if (!current) return;
       const updated = { ...current, ...change };
-      set((state) => ({ servers: state.servers.map((s) => (s.id === serverId ? updated : s)) }));
+      // A server's other bots reach it the same way: they follow its address, token and key.
+      const shared = Object.fromEntries(Object.entries(change).filter(([k]) => SHARED_FIELDS.has(k)));
+      const children = Object.keys(shared).length ? get().servers.filter((s) => s.parent === serverId) : [];
+      const following = children.map((c) => ({ ...c, ...shared }));
+      set((state) => ({ servers: state.servers.map((s) => (s.id === serverId ? updated
+        : following.find((f) => f.id === s.id) ?? s)) }));
       await persist();
-      if (reconnect) connect(updated);
-      else connections.get(serverId)?.setServer(updated);
+      for (const s of [updated, ...following]) {
+        if (reconnect) connect(s);
+        else connections.get(s.id)?.setServer(s);
+      }
+    },
+
+    syncBots: async (serverId, bots) => {
+      const main = get().servers.find((s) => s.id === serverId);
+      if (!main || main.parent) return;
+      const existing = get().servers.filter((s) => s.parent === serverId);
+      const wanted = bots.filter((b) => b && typeof b.name === 'string' && b.name);
+      for (const old of existing) {
+        if (!wanted.some((b) => b.name === old.profile)) await get().removeServer(old.id, false);
+      }
+      const added: Server[] = [];
+      set((state) => {
+        let servers = state.servers;
+        const runtime = { ...state.runtime };
+        for (const b of wanted) {
+          const id = `${serverId}~${b.name}`;
+          const bot = { name: b.name, title: b.title || b.name, description: b.description || '' };
+          const have = servers.find((s) => s.id === id);
+          if (have) {
+            if (JSON.stringify(have.bot) !== JSON.stringify(bot)) servers = servers.map((s) => (s.id === id ? { ...s, bot } : s));
+            continue;
+          }
+          const child: Server = { id, url: main.url, token: main.token, deviceId: main.deviceId, bot, addedAt: Date.now(),
+            fingerprint: main.fingerprint, wsAuth: main.wsAuth, profile: b.name, parent: serverId };
+          // Right after its server and that server's other bots, so a server's bots stay together.
+          const at = servers.reduce((last, s, i) => (s.id === serverId || s.parent === serverId ? i : last), -1);
+          servers = [...servers.slice(0, at + 1), child, ...servers.slice(at + 1)];
+          runtime[id] = runtime[id] ?? emptyRuntime();
+          added.push(child);
+        }
+        return { servers, runtime };
+      });
+      await persist();
+      for (const child of added) {
+        hydrateServer(child.id);
+        connect(child);
+      }
     },
 
     removeServer: async (serverId, unpair = true) => {
       const server = get().servers.find((s) => s.id === serverId);
+      // A server's other bots go with it; removing one of them never unpairs the phone from the server.
+      for (const child of get().servers.filter((s) => s.parent === serverId)) await get().removeServer(child.id, false);
+      if (server?.parent) unpair = false;
       connections.get(serverId)?.close();
       connections.delete(serverId);
       sendChains.delete(serverId);

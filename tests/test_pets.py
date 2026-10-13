@@ -205,7 +205,7 @@ async def test_adopting_a_new_pet_downloads_it_as_a_job(client, hub):
     job = await finished(client, owner, (await resp.json())["job"]["id"])
     assert job["kind"] == "pet_install" and job["state"] == "succeeded" and job["detail"]["pet"] == "mochi"
     assert hub.hermes.active == "mochi" and hub.hermes.downloads == ["mochi"]
-    assert {"type": "pet.update"} in hub.events
+    assert {"type": "pet.update", "bot": None} in hub.events
     # One that's already installed switches at once.
     resp = await post_signed(client, owner, "/api/pets/boba/adopt", {"idempotency_key": "k2"})
     assert resp.status == 200 and (await resp.json())["pet"]["slug"] == "boba" and hub.hermes.active == "boba"
@@ -239,7 +239,7 @@ async def test_turning_the_pet_off_and_removing_it(client, hub):
     assert (await signed(client, owner, "DELETE", "/api/pets/boba")).status == 404
     resp = await signed(client, owner, "PUT", "/api/pets/display", {"enabled": True})
     assert resp.status == 400 and (await resp.json())["error"] == "Adopt a pet first."
-    assert hub.events.count({"type": "pet.update"}) == 3
+    assert hub.events.count({"type": "pet.update", "bot": None}) == 3
 
 
 # -- through Hermes's own pet store ----------------------------------------------------------------

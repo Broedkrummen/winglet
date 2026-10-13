@@ -235,8 +235,18 @@ command or queue order, even when only one request appears to match. See
 
 ### More than one bot
 
-Each Hermes profile is a bot. Give each profile its own port and pair them all; they stack up in the
-sidebar:
+Each Hermes profile is a bot, the same as Hermes Desktop's Bots: its own persona, memory, skills, chats
+and pet. Keep your main bot for everyday chat and add bots for separate jobs.
+
+**On the same server, from the phone.** Agent → Add a bot makes a new profile the way Hermes Desktop
+does (your provider keys and model, never your chat-platform tokens) and it's on the phone at once, with
+no new port and no pairing. Bots made in Hermes Desktop, with `hermes profile create`, or by the agent
+itself show up too. Hermes serves every profile from the one gateway once there are two of them; after
+the first new bot, restart the server once (the app offers to). If you used to run a gateway per
+profile, fold them into one first with `hermes gateway migrate --multiplex`.
+
+**On another server.** Pair it as usual; it stacks up in the sidebar with the others. A profile can
+also keep its own gateway and port:
 
 ```bash
 hermes -p researcher winglet setup --port 8788
@@ -268,6 +278,7 @@ hermes -p researcher winglet pair
 - [x] The Android app tells you when a new version is out, and installs it for you
 - [x] Smaller Android downloads: one APK per CPU
 - [x] Pets: an animated face for your agent, from the petdex gallery
+- [ ] Bots: more agents on one server, made from the phone (in progress)
 - [ ] Live screen: watch the agent's computer and take over when it needs you
 - [ ] Real-time voice
 - [ ] Widgets and backups

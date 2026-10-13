@@ -8,6 +8,7 @@ missing or renamed function turns that one feature off instead of breaking the p
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import functools
 import hashlib
 import json
@@ -97,10 +98,54 @@ def resolve_command(name: str) -> str:
 # turn the feature off instead of failing.
 
 
+# The bot (Hermes profile) the current request is about; None is the profile this gateway runs as.
+# Set per request by the hub; asyncio.to_thread copies it to the worker thread.
+_BOT: contextvars.ContextVar = contextvars.ContextVar("winglet_bot", default=None)
+
+
+def set_bot(name: Optional[str]) -> contextvars.Token:
+    return _BOT.set(name or None)
+
+
+def reset_bot(token: contextvars.Token) -> None:
+    _BOT.reset(token)
+
+
+@contextlib.contextmanager
+def _bot_scope(name: str):
+    """Config, skills, memory and secrets of another profile this gateway serves, the way Hermes scopes a
+    routed turn."""
+    from hermes_cli.profiles import get_profile_dir
+    home = get_profile_dir(name)
+    try:
+        from gateway.run import _profile_runtime_scope
+    except Exception:
+        _profile_runtime_scope = None
+    if _profile_runtime_scope is not None:
+        with _profile_runtime_scope(home):
+            yield
+        return
+    from agent.secret_scope import build_profile_secret_scope, reset_secret_scope, set_secret_scope
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    home_token = set_hermes_home_override(str(home))
+    secret_token = set_secret_scope(build_profile_secret_scope(home), profile_home=str(home))
+    try:
+        yield
+    finally:
+        reset_secret_scope(secret_token)
+        reset_hermes_home_override(home_token)
+
+
 @contextlib.contextmanager
 def _profile_scope():
     """Read this profile's secrets the way Hermes's own turns do. A gateway that serves several
-    profiles refuses unscoped secret reads, and these functions run on worker threads."""
+    profiles refuses unscoped secret reads, and these functions run on worker threads. For another
+    bot, everything is that bot's profile."""
+    bot = _BOT.get()
+    if bot:
+        with _bot_scope(bot):
+            yield
+        return
     try:
         from agent.secret_scope import build_profile_secret_scope, current_secret_scope, reset_secret_scope, set_secret_scope
         from hermes_constants import get_hermes_home
@@ -1318,3 +1363,78 @@ def show_pet(on: bool) -> Optional[dict]:
         raise HermesRefused("Adopt a pet first.")
     pet_config._set_active(pet.slug)
     return {"slug": pet.slug, "name": pet.display_name}
+
+
+
+# -- bots: Hermes profiles served by this gateway, each its own agent (Hermes Desktop's Bots) -------
+
+def _rpc(method: str, params: dict) -> dict:
+    """Call one of Hermes's own profile handlers (the ones Hermes Desktop uses), so a bot made here is
+    made exactly as Desktop makes it."""
+    try:
+        from tui_gateway import server
+        handler = server._methods[method]
+    except Exception as exc:
+        raise HermesUnavailable(f"{method} unavailable") from exc
+    reply = handler("winglet", params) or {}
+    if reply.get("error"):
+        raise HermesRefused(str((reply["error"] or {}).get("message") or "Hermes refused that."))
+    return reply.get("result") or {}
+
+
+def bots_available() -> bool:
+    try:
+        from hermes_cli.profiles import profiles_to_serve, read_profile_meta  # noqa: F401
+        from tui_gateway import server
+        return "profiles.create" in server._methods
+    except Exception:
+        return False
+
+
+def _bot_row(name: str, home) -> dict:
+    from hermes_cli.profiles import read_profile_meta
+    meta = read_profile_meta(home)
+    title = meta.get("bot_title") or meta.get("display_name") or name.replace("-", " ").replace("_", " ").title()
+    return {"name": name, "title": title, "description": meta.get("description") or ""}
+
+
+def list_bots() -> List[dict]:
+    """Every profile this install has, other than the main one, as a bot. Made in Hermes Desktop, the CLI
+    or here: they're all the same."""
+    from hermes_cli.profiles import profiles_to_serve
+    return [_bot_row(name, home) for name, home in profiles_to_serve(multiplex=True) if name != "default"]
+
+
+def create_bot(name: str, title: str, persona: str, description: str = "") -> dict:
+    """A new profile set up the way Hermes Desktop's Create bot does: the main profile's provider keys and
+    model (never its chat-platform tokens), the bundled skills, the persona as SOUL.md, and the Bot Mode
+    title that makes it a teammate of the other bots."""
+    from hermes_cli.profiles import normalize_profile_name, validate_profile_name
+    try:
+        name = normalize_profile_name(name)
+        validate_profile_name(name)
+    except ValueError as exc:
+        raise HermesRefused(str(exc)) from exc
+    import time as _time
+    _rpc("profiles.create", {"name": name, "soul": persona, "description": description})
+    _rpc("profiles.configure", {"name": name, "ui_meta": {"hermes-bots": {"title": title, "created": int(_time.time() * 1000)}}})
+    from hermes_cli.profiles import get_profile_dir
+    return _bot_row(name, get_profile_dir(name))
+
+
+def multiplex_state(runner) -> dict:
+    """Whether this gateway serves every profile (Hermes's multi-profile mode), which profiles it serves,
+    and, when it serves only one, Hermes's own reason why."""
+    served: List[str] = []
+    with contextlib.suppress(Exception):
+        served = [str(n) for n in runner.served_profile_names()]
+    active = False
+    with contextlib.suppress(Exception):
+        from agent.secret_scope import is_multiplex_active
+        active = bool(is_multiplex_active())
+    reason = ""
+    if not active:
+        with contextlib.suppress(Exception):
+            from gateway.status import read_runtime_status
+            reason = str((read_runtime_status() or {}).get("multiplex_standalone_reason") or "")
+    return {"multiplex": active or len(served) > 1, "served": served, "reason": reason}

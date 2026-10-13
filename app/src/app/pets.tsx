@@ -8,7 +8,7 @@ import { JobSheet } from '../components/JobSheet';
 import { PetSprite } from '../components/PetSprite';
 import { Screen } from '../components/Screen';
 import { Sheet } from '../components/Sheet';
-import { Button, Card, Chip, Field, ListGroup, ListRow, SectionHeader, Skeleton, Tap, Toggle } from '../components/ui';
+import { Button, Card, Chip, ConfirmButton, Field, ListGroup, ListRow, SectionHeader, Skeleton, Tap, Toggle } from '../components/ui';
 import { api, ApiError, mediaUrl, signedApi } from '../lib/api';
 import { idempotencyKey } from '../lib/control';
 import { haptic } from '../lib/haptics';
@@ -260,8 +260,8 @@ function PetSheet({ server, picked, busy, active, onClose, onAdopt, onRemove }: 
         )}
         {!x.installed ? <Text style={s.caption}>Your server downloads it from petdex.dev. Everyone paired with this bot sees it.</Text> : null}
         {x.installed ? (
-          <Button title="Remove from server" variant="danger" disabled={busy} icon={<Trash2 size={16} color={t.colors.danger} />}
-            onPress={() => onRemove(pet.slug)} />
+          <ConfirmButton title="Remove from server" loading={busy} icon={<Trash2 size={16} color={t.colors.danger} />}
+            onConfirm={() => onRemove(pet.slug)} accessibilityLabel={`Remove ${pet.name} from the server`} />
         ) : null}
         {busy && x.installed ? <ActivityIndicator color={t.colors.textTertiary} /> : null}
       </View>

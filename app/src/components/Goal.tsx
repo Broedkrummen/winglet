@@ -9,7 +9,7 @@ import { makeStyles, useTheme } from '../lib/themeContext';
 import type { Goal, Server } from '../lib/types';
 import { Check, CirclePause, Plus, Target, X } from './icons';
 import { Sheet } from './Sheet';
-import { Button, Field, IconButton, Tap } from './ui';
+import { Button, ConfirmButton, Field, IconButton, Tap } from './ui';
 
 /** A ring that fills as the goal uses its turn budget; the icon inside says its state. */
 export function GoalRing({ goal, size = 36, stroke = 3.5 }: { goal: Goal; size?: number; stroke?: number }) {
@@ -168,7 +168,7 @@ export function GoalSheet({ server, chatId, goal, visible, onClose, onChanged }:
                   ? <Button title="Resume" onPress={() => send('/goal resume', true)} />
                   : <Button title="Pause" variant="secondary" onPress={() => send('/goal pause', true)} />}
                 <Button title="Set a different goal" variant="ghost" onPress={() => setWriting(true)} />
-                <Button title="Clear goal" variant="danger" onPress={() => send('/goal clear', true)} />
+                <ConfirmButton title="Clear goal" onConfirm={() => send('/goal clear', true)} />
               </View>
             ) : null}
           </>

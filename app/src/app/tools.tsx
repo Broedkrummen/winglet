@@ -4,7 +4,7 @@ import Animated, { FadeIn } from 'react-native-reanimated';
 import { Plug, ShieldAlert, TriangleAlert } from '../components/icons';
 import { Screen } from '../components/Screen';
 import { Sheet } from '../components/Sheet';
-import { Button, ListGroup, ListRow, SectionHeader, Segmented, Skeleton, Toggle } from '../components/ui';
+import { Button, ListGroup, ListRow, LoadError, SectionHeader, Segmented, Skeleton, Toggle } from '../components/ui';
 import { shortDescription } from '../lib/abilities';
 import { api, signedApi } from '../lib/api';
 import { haptic } from '../lib/haptics';
@@ -29,9 +29,9 @@ export default function ToolsScreen() {
 
   const load = useCallback(() => {
     if (!server) return;
-    api<ToolsInfo>(server, '/api/toolsets').then((d) => { setInfo(d); setError(''); }).catch((e) => setError((e as Error).message));
+    return api<ToolsInfo>(server, '/api/toolsets').then((d) => { setInfo(d); setError(''); }).catch((e) => setError((e as Error).message));
   }, [server]);
-  useEffect(load, [load]);
+  useEffect(() => { load(); }, [load]);
   if (!server) return null;
 
   const fail = (e: unknown) => {
@@ -57,11 +57,12 @@ export default function ToolsScreen() {
   const mode = MODES.find((m) => m.value === info?.approvals) ?? MODES[0];
   const mine = (info?.toolsets ?? []).filter((ts) => ts.enabled);
   return (
-    <Screen title="Tools" subtitle="What your agent can use when you talk to it here. Its terminal and other chat apps keep their own settings.">
-      {error ? <Text style={s.error}>{error}</Text> : null}
-      {!info ? (
+    <Screen title="Tools" subtitle="What your agent can use when you talk to it here. Its terminal and other chat apps keep their own settings."
+      onRefresh={load}>
+      {error && info ? <Text style={s.error}>{error}</Text> : null}
+      {!info ? (error ? <LoadError message={error} onRetry={load} /> : (
         <View style={{ gap: 12, marginTop: 20 }}>{[0, 1, 2].map((i) => <Skeleton key={i} height={72} radius={16} />)}</View>
-      ) : (
+      )) : (
         <Animated.View entering={FadeIn}>
           <SectionHeader title="Approvals" />
           <View style={s.card}>

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Platform, Pressable, Text, TextInput, View } from 'react-native';
-import { RefreshCw, Search } from '../components/icons';
+import { ActivityIndicator, Platform, Pressable, Text, View } from 'react-native';
+import { RefreshCw } from '../components/icons';
 import { Screen } from '../components/Screen';
-import { Button, Card, Chip, IconButton, Segmented, Skeleton } from '../components/ui';
+import { Button, Card, Chip, IconButton, LoadError, SearchField, Segmented, Skeleton } from '../components/ui';
 import { api } from '../lib/api';
 import { bytes, logLevel, splitLogLine, type LogLevel } from '../lib/control';
 import { useApp } from '../lib/store';
@@ -37,33 +37,29 @@ export default function LogsScreen() {
     if (!server) return;
     setLoading(true);
     const q = new URLSearchParams({ file, level, q: debounced, lines: String(lines) });
-    api<{ lines: string[]; size: number }>(server, `/api/logs?${q}`)
+    return api<{ lines: string[]; size: number }>(server, `/api/logs?${q}`)
       .then((d) => { setData(d); setError(''); })
       .catch((e) => setError((e as Error).message))
       .finally(() => setLoading(false));
   }, [server, file, level, debounced, lines]);
-  useEffect(load, [load]);
+  useEffect(() => { load(); }, [load]);
 
   const rows = data ? [...data.lines].reverse() : [];
   return (
     <Screen title="Logs" subtitle="What Hermes has been doing, newest first. Keys and tokens are hidden the way Hermes hides them."
       right={<IconButton label="Refresh" variant="filled" onPress={load}>
         {loading ? <ActivityIndicator size="small" color={t.colors.text} /> : <RefreshCw size={19} color={t.colors.text} />}
-      </IconButton>}>
+      </IconButton>} onRefresh={load}>
       <View style={{ gap: 12, marginTop: 16 }}>
         <Segmented label="Log" value={file} onChange={(v) => { setFile(v); setLines(300); }}
           options={[{ value: 'agent', label: 'Agent' }, { value: 'gateway', label: 'Gateway' }, { value: 'errors', label: 'Errors' }]} />
         <View style={s.chips}>
           {LEVELS.map((l) => <Chip key={l.value || 'all'} label={l.label} selected={level === l.value} onPress={() => setLevel(l.value)} />)}
         </View>
-        <View style={s.search}>
-          <Search size={16} color={t.colors.textTertiary} />
-          <TextInput value={query} onChangeText={setQuery} placeholder="Search the log" placeholderTextColor={t.colors.textTertiary}
-            style={s.searchInput} autoCapitalize="none" autoCorrect={false} accessibilityLabel="Search the log" />
-        </View>
+        <SearchField value={query} onChangeText={setQuery} placeholder="Search the log" />
       </View>
-      {error ? <Text style={s.error}>{error}</Text> : null}
-      {!data ? <Skeleton height={320} radius={20} style={{ marginTop: 16 }} /> : rows.length ? (
+      {error && data ? <Text style={s.error}>{error}</Text> : null}
+      {!data ? (error ? <LoadError message={error} onRetry={load} /> : <Skeleton height={320} radius={20} style={{ marginTop: 16 }} />) : rows.length ? (
         <>
           <Text style={s.meta}>{rows.length} line{rows.length === 1 ? '' : 's'}{data.size ? ` · ${bytes(data.size)} log` : ''}</Text>
           <Card style={s.card}>
@@ -105,11 +101,6 @@ function LogLine({ line }: { line: string }) {
 
 const useStyles = makeStyles((t) => ({
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  search: {
-    flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, height: 44, borderRadius: t.radius.pill,
-    backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border,
-  },
-  searchInput: { flex: 1, ...t.type.callout, color: t.colors.text, ...({ outlineStyle: 'none' } as object) },
   error: { ...t.type.callout, color: t.colors.danger, marginTop: 12 },
   meta: { ...t.type.caption, color: t.colors.textTertiary, marginTop: 16, marginBottom: 8 },
   card: { paddingVertical: 6, paddingHorizontal: 0, gap: 0 },

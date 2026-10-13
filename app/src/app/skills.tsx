@@ -6,7 +6,7 @@ import { Download, Search, Sparkles, Trash2 } from '../components/icons';
 import { Markdown } from '../components/Markdown';
 import { Screen } from '../components/Screen';
 import { Sheet } from '../components/Sheet';
-import { Button, Field, ListGroup, ListRow, SectionHeader, Segmented, Skeleton, Toggle } from '../components/ui';
+import { Button, ConfirmButton, ListGroup, ListRow, LoadError, SearchField, SectionHeader, Segmented, Skeleton, Toggle } from '../components/ui';
 import { byCategory, categoryLabel, matches, shortDescription } from '../lib/abilities';
 import { api, ApiError, signedApi } from '../lib/api';
 import { idempotencyKey } from '../lib/control';
@@ -31,11 +31,13 @@ export default function SkillsScreen() {
 
   const load = useCallback(() => {
     if (!server) return;
-    api<{ skills: Skill[] }>(server, '/api/skills').then((d) => { setSkills(d.skills); setError(''); })
-      .catch((e) => setError((e as Error).message));
-    api<{ skills: CatalogSkill[] }>(server, '/api/skills/catalog').then((d) => setCatalog(d.skills)).catch(() => setCatalog([]));
+    return Promise.all([
+      api<{ skills: Skill[] }>(server, '/api/skills').then((d) => { setSkills(d.skills); setError(''); })
+        .catch((e) => setError((e as Error).message)),
+      api<{ skills: CatalogSkill[] }>(server, '/api/skills/catalog').then((d) => setCatalog(d.skills)).catch(() => setCatalog([])),
+    ]);
   }, [server]);
-  useEffect(load, [load]);
+  useEffect(() => { load(); }, [load]);
 
   const installedGroups = useMemo(() => byCategory((skills ?? []).filter((x) => matches(query, x.name, x.description, x.category))), [skills, query]);
   const catalogGroups = useMemo(() => byCategory((catalog ?? []).filter((x) => matches(query, x.name, x.description, x.category, x.tags))), [catalog, query]);
@@ -65,19 +67,19 @@ export default function SkillsScreen() {
 
   const enabled = (skills ?? []).filter((x) => x.enabled).length;
   return (
-    <Screen title="Skills" subtitle="Know-how your agent loads when a task calls for it. Turn off what you don't need, or add Hermes's official skills.">
+    <Screen title="Skills" subtitle="Know-how your agent loads when a task calls for it. Turn off what you don't need, or add Hermes's official skills."
+      onRefresh={load}>
       <View style={{ marginTop: 18, gap: 12 }}>
         <Segmented label="Show" value={tab} onChange={setTab} options={[
           { value: 'installed', label: skills ? `Installed · ${skills.length}` : 'Installed' },
           { value: 'add', label: 'Add more' },
         ]} />
-        <Field value={query} onChangeText={setQuery} placeholder={tab === 'installed' ? 'Search your skills' : 'Search official skills'}
-          autoCapitalize="none" autoCorrect={false} accessibilityLabel="Search skills" />
+        <SearchField value={query} onChangeText={setQuery} placeholder={tab === 'installed' ? 'Search your skills' : 'Search official skills'} />
       </View>
-      {error ? <Text style={s.error}>{error}</Text> : null}
+      {error && skills ? <Text style={s.error}>{error}</Text> : null}
 
       {tab === 'installed' ? (
-        !skills ? <Loading /> : (
+        !skills ? (error ? <LoadError message={error} onRetry={load} /> : <Loading />) : (
           <Animated.View entering={FadeIn}>
             <Text style={s.summary}>{enabled} of {skills.length} on. Changes apply to new conversations.</Text>
             {installedGroups.map((g) => (
@@ -85,7 +87,7 @@ export default function SkillsScreen() {
                 <SectionHeader title={g.title} />
                 <ListGroup>
                   {g.items.map((x) => (
-                    <ListRow key={x.name} title={x.name} subtitle={shortDescription(x.description)} onPress={() => setOpen(x)} chevron={false}
+                    <ListRow key={x.name} title={x.name} subtitle={withUsage(shortDescription(x.description), x.usage)} onPress={() => setOpen(x)} chevron={false}
                       right={<Toggle label={`${x.name} skill`} value={x.enabled} onValueChange={(on) => toggle(x, on)} />} />
                   ))}
                 </ListGroup>
@@ -113,13 +115,21 @@ export default function SkillsScreen() {
         </Animated.View>
       )}
 
-      <SkillSheet server={server} item={open} onClose={() => setOpen(null)}
-        onToggle={(x, on) => { toggle(x, on); setOpen({ ...x, enabled: on }); }}
+      {/* The open skill as the list has it now, so a toggle that fails and rolls back shows in the sheet too. */}
+      <SkillSheet server={server} item={open && isSkill(open) ? skills?.find((x) => x.name === open.name) ?? open : open} onClose={() => setOpen(null)}
+        onToggle={(x, on) => toggle(x, on)}
         onInstall={(x) => start('POST', '/api/skills/install', { identifier: x.identifier })}
         onRemove={(x) => start('DELETE', `/api/skills/${encodeURIComponent(x.name)}`)} />
       <JobSheet server={server} job={job} onClose={() => setJob(null)} onDone={load} />
     </Screen>
   );
+}
+
+/** "Used 12 times" after a skill's description, once the agent has used it. */
+function withUsage(description: string, usage?: number) {
+  if (!usage) return description;
+  const used = usage === 1 ? 'Used once' : `Used ${usage} times`;
+  return description ? `${description} · ${used}` : used;
 }
 
 function Loading() {
@@ -149,14 +159,15 @@ function SkillSheet({ server, item, onClose, onToggle, onInstall, onRemove }: {
   const { height } = useWindowDimensions();
   const [last, setLast] = useState<Skill | CatalogSkill | null>(null);
   const [content, setContent] = useState<string | null>(null);
-  if (item && item !== last) { setLast(item); if (!last || last.name !== item.name) setContent(null); }
+  const [truncated, setTruncated] = useState(false);
+  if (item && item !== last) { setLast(item); if (!last || last.name !== item.name) { setContent(null); setTruncated(false); } }
   const x = item ?? last;
 
   useEffect(() => {
     if (!item || !isSkill(item)) return;
     let live = true;
-    api<{ content: string }>(server, `/api/skills/${encodeURIComponent(item.name)}/content`)
-      .then((d) => { if (live) setContent(d.content.replace(/^---\n[\s\S]*?\n---\n/, '').trim()); })
+    api<{ content: string; truncated?: boolean }>(server, `/api/skills/${encodeURIComponent(item.name)}/content`)
+      .then((d) => { if (live) { setContent(d.content.replace(/^---\n[\s\S]*?\n---\n/, '').trim()); setTruncated(!!d.truncated); } })
       .catch(() => { if (live) setContent(''); });
     return () => { live = false; };
   }, [item?.name, server]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -175,13 +186,15 @@ function SkillSheet({ server, item, onClose, onToggle, onInstall, onRemove }: {
             <ScrollView style={[s.doc, { maxHeight: height * 0.42 }]} contentContainerStyle={{ padding: 14 }} nestedScrollEnabled>
               {content === null ? <ActivityIndicator color={t.colors.textTertiary} />
                 : content ? <Markdown text={content} /> : <Text style={s.metaText}>No instructions to show.</Text>}
+              {truncated ? <Text style={[s.metaText, { marginTop: 10 }]}>Showing the first part. The whole skill is on the server.</Text> : null}
             </ScrollView>
             <ListGroup>
               <ListRow title="Use this skill" subtitle="Changes apply to new conversations"
                 right={<Toggle label={`${x.name} skill`} value={x.enabled} onValueChange={(on) => onToggle(x, on)} />} />
             </ListGroup>
             {x.provenance === 'hub' ? (
-              <Button title="Remove from server" variant="danger" icon={<Trash2 size={16} color={t.colors.danger} />} onPress={() => onRemove(x)} />
+              <ConfirmButton title="Remove from server" icon={<Trash2 size={16} color={t.colors.danger} />} onConfirm={() => onRemove(x)}
+                accessibilityLabel={`Remove ${x.name} from the server`} />
             ) : null}
           </>
         ) : x.installed ? (

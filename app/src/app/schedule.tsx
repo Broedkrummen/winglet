@@ -5,7 +5,7 @@ import Animated, { FadeIn, LinearTransition } from 'react-native-reanimated';
 import { CalendarClock, CalendarPlus, CircleAlert, CirclePause, Pause, Play, Plus } from '../components/icons';
 import { Screen } from '../components/Screen';
 import { Sheet } from '../components/Sheet';
-import { Button, Card, Chip, Field, IconButton, Skeleton, Tap } from '../components/ui';
+import { Button, Card, Chip, ConfirmButton, Field, IconButton, LoadError, Skeleton, Tap } from '../components/ui';
 import { agoText } from '../lib/agent';
 import { api, ApiError, signedApi } from '../lib/api';
 import { firstLine, whenNext } from '../lib/control';
@@ -34,10 +34,10 @@ export default function ScheduleScreen() {
 
   const load = useCallback(() => {
     if (!server) return;
-    api<{ routines: Routine[] }>(server, '/api/schedule').then((d) => { setRoutines(d.routines); setError(''); })
+    return api<{ routines: Routine[] }>(server, '/api/schedule').then((d) => { setRoutines(d.routines); setError(''); })
       .catch((e) => setError((e as Error).message));
   }, [server]);
-  useEffect(load, [load]);
+  useEffect(() => { load(); }, [load]);
 
   if (!server) return null;
   const act = async (r: Routine, action: 'pause' | 'resume' | 'run') => {
@@ -64,11 +64,11 @@ export default function ScheduleScreen() {
     <Screen title="Schedule" subtitle="Things your agent does on its own, on a schedule. Results arrive in the Updates chat."
       right={<IconButton label="New routine" variant="filled" onPress={() => setDraft({ name: '', prompt: '', schedule: '' })}>
         <Plus size={22} color={t.colors.text} />
-      </IconButton>}>
-      {error ? <Text style={s.error}>{error}</Text> : null}
-      {!routines ? (
+      </IconButton>} onRefresh={load}>
+      {error && routines ? <Text style={s.error}>{error}</Text> : null}
+      {!routines ? (error ? <LoadError message={error} onRetry={load} /> : (
         <View style={{ gap: 12, marginTop: 16 }}>{[0, 1].map((i) => <Skeleton key={i} height={132} radius={20} />)}</View>
-      ) : !routines.length ? (
+      )) : !routines.length ? (
         <Empty onPick={(idea) => setDraft(idea ?? { name: '', prompt: '', schedule: '' })} />
       ) : (
         <View style={{ gap: 12, marginTop: 16 }}>
@@ -137,6 +137,7 @@ function RoutineCard({ routine: r, busy, onAction, onEdit }: {
             <Text style={s.when} numberOfLines={1}>{r.schedule_display}{paused ? ' · paused' : done ? ' · done' : next ? ` · next ${next}` : ''}</Text>
           </View>
         </View>
+        {paused && r.paused_reason ? <Text style={s.prompt} numberOfLines={2}>Paused: {r.paused_reason}</Text> : null}
         {r.name ? <Text style={s.prompt} numberOfLines={2}>{r.prompt}</Text> : null}
         {failed ? (
           <View style={s.failure}>
@@ -173,7 +174,7 @@ function EditSheet({ server, draft, onClose, onSaved }: { server: Server; draft:
   // Show when it will run while the schedule is typed, using Hermes's own parser.
   useEffect(() => {
     const text = form.schedule.trim();
-    if (!draft || !text) { setPreview(null); setParseError(''); return; }
+    if (!draft || !text) { setPreview(null); setParseError(''); setChecking(false); return; }
     setChecking(true);
     const id = setTimeout(() => {
       api<{ display: string; next_run_at: string | null }>(server, '/api/schedule/parse', { method: 'POST', body: JSON.stringify({ schedule: text }) })
@@ -208,6 +209,7 @@ function EditSheet({ server, draft, onClose, onSaved }: { server: Server; draft:
       haptic.success();
       onSaved();
     } catch (e) {
+      haptic.error();
       setError((e as Error).message);
     } finally {
       setBusy(false);
@@ -236,7 +238,7 @@ function EditSheet({ server, draft, onClose, onSaved }: { server: Server; draft:
           </Text>
         </View>
         <Button title={form.id ? 'Save' : 'Schedule it'} loading={busy} disabled={!ready || busy} onPress={save} />
-        {form.id ? <Button title="Delete routine" variant="danger" disabled={busy} onPress={remove} /> : null}
+        {form.id ? <ConfirmButton title="Delete routine" loading={busy} onConfirm={remove} /> : null}
         {error ? <Text style={[s.previewText, { color: t.colors.danger, textAlign: 'center' }]}>{error}</Text> : null}
       </View>
     </Sheet>

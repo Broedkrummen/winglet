@@ -7,11 +7,11 @@ import { Activity, Copy, KeyRound, Monitor, QrCode as QrIcon, RefreshCw, ShieldC
 import { QrCode } from '../components/QrCode';
 import { Screen } from '../components/Screen';
 import { Sheet, SheetAction } from '../components/Sheet';
-import { Button, Card, Field, ListGroup, ListRow, SectionHeader, Segmented, Skeleton } from '../components/ui';
+import { Button, Card, Field, ListGroup, ListRow, LoadError, SectionHeader, Segmented, Skeleton } from '../components/ui';
 import { agoText } from '../lib/agent';
 import { api, ApiError, parsePairLink, signedApi, verifyDevice } from '../lib/api';
 import { haptic } from '../lib/haptics';
-import { isOwner, useApp } from '../lib/store';
+import { isOwner, useApp, useServerState } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
 import type { Device, Role, Server } from '../lib/types';
 
@@ -27,7 +27,7 @@ export default function DevicesScreen() {
 function Devices({ server }: { server: Server }) {
   const t = useTheme();
   const s = useStyles();
-  const rt = useApp((st) => st.runtime[server.id]);
+  const rt = useServerState(server.id);
   const me = rt?.me;
   const owner = isOwner(rt);
   const roles = !!rt?.info?.features?.roles;
@@ -58,7 +58,7 @@ function Devices({ server }: { server: Server }) {
 
   return (
     <Screen title="Devices" subtitle={owner ? `Phones and browsers that can talk to ${server.bot.title}, and what each may do.`
-      : `This phone is a member: it chats with ${server.bot.title} in its own chats.`}>
+      : `This phone is a member: it chats with ${server.bot.title} in its own chats.`} onRefresh={owner ? load : undefined}>
       <ThisPhone server={server} />
 
       {owner ? (
@@ -66,9 +66,9 @@ function Devices({ server }: { server: Server }) {
           <SectionHeader title="Paired" right={me?.verified ? (
             <Button size="sm" variant="tonal" title="Add a device" icon={<UserPlus size={15} color={t.colors.onAccentSoft} />} onPress={() => setAdding(true)} />
           ) : null} />
-          {devices === null ? (
+          {devices === null ? (error ? <LoadError message={error} onRetry={load} /> : (
             <View style={{ gap: 10 }}>{[0, 1].map((i) => <Skeleton key={i} height={64} radius={18} />)}</View>
-          ) : (
+          )) : (
             <ListGroup>
               {devices.map((d) => (
                 <ListRow key={d.id}
@@ -79,7 +79,7 @@ function Devices({ server }: { server: Server }) {
               ))}
             </ListGroup>
           )}
-          {error ? <Text style={[s.note, { color: t.colors.danger, marginTop: 8 }]}>{error}</Text> : null}
+          {error && devices ? <Text style={[s.note, { color: t.colors.danger, marginTop: 8 }]}>{error}</Text> : null}
           <SectionHeader title="History" />
           <ListGroup>
             <ListRow icon={<Activity size={18} color={t.colors.onAccentSoft} />} title="Activity"
@@ -182,7 +182,7 @@ function DeviceSheet({ server, device, canEdit, onClose, onChanged }: {
 }) {
   const t = useTheme();
   const s = useStyles();
-  const [mode, setMode] = useState<'menu' | 'rename' | 'remove'>('menu');
+  const [mode, setMode] = useState<'menu' | 'rename' | 'role' | 'remove'>('menu');
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -214,10 +214,20 @@ function DeviceSheet({ server, device, canEdit, onClose, onChanged }: {
         <>
           <Text style={s.sheetNote}>{d.role === 'owner' ? 'Owner' : 'Member'} · {d.platform || 'unknown'} · paired {agoText(d.created_at)}</Text>
           <SheetAction label="Rename" onPress={() => { setName(d.name); setMode('rename'); }} />
-          <SheetAction label={d.role === 'owner' ? 'Make a member' : 'Make an owner'}
-            onPress={() => run(() => signedApi(server, 'PATCH', path, { role: d.role === 'owner' ? 'member' : 'owner' }))} />
+          <SheetAction label={d.role === 'owner' ? 'Make a member' : 'Make an owner'} onPress={() => setMode('role')} />
           <SheetAction icon={<Trash2 size={20} color={t.colors.danger} />} label={d.current ? 'Remove this phone' : 'Remove'} destructive onPress={() => setMode('remove')} />
         </>
+      ) : mode === 'role' ? (
+        <View style={{ gap: 14, paddingHorizontal: 4 }}>
+          <Text style={s.sheetNote}>
+            {d.role === 'owner'
+              ? `${d.current ? 'This phone' : d.name} will chat in its own chats only, and can't approve commands, see other chats or change settings.${d.current ? " You'll need another owner to undo it." : ''}`
+              : `${d.name} will see every chat, approve commands and change ${server.bot.title}'s settings.`}
+          </Text>
+          <Button title={d.role === 'owner' ? 'Make a member' : 'Make an owner'} variant={d.role === 'owner' ? 'danger' : 'primary'} loading={busy}
+            onPress={() => run(() => signedApi(server, 'PATCH', path, { role: d.role === 'owner' ? 'member' : 'owner' }))} />
+          <Button title="Cancel" variant="secondary" onPress={() => setMode('menu')} />
+        </View>
       ) : mode === 'rename' ? (
         <View style={{ gap: 14, paddingHorizontal: 4 }}>
           <Field value={name} onChangeText={setName} placeholder="Device name" autoFocus />

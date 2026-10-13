@@ -3,7 +3,7 @@ import { Text, View } from 'react-native';
 import { BookUser, NotebookPen, Plus } from '../components/icons';
 import { Screen } from '../components/Screen';
 import { Sheet } from '../components/Sheet';
-import { Button, Card, Field, SectionHeader, Skeleton, Tap } from '../components/ui';
+import { Button, Card, ConfirmButton, Field, LoadError, SectionHeader, Skeleton, Tap } from '../components/ui';
 import { api, signedApi } from '../lib/api';
 import { haptic } from '../lib/haptics';
 import { useApp } from '../lib/store';
@@ -24,15 +24,18 @@ export default function MemoryScreen() {
   const [edit, setEdit] = useState<{ target: Target; entry?: string } | null>(null);
   const [error, setError] = useState('');
 
-  useEffect(() => {
+  const load = () => {
     if (!server) return;
-    api<Store>(server, '/api/memory').then(setData).catch((e) => setError((e as Error).message));
-  }, [server?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+    return api<Store>(server, '/api/memory').then((d) => { setData(d); setError(''); }).catch((e) => setError((e as Error).message));
+  };
+  useEffect(() => { load(); }, [server?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <Screen title="Memory" subtitle={`What ${server?.bot.title ?? 'your agent'} carries from one chat to the next. Edit or remove anything that's wrong.`}>
-      {error ? <Text style={s.error}>{error}</Text> : null}
-      {!data ? <View style={{ gap: 10, marginTop: 12 }}>{[0, 1, 2].map((i) => <Skeleton key={i} height={64} radius={16} />)}</View>
+    <Screen title="Memory" subtitle={`What ${server?.bot.title ?? 'your agent'} carries from one chat to the next. Edit or remove anything that's wrong.`}
+      onRefresh={load}>
+      {error && data ? <Text style={s.error}>{error}</Text> : null}
+      {!data ? (error ? <LoadError message={error} onRetry={load} />
+        : <View style={{ gap: 10, marginTop: 12 }}>{[0, 1, 2].map((i) => <Skeleton key={i} height={64} radius={16} />)}</View>)
         : (['user', 'memory'] as Target[]).map((target) => (
           <Section key={target} target={target} store={data[target]} onEdit={(entry) => setEdit({ target, entry })} />
         ))}
@@ -52,9 +55,15 @@ function Section({ target, store, onEdit }: { target: Target; store: Store[Targe
       ) : null} />
       <Text style={s.note}>{TITLES[target].note}</Text>
       {store.limit ? (
-        <View style={s.meter} accessibilityLabel={`${Math.round(pct * 100)}% full`}>
-          <View style={[s.meterFill, { width: `${Math.max(2, pct * 100)}%`, backgroundColor: pct > 0.9 ? t.colors.warning : t.colors.accent }]} />
-        </View>
+        <>
+          <View style={s.meter} accessibilityLabel={`${Math.round(pct * 100)}% full`}>
+            <View style={[s.meterFill, { width: `${Math.max(2, pct * 100)}%`, backgroundColor: pct > 0.9 ? t.colors.warning : t.colors.accent }]} />
+          </View>
+          <Text style={[s.meterText, pct > 0.9 && { color: t.colors.warning }]}>
+            {store.used.toLocaleString()} of {store.limit.toLocaleString()} characters
+            {pct > 0.9 ? '. Nearly full: remove what you no longer need to make room for new things.' : ''}
+          </Text>
+        </>
       ) : null}
       {store.entries.length ? (
         <View style={{ gap: 8 }}>
@@ -106,7 +115,7 @@ function EditSheet({ edit, onClose, onSaved }: { edit: { target: Target; entry?:
           placeholder={e.target === 'user' ? 'Prefers short answers in the morning' : 'The home server runs Ubuntu 24.04'} />
         <Button title="Save" loading={busy} disabled={!text.trim() || text.trim() === e.entry}
           onPress={() => run(e.entry ? { action: 'replace', target: e.target, entry: e.entry, content: text } : { action: 'add', target: e.target, content: text })} />
-        {e.entry ? <Button title="Forget this" variant="danger" onPress={() => run({ action: 'remove', target: e.target, entry: e.entry })} /> : null}
+        {e.entry ? <ConfirmButton title="Forget this" onConfirm={() => run({ action: 'remove', target: e.target, entry: e.entry })} /> : null}
         {error ? <Text style={[s.note, { color: t.colors.danger, textAlign: 'center' }]}>{error}</Text> : null}
       </View>
     </Sheet>
@@ -114,6 +123,7 @@ function EditSheet({ edit, onClose, onSaved }: { edit: { target: Target; entry?:
 }
 
 const useStyles = makeStyles((t) => ({
+  meterText: { ...t.type.caption, color: t.colors.textTertiary, marginTop: 6 },
   note: { ...t.type.callout, color: t.colors.textSecondary, marginBottom: 10 },
   error: { ...t.type.callout, color: t.colors.danger, marginTop: 10 },
   meter: { height: 4, borderRadius: 2, backgroundColor: t.colors.surfaceSunken, overflow: 'hidden', marginBottom: 12 },

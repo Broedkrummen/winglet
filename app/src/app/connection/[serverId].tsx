@@ -13,7 +13,7 @@ import { api, moveServer } from '../../lib/api';
 import { addressKind, checkAddress, connectionView, deliverySummary, diagnosticReport, modeSummary, span, tunnelSummary } from '../../lib/connection';
 import { haptic } from '../../lib/haptics';
 import { describeTestPush, sendTestPush } from '../../lib/push';
-import { APP_PROTOCOL, isOwner, useApp } from '../../lib/store';
+import { APP_PROTOCOL, isOwner, useApp, useServerState } from '../../lib/store';
 import { makeStyles, useTheme } from '../../lib/themeContext';
 import type { ConnectionStatus, Server } from '../../lib/types';
 
@@ -23,7 +23,7 @@ export default function ConnectionScreen() {
   const s = useStyles();
   const { serverId } = useLocalSearchParams<{ serverId: string }>();
   const server = useApp((st) => st.servers.find((x) => x.id === serverId));
-  const rt = useApp((st) => st.runtime[serverId]);
+  const rt = useServerState(serverId);
   const network = useApp((st) => st.network);
   const [status, setStatus] = useState<ConnectionStatus | null>(null);
   const [checkedAt, setCheckedAt] = useState(0);

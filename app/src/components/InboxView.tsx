@@ -3,8 +3,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useShallow } from 'zustand/react/shallow';
 import { ago, moodOf } from '../lib/agent';
-import { useApp } from '../lib/store';
+import { useApp, useServerState } from '../lib/store';
 import { WIDE_BREAKPOINT } from '../lib/theme';
 import { makeStyles, useTheme } from '../lib/themeContext';
 import type { InboxItem, Server } from '../lib/types';
@@ -26,7 +27,9 @@ export function InboxView() {
   const { width } = useWindowDimensions();
   const params = useLocalSearchParams<{ item?: string; server?: string }>();
   const servers = useApp((st) => st.servers);
-  const runtime = useApp((st) => st.runtime);
+  // Each bot's inbox and count, not its messages: a reply streaming in doesn't re-render the inbox.
+  const inboxes = useApp(useShallow((st) => st.servers.map((x) => st.runtime[x.id]?.inbox)));
+  const pendings = useApp(useShallow((st) => st.servers.map((x) => st.runtime[x.id]?.pending ?? 0)));
   const loadInbox = useApp((st) => st.loadInbox);
   const [view, setView] = useState<'pending' | 'all'>('pending');
   const [only, setOnly] = useState<string | null>(null);
@@ -38,25 +41,27 @@ export function InboxView() {
 
   const entries = useMemo(() => {
     const all: Entry[] = [];
-    for (const server of servers) {
-      if (only && server.id !== only) continue;
-      for (const item of Object.values(runtime[server.id]?.inbox ?? {})) all.push({ server, item });
-    }
+    servers.forEach((server, i) => {
+      if (only && server.id !== only) return;
+      for (const item of Object.values(inboxes[i] ?? {})) all.push({ server, item });
+    });
     all.sort((a, b) => b.item.created_at - a.item.created_at);
     const pending = all.filter((e) => e.item.status === 'pending');
     return view === 'pending' ? pending : [...pending, ...all.filter((e) => e.item.status !== 'pending').slice(0, 60)];
-  }, [servers, runtime, only, view]);
+  }, [servers, inboxes, only, view]);
 
-  const pendingCount = servers.reduce((n, x) => n + (only && x.id !== only ? 0 : runtime[x.id]?.pending ?? 0), 0);
+  const pendingCount = servers.reduce((n, x, i) => n + (only && x.id !== only ? 0 : pendings[i] ?? 0), 0);
 
-  // A notification opens the exact card it was about.
+  // A notification opens the exact card it was about, once: scrolling away afterwards isn't undone.
+  const scrolledTo = useRef<string | null>(null);
   useEffect(() => {
-    if (!params.item) return;
+    if (!params.item || scrolledTo.current === params.item) return;
     const target = entries.findIndex((e) => e.item.id === params.item);
     if (target < 0) {
       if (view === 'pending') setView('all');
       return;
     }
+    scrolledTo.current = params.item;
     setTimeout(() => list.current?.scrollToIndex({ index: target, animated: true, viewPosition: 0.1 }), 300);
   }, [params.item, entries, view]);
 
@@ -80,8 +85,8 @@ export function InboxView() {
             {servers.length > 1 ? (
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
                 <Chip label="All bots" selected={!only} onPress={() => setOnly(null)} />
-                {servers.map((srv) => (
-                  <Chip key={srv.id} label={`${srv.bot.title}${runtime[srv.id]?.pending ? ` · ${runtime[srv.id]!.pending}` : ''}`}
+                {servers.map((srv, i) => (
+                  <Chip key={srv.id} label={`${srv.bot.title}${pendings[i] ? ` · ${pendings[i]}` : ''}`}
                     icon={<BotAvatar name={srv.bot.name} size={20} />} selected={only === srv.id} onPress={() => setOnly(only === srv.id ? null : srv.id)} />
                 ))}
               </ScrollView>
@@ -99,19 +104,29 @@ export function InboxView() {
         renderItem={({ item: e, index }) => (
           <Animated.View entering={FadeInDown.delay(Math.min(index, 6) * 40).duration(260).easing(easeOut)}
             style={[{ gap: 8 }, params.item === e.item.id && s.highlight]}>
-            <View style={s.meta}>
-              <BotAvatar name={e.server.bot.name} size={24} mood={moodOf(runtime[e.server.id])} />
-              <Text style={s.metaText} numberOfLines={1}>
-                <Text style={s.metaBot}>{e.server.bot.title}</Text>
-                {'  ·  '}{runtime[e.server.id]?.chats[e.item.chat_id]?.kind === 'home' ? 'Updates' : `#${runtime[e.server.id]?.chats[e.item.chat_id]?.title ?? e.item.chat_id}`}
-                {'  ·  '}{ago(e.item.created_at)}
-              </Text>
-              <Text accessibilityRole="link" style={s.open} onPress={() => router.push(`/chat/${e.server.id}/${e.item.chat_id}`)}>Open chat</Text>
-            </View>
+            <EntryMeta server={e.server} item={e.item} />
             <InboxCard serverId={e.server.id} item={e.item} />
           </Animated.View>
         )}
       />
+    </View>
+  );
+}
+
+/** Which bot and chat a card is from. */
+function EntryMeta({ server, item }: { server: Server; item: InboxItem }) {
+  const s = useStyles();
+  const rt = useServerState(server.id);
+  const chat = rt?.chats[item.chat_id];
+  return (
+    <View style={s.meta}>
+      <BotAvatar name={server.bot.name} size={24} mood={moodOf(rt)} />
+      <Text style={s.metaText} numberOfLines={1}>
+        <Text style={s.metaBot}>{server.bot.title}</Text>
+        {'  ·  '}{chat?.kind === 'home' ? 'Updates' : `#${chat?.title ?? item.chat_id}`}
+        {'  ·  '}{ago(item.created_at)}
+      </Text>
+      <Text accessibilityRole="link" style={s.open} onPress={() => router.push(`/chat/${server.id}/${item.chat_id}`)}>Open chat</Text>
     </View>
   );
 }

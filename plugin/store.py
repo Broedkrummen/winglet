@@ -10,6 +10,7 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 import secrets
 import sqlite3
 import threading
@@ -102,6 +103,35 @@ def _hash(secret: str) -> str:
 
 def _now() -> float:
     return time.time()
+
+
+_LIST_ITEM = re.compile(r"^\s*(?:[-*+•]|\d{1,3}[.)])\s+")
+_LINE_MARKUP = re.compile(r"^\s*(?:#{1,6}\s+|>\s?)")
+
+
+def preview_of(text: str, limit: int = 140) -> str:
+    """One line for the chat list: a list's items joined with commas, not "- a - b", and no heading or quote
+    markers. The app strips inline Markdown (bold, links) itself."""
+    parts: List[str] = []
+    item = False
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line or line.startswith("```") or set(line) <= set("|-: "):
+            continue
+        is_item = bool(_LIST_ITEM.match(line))
+        heading = line.startswith("#")
+        if line.startswith("|"):  # a table row: its cells
+            line = " · ".join(c.strip() for c in line.strip("|").split("|") if c.strip())
+        line = " ".join(_LINE_MARKUP.sub("", _LIST_ITEM.sub("", line)).split())
+        if heading and line and line[-1] not in ".:!?":
+            line += ":"
+        if parts:
+            parts.append(", " if is_item and item else " ")
+        parts.append(line)
+        item = is_item
+        if sum(map(len, parts)) > limit:
+            break
+    return "".join(parts)[:limit]
 
 
 def new_id() -> str:
@@ -329,8 +359,7 @@ class Store:
                 raise
 
     def _touch_chat(self, chat_id: str, preview: str) -> None:
-        preview = " ".join((preview or "").split())[:140]
-        self._exec("UPDATE chats SET updated_at = ?, preview = ? WHERE id = ?", (_now(), preview, chat_id))
+        self._exec("UPDATE chats SET updated_at = ?, preview = ? WHERE id = ?", (_now(), preview_of(preview), chat_id))
 
     # -- messages ----------------------------------------------------------------
 

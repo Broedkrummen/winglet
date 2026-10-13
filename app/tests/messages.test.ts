@@ -56,3 +56,14 @@ test('durable deletion removes cached older history without erasing a newer live
 test('a stale history response cannot resurrect a live deletion', () => {
   assert.deepEqual(mergeMessages([], [msg('deleted')], ['deleted']), []);
 });
+
+test('a merge keeps the same objects for messages that did not change, so their rows do not re-render', () => {
+  const a = msg('a', { position: 1 });
+  const b = msg('b', { position: 2 });
+  const merged = mergeMessages([a, b], [msg('b', { position: 2, text: 'b!', updated_at: 2 })]);
+  assert.equal(merged[0], a);
+  assert.notEqual(merged[1], b);
+  // A copy without a position still gets the one it had.
+  const relabeled = mergeMessages([a], [msg('a', { updated_at: 2 })]);
+  assert.equal(relabeled[0].position, 1);
+});

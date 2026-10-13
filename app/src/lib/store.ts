@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { useShallow } from 'zustand/react/shallow';
 import { Platform } from 'react-native';
 import { RecoveryCoordinator } from './recovery';
 import { api, ApiError, wsUrl } from './api';
@@ -144,6 +145,15 @@ export const useApp = create<AppState>((set, get) => {
       const list = s.messages[chatId] ?? [];
       const clientId = message.meta?.client_id;
       const idx = list.findIndex((m) => m.id === message.id || (clientId && m.meta?.client_id === clientId));
+      const have = idx >= 0 ? list[idx] : undefined;
+      // A streamed edit to a message already in place: swap that one row, no re-sort of the chat.
+      if (have && have.id === message.id && !isLocal(have) && !isLocal(message)
+        && (message.position ?? have.position) === have.position) {
+        if (message.updated_at < have.updated_at) return {};
+        const next = list.slice();
+        next[idx] = message.position === have.position ? message : { ...message, position: have.position };
+        return { messages: { ...s.messages, [chatId]: next } };
+      }
       const next = idx >= 0 ? list.map((m, i) => (i === idx ? message : m)) : [...list, message];
       return { messages: { ...s.messages, [chatId]: mergeMessages(next, []) } };
     });
@@ -948,6 +958,20 @@ class Connection {
     this.ws?.close();
     this.ws = undefined;
   }
+}
+
+const NO_MESSAGES: ServerState['messages'] = {};
+const NO_DELETED: ServerState['deleted'] = {};
+
+/**
+ * A bot's state without its message lists, for screens that don't show messages: a reply streaming into any
+ * chat doesn't re-render them. Everything else (chats, typing, inbox, status) still updates them.
+ */
+export function useServerState(serverId: string | undefined): ServerState | undefined {
+  return useApp(useShallow((st) => {
+    const rt = serverId ? st.runtime[serverId] : undefined;
+    return rt ? { ...rt, messages: NO_MESSAGES, deleted: NO_DELETED } : undefined;
+  }));
 }
 
 export function isTyping(state: ServerState | undefined, chatId: string): boolean {

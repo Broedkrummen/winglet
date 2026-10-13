@@ -40,6 +40,13 @@ type Props = {
  * The message box: text, attachments (uploaded as soon as they're picked), replies, voice notes
  * (hold the mic), the command palette, and what to do with a message sent while the agent works.
  */
+const focusers = new Map<string, () => void>();
+
+/** Put the cursor in a chat's message box, once a sheet that asked for it has closed. */
+export function focusComposer(serverId: string, chatId: string) {
+  setTimeout(() => focusers.get(draftKey(serverId, chatId))?.(), 320);
+}
+
 export function Composer({ server, chatId, busy, bottomInset, target, onHeight, placeholder }: Props) {
   const t = useTheme();
   const s = useStyles();
@@ -51,7 +58,6 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
   const setReplyTo = useApp((st) => st.setReplyTo);
   const online = useApp((st) => st.runtime[server.id]?.status === 'online');
   const features = useApp((st) => st.runtime[server.id]?.info?.features);
-  const messages = useApp((st) => st.runtime[server.id]?.messages[chatId]);
   const busyMode = usePrefs((st) => st.prefs.busyMode);
   const updatePrefs = usePrefs((st) => st.update);
   const [height, setHeight] = useState(MIN_INPUT);
@@ -71,6 +77,15 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
   useEffect(() => {
     if (replyTo) input.current?.focus();
   }, [replyTo]);
+
+  // So "Edit" on a message can put the cursor here too.
+  useEffect(() => {
+    const focus = () => input.current?.focus();
+    focusers.set(key, focus);
+    return () => {
+      if (focusers.get(key) === focus) focusers.delete(key);
+    };
+  }, [key]);
 
   // Keyboard: "/" from anywhere starts a command, Esc drops the reply or the half-typed command.
   useEffect(() => {
@@ -157,7 +172,10 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
 
   /** ↑ in an empty box brings back your last message to edit and send again. */
   const editLast = () => {
-    const last = [...(messages ?? [])].reverse().find((m) => m.role === 'user' && m.text);
+    // Read when asked, not subscribed to: the box doesn't re-render on every message.
+    const messages = useApp.getState().runtime[server.id]?.messages[chatId] ?? [];
+    let last;
+    for (let i = messages.length - 1; i >= 0 && !last; i--) if (messages[i].role === 'user' && messages[i].text) last = messages[i];
     if (last) setText(last.text);
   };
 

@@ -25,23 +25,29 @@ export function MediaViewer({ items, index, onClose }: { items: ViewerItem[]; in
   const s = useStyles();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
+  // The photo showing: the one opened, then wherever it's swiped to. It outlasts the lock, so the viewer comes
+  // back on it.
+  const [opened, setOpened] = useState(index);
   const [current, setCurrent] = useState(index ?? 0);
   const [zoomed, setZoomed] = useState(false);
   const locked = useLock((st) => st.locked);
   const backdrop = useSharedValue(1);
   const list = useRef<FlatList<ViewerItem>>(null);
+  if (index !== opened) {
+    setOpened(index);
+    if (index !== null) setCurrent(index);
+  }
+  const selected = index !== opened && index !== null ? index : current;
 
   useEffect(() => {
-    if (index !== null) {
-      setCurrent(index);
-      backdrop.value = 1;
-    }
-  }, [index, backdrop]);
+    if (index !== null) backdrop.value = 1;
+  }, [index, locked, backdrop]);
 
   const bg = useAnimatedStyle(() => ({ opacity: backdrop.value }));
-  // A native modal sits above the lock screen: hide the photos while locked.
+  // A native modal sits above the lock screen: hide the photos while locked. They come back unzoomed.
+  if (locked && zoomed) setZoomed(false);
   if (index === null || locked) return null;
-  const item = items[current] ?? items[0];
+  const item = items[selected] ?? items[0];
 
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent>
@@ -53,7 +59,7 @@ export function MediaViewer({ items, index, onClose }: { items: ViewerItem[]; in
           horizontal
           pagingEnabled
           scrollEnabled={!zoomed && items.length > 1}
-          initialScrollIndex={index}
+          initialScrollIndex={selected}
           getItemLayout={(_, i) => ({ length: width, offset: width * i, index: i })}
           keyExtractor={(it, i) => `${it.uri}-${i}`}
           showsHorizontalScrollIndicator={false}
@@ -64,7 +70,7 @@ export function MediaViewer({ items, index, onClose }: { items: ViewerItem[]; in
         />
         <View style={[s.bar, { paddingTop: insets.top + 8 }]} pointerEvents="box-none">
           <IconButton label="Close" variant="plain" onPress={onClose}><X size={26} color={FIXED.white} /></IconButton>
-          {items.length > 1 ? <Text style={s.count}>{current + 1} of {items.length}</Text> : <View />}
+          {items.length > 1 ? <Text style={s.count}>{selected + 1} of {items.length}</Text> : <View />}
           <IconButton label={`Share ${item?.name ?? 'photo'}`} onPress={() => item && shareMedia(item)}><Share size={22} color={FIXED.white} /></IconButton>
         </View>
       </GestureHandlerRootView>

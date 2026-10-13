@@ -53,13 +53,42 @@ test('an open sheet is unmounted at once while the app is locked, and comes back
   assert.equal(render(props).type, 'Modal');
 });
 
-test('full-screen photos are hidden while the app is locked', () => {
+const find = (node: any, type: string): any => {
+  if (!node || typeof node !== 'object') return undefined;
+  if (node.type === type) return node;
+  const kids = node.props?.children;
+  for (const kid of Array.isArray(kids) ? kids : [kids]) {
+    const hit = find(kid, type);
+    if (hit) return hit;
+  }
+  return undefined;
+};
+
+test('full-screen photos are hidden while locked and come back on the photo it was on, unzoomed', () => {
   const lock = { locked: false };
   const render = load('MediaViewer.tsx', 'MediaViewer', lock);
-  const props = { items: [{ uri: 'https://x/photo.jpg', name: 'photo.jpg' }], index: 0, onClose: () => undefined };
-  assert.equal(render(props).type, 'Modal');
+  const items = ['photo1', 'photo2', 'photo3'].map((name) => ({ uri: `https://x/${name}.jpg`, name }));
+  const props = (index: number | null) => ({ items, index, onClose: () => undefined });
+  const shown = (out: any) => {
+    const list = find(out, 'FlatList');
+    return { start: list.props.initialScrollIndex, paging: list.props.scrollEnabled, list };
+  };
+  assert.equal(render(props(null)), null);
+  // Opened on the second photo: the list starts there on its first render.
+  assert.equal(shown(render(props(1))).start, 1);
+  // Swiped to the third, then zoomed in.
+  let out = shown(render(props(1)));
+  out.list.props.onMomentumScrollEnd({ nativeEvent: { contentOffset: { x: 800 } } });
+  out.list.props.renderItem({ item: items[2] }).props.onZoom(true);
+  assert.equal(shown(render(props(1))).paging, false);
   lock.locked = true;
-  assert.equal(render(props), null);
+  assert.equal(render(props(1)), null);
   lock.locked = false;
-  assert.equal(render(props).type, 'Modal');
+  out = shown(render(props(1)));
+  assert.equal(out.start, 2);
+  assert.equal(out.paging, true);
+  assert.ok(JSON.stringify(render(props(1))).includes('Share photo3'));
+  // Closed and opened again on the first photo: it starts there.
+  render(props(null));
+  assert.equal(shown(render(props(0))).start, 0);
 });

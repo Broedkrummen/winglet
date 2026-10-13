@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import hashlib
 import json
 import logging
 from typing import List, Optional
@@ -1134,3 +1135,180 @@ async def session_transcript(session_id: str) -> dict:
     messages = [m for m in (_session_message(x) for x in page.get("messages") or []) if m]
     return {"session": _session_row(detail), "messages": messages,
             "truncated": (page.get("pagination") or {}).get("returned", 0) >= 500}
+
+
+# -- pets: the agent's animated face, from Hermes's own pet store (agent/pet) and petdex.dev --------
+
+PET_CATALOG_PAGE = 30
+_pet_sheets: dict = {}
+
+
+def _pet_engine():
+    try:
+        from agent.pet import constants, manifest, store
+        from hermes_cli import pets as pet_config
+    except Exception as exc:
+        raise HermesUnavailable("pets unavailable") from exc
+    return constants, manifest, store, pet_config
+
+
+def pets_available() -> bool:
+    try:
+        _pet_engine()
+        return True
+    except HermesUnavailable:
+        return False
+
+
+def _pet_settings() -> dict:
+    """``display.pet`` from the config: slug, enabled and the desktop's own settings."""
+    from hermes_cli.config import load_config
+    display = load_config().get("display")
+    pet = display.get("pet") if isinstance(display, dict) else None
+    return pet if isinstance(pet, dict) else {}
+
+
+def _truthy(value) -> bool:
+    try:
+        from utils import is_truthy_value
+        return is_truthy_value(value, default=False)
+    except ImportError:
+        return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _active_pet():
+    """The pet Hermes shows: the configured one when the display is on, else None. Like Hermes, a
+    configured pet that's gone falls back to the first one installed."""
+    _, _, store, _ = _pet_engine()
+    settings = _pet_settings()
+    if not _truthy(settings.get("enabled")):
+        return None
+    return store.resolve_active_pet(str(settings.get("slug") or ""))
+
+
+def _pet_sheet(pet) -> dict:
+    """How to cut a pet's spritesheet into frames, worked out once per version of the file."""
+    constants, _, _, _ = _pet_engine()
+    stat = pet.spritesheet.stat()
+    key = (str(pet.spritesheet), stat.st_mtime_ns, stat.st_size)
+    if key not in _pet_sheets:
+        from PIL import Image
+        from agent.pet import render
+        with Image.open(pet.spritesheet) as image:
+            width, height = image.size
+        rows = max(1, height // constants.FRAME_H)
+        try:
+            frames = render.state_frame_counts(str(pet.spritesheet))
+        except Exception:
+            frames = {}
+        while len(_pet_sheets) >= 8:
+            _pet_sheets.pop(next(iter(_pet_sheets)))
+        _pet_sheets[key] = {
+            "revision": hashlib.sha256(repr(key).encode()).hexdigest()[:16],
+            "mime": "image/png" if pet.spritesheet.suffix.lower() == ".png" else "image/webp",
+            "frame_w": constants.FRAME_W, "frame_h": constants.FRAME_H,
+            "columns": max(1, width // constants.FRAME_W), "rows": rows,
+            "state_rows": list(constants.state_rows_for_grid(rows)), "frames_per_state": constants.FRAMES_PER_STATE,
+            "frames": {str(k): int(v) for k, v in frames.items()}, "loop_ms": constants.LOOP_MS,
+        }
+    return {**_pet_sheets[key], "slug": pet.slug, "name": pet.display_name, "path": str(pet.spritesheet)}
+
+
+@_scoped
+def active_pet() -> Optional[dict]:
+    """The agent's pet with its spritesheet's geometry, or None when it has none showing."""
+    pet = _active_pet()
+    return _pet_sheet(pet) if pet is not None and pet.exists else None
+
+
+@_scoped
+def pet_sheet(slug: str) -> Optional[dict]:
+    """Any installed pet's spritesheet, for previews."""
+    _, _, store, _ = _pet_engine()
+    pet = store.load_pet(slug)
+    return _pet_sheet(pet) if pet is not None and pet.exists else None
+
+
+@_scoped
+def pets() -> dict:
+    """Installed pets, and the one showing."""
+    _, _, store, _ = _pet_engine()
+    active = _active_pet()
+    return {"enabled": active is not None, "active": active.slug if active else "",
+            "pets": [{"slug": p.slug, "name": p.display_name, "description": p.description, "generated": p.generated}
+                     for p in store.installed_pets()]}
+
+
+@_scoped
+def pet_catalog(query: str = "", offset: int = 0, limit: int = PET_CATALOG_PAGE) -> dict:
+    """A page of the petdex gallery, hand-picked pets first, with what's installed here marked."""
+    _, manifest, store, _ = _pet_engine()
+    try:
+        entries = manifest.fetch_manifest()
+    except manifest.ManifestError as exc:
+        raise HermesRefused("Couldn't reach the pet gallery at petdex.dev. Try again later.") from exc
+    installed = {p.slug for p in store.installed_pets()}
+    words = query.lower().split()
+    found = [e for e in entries if all(w in f"{e.slug} {e.display_name} {e.submitted_by}".lower() for w in words)]
+    found.sort(key=lambda e: "/curated/" not in e.spritesheet_url)
+    return {"total": len(found), "pets": [
+        {"slug": e.slug, "name": e.display_name, "kind": e.kind, "by": e.submitted_by,
+         "curated": "/curated/" in e.spritesheet_url, "installed": e.slug in installed}
+        for e in found[offset:offset + limit]]}
+
+
+@_scoped
+def pet_thumbnail(slug: str) -> Optional[bytes]:
+    """A small PNG of a pet's first frame. Pets that aren't installed are fetched from petdex once and
+    cached; Hermes only fetches from petdex's own hosts."""
+    _, manifest, store, _ = _pet_engine()
+    pet = store.load_pet(slug)
+    if pet is not None and pet.exists:
+        return store.thumbnail_png(pet.slug)
+    try:
+        entry = manifest.find_entry(slug)
+    except manifest.ManifestError:
+        return None
+    return store.thumbnail_png(entry.slug, source_url=entry.spritesheet_url) if entry else None
+
+
+@_scoped
+def pet_installed(slug: str) -> bool:
+    _, _, store, _ = _pet_engine()
+    pet = store.load_pet(slug)
+    return pet is not None and pet.exists
+
+
+@_scoped
+def adopt_pet(slug: str) -> dict:
+    """Install a pet from petdex when it isn't here yet, and make it the one showing."""
+    _, manifest, store, pet_config = _pet_engine()
+    try:
+        pet = store.install_pet(slug)
+    except (store.PetStoreError, manifest.ManifestError) as exc:
+        raise HermesRefused(f"Couldn't get that pet: {exc}") from exc
+    pet_config._set_active(pet.slug)
+    return {"slug": pet.slug, "name": pet.display_name}
+
+
+@_scoped
+def remove_pet(slug: str) -> bool:
+    """Delete an installed pet. When it was the one showing, the display turns off, as in Hermes."""
+    _, _, store, pet_config = _pet_engine()
+    removed = store.remove_pet(slug)
+    pet_config._clear_active_if(slug)
+    return removed
+
+
+@_scoped
+def show_pet(on: bool) -> Optional[dict]:
+    """Turn the pet display on (the configured pet, else the first installed) or off."""
+    _, _, store, pet_config = _pet_engine()
+    if not on:
+        pet_config._set_enabled(False)
+        return None
+    pet = store.resolve_active_pet(str(_pet_settings().get("slug") or ""))
+    if pet is None:
+        raise HermesRefused("Adopt a pet first.")
+    pet_config._set_active(pet.slug)
+    return {"slug": pet.slug, "name": pet.display_name}

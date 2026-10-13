@@ -1038,10 +1038,11 @@ GET    /api/usage?days= ◆
 GET    /api/identity ◆    PUT /api/identity ★
 GET    /api/memory ◆      PUT /api/memory ★
 
-GET    /api/pets                                installed + active
-GET    /api/pets/catalog?q=
-POST   /api/pets/{slug}/install ★   PUT /api/pets/active ★   DELETE /api/pets/{slug} ★
-GET    /api/pets/{slug}/sheet                   cached
+GET    /api/pet                                 the pet showing, for every device
+GET    /api/pets ◆                              installed + active
+GET    /api/pets/catalog?q=&offset= ◆
+POST   /api/pets/{slug}/adopt ★ ⟳ (when not installed)   PUT /api/pets/display ★   DELETE /api/pets/{slug} ★
+GET    /api/pets/{slug}/sheet?rev=&sig=   GET /api/pets/{slug}/thumb?sig=   signed links, cached
 POST   /api/pets/hatch ★ ⟳
 
 GET    /api/system                              health and versions (details ◆)

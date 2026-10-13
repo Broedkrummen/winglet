@@ -13,6 +13,7 @@ import { Button } from './ui';
 const TITLES: Record<Job['kind'], string> = {
   restart: 'Restarting', hermes_update: 'Updating Hermes', winglet_update: 'Updating Winglet',
   skill_install: 'Installing a skill', skill_uninstall: 'Removing a skill', mcp_install: 'Adding an MCP server',
+  pet_install: 'Adopting a pet',
 };
 // Installs don't take the server down, so they have no steps to show.
 const RESTARTS: Job['kind'][] = ['restart', 'hermes_update', 'winglet_update'];

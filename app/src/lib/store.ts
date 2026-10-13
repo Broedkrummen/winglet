@@ -5,7 +5,7 @@ import { api, ApiError, wsUrl } from './api';
 import { cacheGet, cacheRemove, cacheSet } from './cache';
 import { markFailed, mergeMessages } from './messages';
 import { getJSON, setJSON } from './storage';
-import type { Attachment, Chat, ConnStatus, DraftFile, InboxItem, Job, Me, Message, PauseState, ReplyRef, Server, ServerInfo } from './types';
+import type { Attachment, Chat, ConnStatus, DraftFile, InboxItem, Job, Me, Message, PauseState, PetSheet, ReplyRef, Server, ServerInfo } from './types';
 
 const SERVERS_KEY = 'winglet.servers';
 const SELECTION_KEY = 'winglet.selection';
@@ -53,6 +53,8 @@ export type ServerState = {
   paused?: PauseState;
   /** The latest restart or update this phone heard about. */
   job?: Job;
+  /** The agent's pet, its animated face: null when it has none, undefined until known. */
+  pet?: PetSheet | null;
 };
 
 type Selection = { serverId?: string; chatId?: string };
@@ -85,6 +87,7 @@ type AppState = {
   /** Resolves false when the page couldn't be fetched (offline, a server error). */
   loadMessages: (serverId: string, chatId: string, older?: boolean) => Promise<boolean>;
   loadInbox: (serverId: string) => Promise<void>;
+  loadPet: (serverId: string) => Promise<void>;
   sendMessage: (serverId: string, chatId: string, text: string, opts?: string | SendOptions) => Promise<void>;
   updateDraftFiles: (serverId: string, chatId: string, fn: (files: DraftFile[]) => DraftFile[]) => void;
   setReplyTo: (serverId: string, chatId: string, ref?: ReplyRef) => void;
@@ -263,6 +266,7 @@ export const useApp = create<AppState>((set, get) => {
           persist();
         }
         get().loadInbox(serverId);
+        get().loadPet(serverId);
         // A member can't open the shared main chat: point them at their own (also after a role change).
         const sel = get().selection;
         if (sel.serverId === serverId && sel.chatId && !chats[sel.chatId]) get().select(serverId, homeChat(get().runtime[serverId]));
@@ -319,6 +323,9 @@ export const useApp = create<AppState>((set, get) => {
       case 'system.paused':
         patch(serverId, () => ({ paused: (ev.paused ?? null) as PauseState }));
         break;
+      case 'pet.update':
+        get().loadPet(serverId);
+        break;
       case 'system.job':
         if (ev.job) patch(serverId, () => ({ job: ev.job as Job }));
         break;
@@ -362,12 +369,16 @@ export const useApp = create<AppState>((set, get) => {
     conn.open();
   };
 
+  /** The latest pet request per bot. */
+  const petLoads = new Map<string, number>();
+
   /** Load what this phone remembers about a bot, so it opens instantly and works offline. */
   const hydrateServer = async (serverId: string) => {
-    const [chats, inbox, outbox] = await Promise.all([
+    const [chats, inbox, outbox, pet] = await Promise.all([
       cacheGet<Record<string, Chat>>(`chats:${serverId}`, {}),
       cacheGet<InboxItem[]>(`inbox:${serverId}`, []),
       cacheGet<OutboxEntry[]>(`outbox:${serverId}`, []),
+      cacheGet<PetSheet | null>(`pet:${serverId}`, null),
     ]);
     patch(serverId, (s) => {
       const messages = { ...s.messages };
@@ -384,6 +395,7 @@ export const useApp = create<AppState>((set, get) => {
         pending: live ? s.pending : inbox.filter((i) => i.status === 'pending').length,
         outbox: [...s.outbox, ...outbox.filter((o) => !s.outbox.some((x) => x.client_id === o.client_id))],
         messages,
+        pet: s.pet === undefined ? pet : s.pet,
       };
     });
   };
@@ -452,7 +464,7 @@ export const useApp = create<AppState>((set, get) => {
         const drafts = Object.fromEntries(Object.entries(state.drafts).filter(([k]) => !k.startsWith(`${serverId}:`)));
         return { servers, runtime, selection, drafts };
       });
-      for (const prefix of [`chats:${serverId}`, `inbox:${serverId}`, `outbox:${serverId}`, `msgs:${serverId}:`]) cacheRemove(prefix);
+      for (const prefix of [`chats:${serverId}`, `inbox:${serverId}`, `outbox:${serverId}`, `msgs:${serverId}:`, `pet:${serverId}`]) cacheRemove(prefix);
       await persist();
     },
 
@@ -528,6 +540,25 @@ export const useApp = create<AppState>((set, get) => {
         if (e instanceof ApiError && e.status === 401) patch(serverId, () => ({ status: 'unauthorized' }));
         return false;
       }
+    },
+
+    loadPet: async (serverId) => {
+      const server = get().servers.find((s) => s.id === serverId);
+      if (!server) return;
+      const load = (petLoads.get(serverId) ?? 0) + 1;
+      petLoads.set(serverId, load);
+      let pet: PetSheet | null = null;
+      if (get().runtime[serverId]?.info?.features?.pets) {
+        try {
+          pet = (await api<{ pet: PetSheet | null }>(server, '/api/pet')).pet;
+        } catch {
+          return; // offline: keep the face we have
+        }
+      }
+      // Answers can arrive out of order: only the latest request's may show, or be remembered.
+      if (petLoads.get(serverId) !== load) return;
+      patch(serverId, () => ({ pet }));
+      cacheSet(`pet:${serverId}`, pet);
     },
 
     loadInbox: async (serverId) => {

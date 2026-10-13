@@ -2,6 +2,7 @@ import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Platform, Text, View } from 'react-native';
 import { hasSigningKey } from '../lib/api';
+import { useLock } from '../lib/appLock';
 import { useApp } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
 import type { Server } from '../lib/types';
@@ -43,10 +44,12 @@ export function VerifySheet() {
   const serverId = useVerify((st) => st.serverId);
   const close = useVerify((st) => st.close);
   const server = useApp((st) => st.servers.find((x) => x.id === serverId));
+  const locked = useLock((st) => st.locked);
   const [last, setLast] = useState(server);
   if (server && server !== last) setLast(server);
   const shown = server ?? last;
-  if (!shown) return null;
+  // Unmount the native modal immediately when locked; Sheet otherwise stays above the lock screen.
+  if (!shown || locked) return null;
   return (
     <Sheet visible={!!server} onClose={close} title="Verify this phone">
       <View style={{ gap: 14, paddingHorizontal: 4 }}>

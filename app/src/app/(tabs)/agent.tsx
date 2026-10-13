@@ -5,6 +5,7 @@ import { Redirect, router } from 'expo-router';
 import { ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AgentFace } from '../../components/AgentFace';
+import { VerifyNotice } from '../../components/VerifyPhone';
 import { BotSwitcher } from '../../components/BotSwitcher';
 import {
   Activity, BarChart, Bell, Brain, CalendarClock, Cpu, Fingerprint, HeartPulse, Info, Key, MessageCircle, MessageSquareText, Palette, PawPrint, Plug, Plus, ScrollText,
@@ -68,6 +69,8 @@ export default function AgentTab() {
           <ListRow icon={<Activity size={18} color={t.colors.onAccentSoft} />} title="Connection" value={view.kind === 'online' ? 'Online' : view.title}
             onPress={() => router.push(`/connection/${server.id}`)} />
         </ListGroup>
+
+        <VerifyNotice server={server} />
 
         {rt?.info?.features?.agent && isOwner(rt) ? (
           <>

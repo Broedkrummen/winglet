@@ -76,14 +76,15 @@ export function BotAvatar({ name, size = 40, mood = 'idle', animated = false, gl
     breath.value = withRepeat(withSequence(withTiming(1.035, { duration: 1400, easing: ease }), withTiming(1, { duration: 1400, easing: ease })), -1);
     blink.value = withRepeat(withSequence(withDelay(3400, withTiming(0.12, { duration: 80 })), withTiming(1, { duration: 120 })), -1);
     if (mood === 'working') {
-      bob.value = withRepeat(withSequence(withTiming(-S * 0.035, { duration: 420, easing: ease }), withTiming(0, { duration: 420, easing: ease })), -1);
-      lookX.value = withRepeat(withSequence(withTiming(S * 0.035, { duration: 900, easing: ease }), withTiming(-S * 0.035, { duration: 900, easing: ease })), -1, true);
+      bob.value = withRepeat(withSequence(withTiming(-S * 0.025, { duration: 700, easing: ease }), withTiming(0, { duration: 700, easing: ease })), -1);
+      lookX.value = withRepeat(withSequence(withTiming(S * 0.03, { duration: 1200, easing: ease }), withTiming(-S * 0.03, { duration: 1200, easing: ease })), -1, true);
       halo.value = withRepeat(withSequence(withTiming(0.9, { duration: 700 }), withTiming(0.45, { duration: 700 })), -1);
     } else if (mood === 'waiting') {
-      bob.value = withRepeat(withSequence(withDelay(1400, withTiming(-S * 0.07, { duration: 160 })), withTiming(0, { duration: 260, easing: Easing.out(Easing.back(3)) })), -1);
+      // A soft nudge now and then, not a bounce: it's asking, not alarmed.
+      bob.value = withRepeat(withSequence(withDelay(2200, withTiming(-S * 0.04, { duration: 260, easing: ease })), withTiming(0, { duration: 360, easing: ease })), -1);
       halo.value = withRepeat(withSequence(withTiming(0.95, { duration: 900 }), withTiming(0.5, { duration: 900 })), -1);
     } else if (mood === 'happy') {
-      bob.value = withSequence(withTiming(-S * 0.08, { duration: 160 }), withTiming(0, { duration: 300, easing: Easing.out(Easing.back(3)) }));
+      bob.value = withSequence(withTiming(-S * 0.06, { duration: 220, easing: ease }), withTiming(0, { duration: 380, easing: ease }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [live, mood, S]);

@@ -13,6 +13,7 @@ import { isIOS, isStandalone } from '../lib/push';
 import { useApp } from '../lib/store';
 import { BRAND } from '../lib/theme';
 import { makeStyles, useTheme } from '../lib/themeContext';
+import { easeOut } from '../lib/motion';
 
 const FEATURES = [
   { icon: ServerIcon, title: 'Runs on your machine', text: 'Your Hermes agents, your models, your data.' },
@@ -104,7 +105,7 @@ export default function PairScreen() {
           </IconButton>
         ) : null}
 
-        <Animated.View entering={ZoomIn.springify().damping(14)} style={s.family}>
+        <Animated.View entering={ZoomIn.duration(220).easing(easeOut)} style={s.family}>
           <BotAvatar name="atlas" size={58} mood="happy" animated style={{ marginRight: -14, marginTop: 26 }} />
           <BotAvatar name="hermes" size={92} mood="idle" animated glow />
           <BotAvatar name="nova" size={58} mood="idle" animated style={{ marginLeft: -14, marginTop: 26 }} />
@@ -117,7 +118,7 @@ export default function PairScreen() {
         {!hasServers ? (
           <View style={s.features}>
             {FEATURES.map(({ icon: Icon, title, text }, i) => (
-              <Animated.View key={title} entering={FadeInDown.delay(120 + i * 80).springify().damping(18)} style={s.feature}>
+              <Animated.View key={title} entering={FadeInDown.delay(120 + i * 80).duration(260).easing(easeOut)} style={s.feature}>
                 <View style={s.featureIcon}><Icon size={20} color={t.colors.onAccentSoft} /></View>
                 <View style={{ flex: 1 }}>
                   <Text style={s.featureTitle}>{title}</Text>
@@ -128,7 +129,7 @@ export default function PairScreen() {
           </View>
         ) : null}
 
-        <Animated.View entering={FadeInDown.delay(320).springify().damping(18)} style={s.card}>
+        <Animated.View entering={FadeInDown.delay(320).duration(260).easing(easeOut)} style={s.card}>
           {showInstall ? (
             <>
               <Text style={s.cardTitle}>Install Winglet on your iPhone</Text>

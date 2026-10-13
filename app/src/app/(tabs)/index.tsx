@@ -17,7 +17,7 @@ import { ago, chatName, greeting, headline, pendingItems, workingChats } from '.
 import { api } from '../../lib/api';
 import { haptic } from '../../lib/haptics';
 import { plainText } from '../../lib/text';
-import { useReducedMotion } from '../../lib/motion';
+import { easeOut, useReducedMotion } from '../../lib/motion';
 import { homeChat, useApp } from '../../lib/store';
 import { WIDE_BREAKPOINT } from '../../lib/theme';
 import { makeStyles, useTheme } from '../../lib/themeContext';
@@ -299,7 +299,7 @@ function ChatCard({ server, chat, index }: { server: Server; chat: Chat; index: 
   const s = useStyles();
   const general = useApp((st) => homeChat(st.runtime[server.id])) === chat.id;
   return (
-    <Animated.View entering={FadeInDown.delay(40 * index).springify().damping(18)}>
+    <Animated.View entering={FadeInDown.delay(40 * index).duration(260).easing(easeOut)}>
       <Tap feedback="selection" scaleTo={0.97} accessibilityLabel={`${chat.title}. ${plainText(chat.preview)}`} onPress={() => router.push(`/chat/${server.id}/${chat.id}`)}
         style={({ hovered }) => [s.chatCard, hovered && { borderColor: t.colors.borderStrong }]}>
         <View style={s.cardTop}>

@@ -13,6 +13,7 @@ import { UpdatePrompt } from '../components/AppUpdate';
 import { LockScreen } from '../components/LockScreen';
 import { ShareListener } from '../components/ShareListener';
 import { Toasts } from '../components/Toasts';
+import { VerifySheet } from '../components/VerifyPhone';
 import { clearUpdateDownloads } from '../lib/appInstall';
 import { lockOnStart, onAppVisibility } from '../lib/appLock';
 import { useAppUpdate } from '../lib/appUpdateCheck';
@@ -95,6 +96,7 @@ function Navigator() {
       <ShareListener />
       <Toasts />
       <UpdatePrompt />
+      <VerifySheet />
       <LockScreen />
     </SafeAreaProvider>
   );

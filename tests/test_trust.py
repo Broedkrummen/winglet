@@ -243,8 +243,11 @@ async def test_unverified_owners_and_members_cant_run_control_actions(client, hu
     legacy = await pair_phone(client, hub, "Old", sealed=False)
     member = await pair_phone(client, hub, "Alex", role="member")
     resp = await post_signed(client, legacy, "/api/devices/pairing-code", {})
-    assert resp.status == 403 and "Verify this device" in (await resp.json())["error"]
-    assert (await post_signed(client, member, "/api/devices/pairing-code", {})).status == 403
+    body = await resp.json()
+    # The app is told it can fix this by verifying, so it offers that instead of a dead end.
+    assert resp.status == 403 and "Verify this device" in body["error"] and body["needs"] == "verify"
+    resp = await post_signed(client, member, "/api/devices/pairing-code", {})
+    assert resp.status == 403 and "needs" not in await resp.json()  # a member can't, verified or not
     assert (await client.get("/api/devices", headers=member.auth)).status == 403
     assert (await client.get("/api/audit", headers=member.auth)).status == 403
 

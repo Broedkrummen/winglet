@@ -19,6 +19,7 @@ import { homeChat, isTyping, useApp } from '../../lib/store';
 import { WIDE_BREAKPOINT } from '../../lib/theme';
 import { makeStyles, useTheme } from '../../lib/themeContext';
 import type { Chat, SearchResult, Server } from '../../lib/types';
+import { easeOut } from '../../lib/motion';
 
 /** The main chat, the Updates feed, and side chats for separate topics. Wide screens show the chat alongside. */
 export default function ChatsTab() {
@@ -116,7 +117,7 @@ function ChatList({ server, activeChatId }: { server: Server; activeChatId?: str
             ) : null}
             {!q || side.some(match) ? <SectionHeader title="Side chats" /> : null}
             {side.filter(match).map((c) => (
-              <Animated.View key={c.id} entering={FadeIn.duration(200)} layout={LinearTransition.springify().damping(20)}>
+              <Animated.View key={c.id} entering={FadeIn.duration(200)} layout={LinearTransition.duration(220).easing(easeOut)}>
                 <ChatRow icon={<Hash size={17} color={t.colors.onAccentSoft} />} tint={t.colors.accentSoft} title={c.title}
                   subtitle={isTyping(rt, c.id) ? 'Working…' : plainText(c.preview) || 'No messages yet'} time={c.updated_at} working={isTyping(rt, c.id)}
                   active={activeChatId === c.id} onPress={() => open(c.id)} onMenu={() => setMenu(c)} />

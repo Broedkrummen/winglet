@@ -13,6 +13,7 @@ import { CheckCheck } from './icons';
 import { InboxCard } from './InboxCards';
 import { useTabBarSpace } from './TabBar';
 import { Chip, Segmented } from './ui';
+import { easeOut } from '../lib/motion';
 
 type Entry = { server: Server; item: InboxItem };
 
@@ -96,7 +97,7 @@ export function InboxView() {
           </View>
         }
         renderItem={({ item: e, index }) => (
-          <Animated.View entering={FadeInDown.delay(Math.min(index, 6) * 40).springify().damping(18)}
+          <Animated.View entering={FadeInDown.delay(Math.min(index, 6) * 40).duration(260).easing(easeOut)}
             style={[{ gap: 8 }, params.item === e.item.id && s.highlight]}>
             <View style={s.meta}>
               <BotAvatar name={e.server.bot.name} size={24} mood={moodOf(runtime[e.server.id])} />

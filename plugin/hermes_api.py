@@ -1239,6 +1239,12 @@ def pets() -> dict:
                      for p in store.installed_pets()]}
 
 
+def prefetch_pet_catalog() -> None:
+    """Start fetching the petdex gallery in the background (Hermes caches it), so it's ready when asked."""
+    _, manifest, _, _ = _pet_engine()
+    manifest.prefetch()
+
+
 @_scoped
 def pet_catalog(query: str = "", offset: int = 0, limit: int = PET_CATALOG_PAGE) -> dict:
     """A page of the petdex gallery, hand-picked pets first, with what's installed here marked."""

@@ -3,6 +3,7 @@ import { fetch } from 'expo/fetch';
 import { addressConfirmed, checkServerKey, newSigningKey, seal, signedHeaders, type ServerKeyInfo } from './crypto';
 import { getItem, setItem } from './storage';
 import type { Bot, Server } from './types';
+import { NEEDS_VERIFY, useVerify } from './verify';
 
 export class ApiError extends Error {
   constructor(message: string, public status: number, public data?: any) {
@@ -143,15 +144,31 @@ export async function moveServer(server: Server, url: string): Promise<Server> {
   return moved;
 }
 
+/** Whether this phone holds the key it signs owner actions with for this server. */
+export async function hasSigningKey(serverId: string): Promise<boolean> {
+  return !!(await getItem(signKeyName(serverId)).catch(() => null));
+}
+
+/** The phone can't sign for this server (never verified, or its key was lost): offer to verify it. */
+function needsVerify(server: Server, status: number, data?: any): ApiError {
+  useVerify.getState().ask(server.id);
+  return new ApiError(NEEDS_VERIFY, status, { ...data, needs: 'verify' });
+}
+
 /** An owner action: signed with this phone's key, so a leaked token alone can't do it. */
 export async function signedApi<T>(server: Server, method: 'POST' | 'PATCH' | 'PUT' | 'DELETE', path: string, data?: unknown): Promise<T> {
   const secret = await getItem(signKeyName(server.id));
-  if (!secret) throw new ApiError('Verify this phone first: scan a new pairing code from your server or another owner\'s phone.', 403);
+  if (!secret) throw needsVerify(server, 403);
   const body = data === undefined ? '' : JSON.stringify(data);
-  return request<T>(`${server.url}${path}`, {
-    method, ...(body ? { body } : {}), token: server.token,
-    headers: signedHeaders(secret, server.deviceId, method, path, body),
-  });
+  try {
+    return await request<T>(`${server.url}${path}`, {
+      method, ...(body ? { body } : {}), token: server.token,
+      headers: signedHeaders(secret, server.deviceId, method, path, body),
+    });
+  } catch (e) {
+    if (e instanceof ApiError && e.data?.needs === 'verify') throw needsVerify(server, e.status, e.data);
+    throw e;
+  }
 }
 
 /** The socket URL. Current servers take the token in the first frame instead, so it isn't in a URL. */

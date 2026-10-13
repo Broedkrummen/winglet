@@ -3,6 +3,7 @@ import { Modal, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useLock } from '../lib/appLock';
 import { haptic } from '../lib/haptics';
 import { spring, useReducedMotion } from '../lib/motion';
 import { makeStyles, useTheme } from '../lib/themeContext';
@@ -19,6 +20,7 @@ export function Sheet({ visible, onClose, title, children }: { visible: boolean;
   const { width, height } = useWindowDimensions();
   const wide = width >= 700;
   const reduced = useReducedMotion();
+  const locked = useLock((st) => st.locked);
   const [mounted, setMounted] = useState(visible);
   const y = useSharedValue(height);
   const fade = useSharedValue(0);
@@ -47,7 +49,8 @@ export function Sheet({ visible, onClose, title, children }: { visible: boolean;
   const panel = useAnimatedStyle(() => ({ transform: [{ translateY: wide ? y.value * 0.15 : y.value }], opacity: wide ? fade.value : 1 }));
   const backdrop = useAnimatedStyle(() => ({ opacity: fade.value }));
 
-  if (!mounted) return null;
+  // A native modal sits above the lock screen: unmount it while locked. An open sheet comes back on unlocking.
+  if (!mounted || locked) return null;
   return (
     <Modal visible transparent animationType="none" onRequestClose={onClose} statusBarTranslucent navigationBarTranslucent>
       <GestureHandlerRootView style={{ flex: 1 }}>

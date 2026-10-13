@@ -43,7 +43,9 @@ def test_a_page_of_messages_reads_only_that_page(store):
     assert store._db.execute("PRAGMA synchronous").fetchone()[0] == 1  # NORMAL: no disk flush per commit
 
 
-def test_streaming_edits_leave_the_chat_list_alone_until_the_reply_is_done(store):
+def test_streaming_edits_leave_the_chat_list_alone_until_the_reply_is_done(store, monkeypatch):
+    clock = iter(range(1000, 2000))  # a clock that always moves on (Windows' can repeat a value)
+    monkeypatch.setattr(store_module, "_now", lambda: float(next(clock)))
     chat = store.create_chat("Plans")
     reply = store.add_message(chat["id"], "bot", "", status="streaming")
     before = store.get_chat(chat["id"])

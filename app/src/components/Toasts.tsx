@@ -7,6 +7,7 @@ import { makeStyles } from '../lib/themeContext';
 import { BotAvatar } from './BotAvatar';
 import { Glass } from './Glass';
 import { Tap } from './ui';
+import { easeOut } from '../lib/motion';
 
 /** In-app banners for things that happen outside the chat you're looking at. */
 export function Toasts() {
@@ -21,8 +22,8 @@ export function Toasts() {
       {toasts.map((toast) => {
         const server = servers.find((x) => x.id === toast.serverId);
         return (
-          <Animated.View key={toast.id} entering={SlideInUp.springify().damping(18)} exiting={FadeOutUp.duration(180)}
-            layout={LinearTransition.springify()} style={s.slot}>
+          <Animated.View key={toast.id} entering={SlideInUp.duration(260).easing(easeOut)} exiting={FadeOutUp.duration(180)}
+            layout={LinearTransition.duration(220).easing(easeOut)} style={s.slot}>
             <Tap feedback="selection" accessibilityRole="alert" accessibilityLabel={`${toast.title}. ${toast.body}`} scaleTo={0.98}
               onPress={() => { dismiss(toast.id); if (toast.href) router.push(toast.href as never); }}>
               <Glass style={s.toast}>

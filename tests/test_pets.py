@@ -175,6 +175,27 @@ async def test_gallery_marks_whats_installed_with_thumbnails(client, hub):
     assert (await client.get("/api/pets/catalog?offset=x", headers=owner.auth)).status == 400
 
 
+async def test_a_slow_gallery_answers_loading_and_was_started_early(client, hub, monkeypatch):
+    import time
+    from plugin import hub as hub_module
+    owner = await pair_phone(client, hub)
+    started = []
+    hub.hermes.prefetch_pet_catalog = lambda: started.append(True)
+    await client.get("/api/pets", headers=owner.auth)
+    assert started == [True]  # opening the Pet screen starts the petdex fetch
+    fast = hub.hermes.pet_catalog
+
+    def slow(*args):
+        time.sleep(0.3)
+        return fast(*args)
+    hub.hermes.pet_catalog = slow
+    monkeypatch.setattr(hub_module, "PET_CATALOG_WAIT", 0.05)
+    data = await (await client.get("/api/pets/catalog", headers=owner.auth)).json()
+    assert data == {"loading": True, "total": 0, "pets": []}
+    monkeypatch.setattr(hub_module, "PET_CATALOG_WAIT", 5)
+    assert (await (await client.get("/api/pets/catalog", headers=owner.auth)).json())["total"] == 3
+
+
 async def test_adopting_a_new_pet_downloads_it_as_a_job(client, hub):
     owner = await pair_phone(client, hub)
     path = "/api/pets/mochi/adopt"

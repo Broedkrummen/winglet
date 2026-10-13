@@ -5,6 +5,7 @@ import { api, ApiError, wsUrl } from './api';
 import { cacheGet, cacheRemove, cacheSet } from './cache';
 import { markFailed, mergeMessages } from './messages';
 import { getJSON, setJSON } from './storage';
+import { NEEDS_VERIFY } from './verify';
 import type { Attachment, Chat, ConnStatus, DraftFile, InboxItem, Job, Me, Message, PauseState, PetSheet, ReplyRef, Server, ServerInfo } from './types';
 
 const SERVERS_KEY = 'winglet.servers';
@@ -157,6 +158,7 @@ export const useApp = create<AppState>((set, get) => {
   };
 
   const toast = (t: Omit<Toast, 'id'>) => {
+    if (t.body === NEEDS_VERIFY) return; // the Verify this phone sheet is already explaining it
     const id = Math.random().toString(36).slice(2);
     set((state) => ({ toasts: [...state.toasts.slice(-2), { ...t, id }] }));
     setTimeout(() => get().dismissToast(id), 5000);

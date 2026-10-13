@@ -15,7 +15,7 @@ import { connectionView } from '../lib/connection';
 import { exportChat } from '../lib/exportChat';
 import { clearFocus, requestFocus, useFocusRequest } from '../lib/focus';
 import { haptic } from '../lib/haptics';
-import { spring, useReducedMotion } from '../lib/motion';
+import { easeOut, spring, useReducedMotion } from '../lib/motion';
 import { usePrefs } from '../lib/prefs';
 import { mutedUntil, usePushPrefs } from '../lib/pushPrefs';
 import { homeChat, isTyping, useApp } from '../lib/store';
@@ -317,7 +317,7 @@ function MessageList({ server, chatId, messages, loaded, typing, top, bottom, on
         removeClippedSubviews={Platform.OS === 'android'}
       />
       {away !== null ? (
-        <Animated.View entering={ZoomIn.springify().damping(16)} exiting={FadeOut.duration(140)} style={[s.jump, { bottom: bottom + 12 }]}>
+        <Animated.View entering={ZoomIn.duration(220).easing(easeOut)} exiting={FadeOut.duration(140)} style={[s.jump, { bottom: bottom + 12 }]}>
           <Tap feedback="light" accessibilityLabel={newSince > 0 ? `Jump to latest, ${newSince} new` : 'Jump to latest'}
             onPress={() => list.current?.scrollToOffset({ offset: 0, animated: true })} style={s.jumpBtn} scaleTo={0.9}>
             <ArrowDown size={20} color={t.colors.text} />
@@ -364,7 +364,7 @@ const MessageRow = memo(function MessageRow({ server, message, first, last, live
   const t = useTheme();
   const s = useStyles();
   const resolve = useCallback((url: string) => mediaUrl(server, url), [server]);
-  const entering = fresh ? FadeInDown.springify().damping(18).stiffness(180) : undefined;
+  const entering = fresh ? FadeInDown.duration(260).easing(easeOut) : undefined;
   const [hover, setHover] = useState(false);
 
   if (message.role === 'system') {
@@ -680,7 +680,7 @@ function EmptyChat({ server, chatId, top, bottom }: { server: Server; chatId: st
   const home = chat?.kind === 'home';
   return (
     <View style={[s.center, { flex: 1, paddingTop: top, paddingBottom: bottom, paddingHorizontal: 28, gap: 12 }]}>
-      <Animated.View entering={ZoomIn.springify().damping(14)}>
+      <Animated.View entering={ZoomIn.duration(220).easing(easeOut)}>
         <AgentFace server={server} size={92} mood="idle" animated glow />
       </Animated.View>
       <Text style={s.emptyTitle}>{home ? 'Updates from your routines' : `Say hi to ${server.bot.title}`}</Text>

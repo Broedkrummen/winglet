@@ -74,6 +74,7 @@ function harness(os = 'web') {
       cacheSet: async (key: string, value: any) => { cache.set(key, structuredClone(value)); },
       cacheRemove: async (prefix: string) => { for (const k of [...cache.keys()]) if (k.startsWith(prefix)) cache.delete(k); },
     },
+    './verify': { NEEDS_VERIFY: 'Verify this phone to do that.' },
     './storage': { getJSON: async (key: string, fallback: any) => (key === 'winglet.servers' && persisted) || fallback,
       setJSON: async (key: string, value: any) => { if (key === 'winglet.servers') persisted = value; } },
   });

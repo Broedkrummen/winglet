@@ -98,3 +98,21 @@ test('a statement only counts for its server, its address, and while it is fresh
   assert.ok(!crypto_.addressConfirmed(keyInfo, forged, 'srv', RELAY, now));
   assert.ok(!crypto_.addressConfirmed(keyInfo, { statement: 'x', sig: 'junk' }, 'srv', GENUINE, now));
 });
+
+test("an owner action this phone can't sign offers to verify it, whether the key is missing here or unknown there", async () => {
+  const asked: string[] = [];
+  const verify = { NEEDS_VERIFY: 'Verify this phone to do that.', useVerify: { getState: () => ({ ask: (id: string) => asked.push(id) }) } };
+  const refuse = async () => new Response(JSON.stringify({ error: 'Verify this device first…', needs: 'verify' }), { status: 403 });
+  const load_ = (key: string | null, fetchImpl: any) => load('api.ts', { 'react-native': { Platform: { OS: 'android' } },
+    'expo/fetch': { fetch: fetchImpl }, './crypto': crypto_, './verify': verify,
+    './storage': { getItem: async () => key, setItem: async () => undefined } });
+  await assert.rejects(load_(null, refuse).signedApi(server, 'POST', '/api/system/restart', {}),
+    (e: any) => e.message === 'Verify this phone to do that.' && e.data.needs === 'verify');
+  const secret = crypto_.newSigningKey().secret;
+  await assert.rejects(load_(secret, refuse).signedApi(server, 'POST', '/api/system/restart', {}), (e: any) => e.status === 403);
+  assert.deepEqual(asked, ['srv', 'srv']);
+  // Any other refusal is passed on as it is, without the sheet.
+  const other = async () => new Response(JSON.stringify({ error: 'Only an owner can do that.' }), { status: 403 });
+  await assert.rejects(load_(secret, other).signedApi(server, 'POST', '/api/system/restart', {}), /Only an owner/);
+  assert.equal(asked.length, 2);
+});

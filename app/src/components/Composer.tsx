@@ -12,7 +12,7 @@ import { attachFiles, canSend, removeFile, retryFile, sendDraft } from '../lib/a
 import { loadCommands, matchCommands, type Command } from '../lib/commands';
 import { haptic } from '../lib/haptics';
 import { formatDuration, pickFiles, pickMedia, takePhoto, type PickedFile } from '../lib/media';
-import { useReducedMotion } from '../lib/motion';
+import { easeOut, useReducedMotion } from '../lib/motion';
 import { usePrefs } from '../lib/prefs';
 import { draftKey, useApp } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
@@ -269,7 +269,7 @@ function Tray({ server, chatId, files }: { server: Server; chatId: string; files
   return (
     <View style={s.tray}>
       {files.map((f) => (
-        <Animated.View key={f.localId} entering={ZoomIn.springify().damping(16)} exiting={FadeOut.duration(120)} style={s.trayItem}
+        <Animated.View key={f.localId} entering={ZoomIn.duration(220).easing(easeOut)} exiting={FadeOut.duration(120)} style={s.trayItem}
           accessibilityLabel={`${f.name}, ${f.status === 'uploading' ? `uploading ${Math.round(f.progress * 100)}%` : f.status}`}>
           {f.previewUri ? <Image source={{ uri: f.previewUri }} style={s.thumb} contentFit="cover" /> : (
             <View style={[s.thumb, s.thumbFile]}>

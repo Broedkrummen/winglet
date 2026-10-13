@@ -9,6 +9,7 @@ import {
 import { Screen } from '../components/Screen';
 import { Sheet } from '../components/Sheet';
 import { Button, Card, ListGroup, ListRow, SectionHeader, Skeleton, Toggle } from '../components/ui';
+import { VerifyNotice } from '../components/VerifyPhone';
 import { agoText } from '../lib/agent';
 import { api, ApiError, signedApi } from '../lib/api';
 import { bytes, duration, idempotencyKey } from '../lib/control';
@@ -97,6 +98,7 @@ export default function ServerScreen() {
   return (
     <Screen title="Server" subtitle={`How the machine running ${server.bot.title} is doing, and the controls that keep it going.`}>
       {error && !info ? <Text style={s.error}>{error}</Text> : null}
+      <VerifyNotice server={server} />
       <StatusCard info={info} paused={paused} online={online} />
 
       <SectionHeader title="Health" />

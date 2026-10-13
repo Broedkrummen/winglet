@@ -1,5 +1,5 @@
 import { Image } from 'expo-image';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, ScrollView, Text, View } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { BotAvatar } from '../components/BotAvatar';
@@ -45,20 +45,36 @@ export default function PetsScreen() {
   }, [server]);
   useEffect(loadMine, [loadMine]);
 
-  const loadGallery = useCallback(async (q: string, offset: number) => {
-    if (!server) return;
+  const search = useRef(0);
+  /** Resolves true while the server is still fetching the gallery from petdex. */
+  const loadGallery = useCallback(async (q: string, offset: number): Promise<boolean> => {
+    if (!server) return false;
+    const mine = offset ? search.current : ++search.current;
     try {
-      const d = await api<{ total: number; pets: CatalogPet[] }>(server, `/api/pets/catalog?q=${encodeURIComponent(q)}&offset=${offset}`);
+      const d = await api<{ total: number; pets: CatalogPet[]; loading?: boolean }>(server,
+        `/api/pets/catalog?q=${encodeURIComponent(q)}&offset=${offset}`);
+      if (mine !== search.current) return false; // a newer search answered, or will
+      if (d.loading) return true;
       setGallery((g) => (offset && g ? { total: d.total, pets: [...g.pets, ...d.pets] } : d));
       setGalleryError('');
     } catch (e) {
+      if (mine !== search.current) return false;
       if (!offset) setGallery({ total: 0, pets: [] });
       setGalleryError((e as Error).message);
     }
+    return false;
   }, [server]);
   useEffect(() => {
-    const id = setTimeout(() => loadGallery(query.trim(), 0), query ? 300 : 0);
-    return () => clearTimeout(id);
+    let live = true;
+    let id: ReturnType<typeof setTimeout>;
+    const attempt = async (left: number) => {
+      const loading = await loadGallery(query.trim(), 0);
+      if (!live || !loading) return;
+      if (left > 0) id = setTimeout(() => attempt(left - 1), 2000);
+      else { setGallery({ total: 0, pets: [] }); setGalleryError("The gallery at petdex.dev is taking too long. Try again in a minute."); }
+    };
+    id = setTimeout(() => attempt(15), query ? 300 : 0);
+    return () => { live = false; clearTimeout(id); };
   }, [query, loadGallery]);
 
   if (!server) return null;
@@ -160,7 +176,10 @@ export default function PetsScreen() {
           accessibilityLabel="Search the pet gallery" />
         {galleryError ? <Text style={s.error}>{galleryError}</Text> : null}
         {!gallery ? (
-          <View style={[s.grid, { marginTop: 12 }]}>{[0, 1, 2, 3, 4, 5].map((i) => <Skeleton key={i} width={tile || 96} height={(tile || 96) + 24} radius={16} />)}</View>
+          <View style={{ marginTop: 12, gap: 10 }}>
+            <Text style={s.caption}>Getting pets from petdex.dev. The first time can take a few seconds.</Text>
+            <View style={s.grid}>{[0, 1, 2, 3, 4, 5].map((i) => <Skeleton key={i} width={tile || 96} height={(tile || 96) + 24} radius={16} />)}</View>
+          </View>
         ) : gallery.pets.length ? (
           <Animated.View entering={FadeIn}>
             <View style={[s.grid, { marginTop: 12 }]}>

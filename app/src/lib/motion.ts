@@ -1,14 +1,19 @@
 import { useEffect, useState } from 'react';
 import { AccessibilityInfo, Platform } from 'react-native';
-import { useReducedMotion as useSystemReducedMotion } from 'react-native-reanimated';
+import { Easing, useReducedMotion as useSystemReducedMotion } from 'react-native-reanimated';
 import { usePrefs } from './prefs';
 
+// Both springs are close to critically damped: they settle without bouncing past where they're going,
+// which reads as wobble on a phone (a sheet that overshoots by a few percent shakes by dozens of pixels).
 export const spring = {
   /** Buttons, toggles, chips. */
-  snappy: { damping: 20, stiffness: 300, mass: 1 },
+  snappy: { damping: 34, stiffness: 300, mass: 1 },
   /** Sheets, cards, the agent's face. */
-  soft: { damping: 18, stiffness: 180, mass: 1 },
+  soft: { damping: 26, stiffness: 180, mass: 1 },
 };
+
+/** How things arrive and move in lists: quick to start, gentle to land, never past the mark. */
+export const easeOut = Easing.out(Easing.cubic);
 
 export const duration = { fast: 150, base: 250, slow: 400 };
 

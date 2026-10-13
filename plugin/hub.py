@@ -75,10 +75,14 @@ REPLY_EXCERPT = 280
 PICKER_SECONDS = 10 * 60
 MAX_PERSONA = 20_000
 _KEY_ENV = re.compile(r"^[A-Z][A-Z0-9_]{1,62}(_API_KEY|_KEY|_TOKEN)$")
+VERIFY_FIRST = "Verify this device first: scan a new pairing code from your server or another owner's phone."
+BAD_SIGNATURE = "The request's signature doesn't match this device."
 # petdex slugs, and the ones Hermes gives pets it hatches: one plain path segment.
 _PET_SLUG = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}")
 # Thumbnails of pets not installed yet mean a petdex download each; a few at a time.
 PET_THUMB_FETCHES = 3
+# Seconds the gallery waits for petdex before answering "still loading" (the app gives up at 10).
+PET_CATALOG_WAIT = 8
 # Idempotency keys of recent instant pet switches (a pet already installed starts no job to hold one).
 PET_CHOICES_KEPT = 100
 REPLY_CONTEXT = 4000
@@ -462,7 +466,9 @@ class Hub:
                 logger.warning("[winglet] refused %s %s from %s: %s", request.method, request.path, device["name"], problem)
                 self.store.add_audit("refused", device=device, summary=f"{request.method} {request.path}: {problem}",
                                      outcome="refused")
-                return _error(403, problem)
+                # The app offers to verify the phone instead of only showing the error.
+                needs = {"needs": "verify"} if problem in (VERIFY_FIRST, BAD_SIGNATURE) else {}
+                return _json({"error": problem, **needs}, status=403)
         request["device"] = device
         try:
             return await handler(request)
@@ -474,7 +480,7 @@ class Hub:
         and never seen before. A bearer token alone never passes."""
         sign_key = self.store.device_sign_key(device["id"])
         if not sign_key:
-            return "Verify this device first: scan a new pairing code from your server or another owner's phone."
+            return VERIFY_FIRST
         h = request.headers
         stamp, nonce, signature = h.get("X-Winglet-Time", ""), h.get("X-Winglet-Nonce", ""), h.get("X-Winglet-Signature", "")
         if not (stamp and nonce and signature) or h.get("X-Winglet-Device") != device["id"]:
@@ -489,7 +495,7 @@ class Hub:
             return "This action needs a signed request from the app."
         payload = keys.signing_payload(request.method, request.raw_path, await request.read(), device["id"], stamp, nonce)
         if not keys.verify_device_signature(sign_key, payload, signature):
-            return "The request's signature doesn't match this device."
+            return BAD_SIGNATURE
         if not self.store.use_nonce(nonce, keys.CLOCK_SKEW_SECONDS):
             return "This request was already used."
         return None
@@ -1738,7 +1744,11 @@ class Hub:
 
     async def h_pets(self, request: web.Request) -> web.Response:
         self._require(request)
-        data = await self._call(self._need_hermes().pets)
+        h = self._need_hermes()
+        # The gallery comes next and its first fetch from petdex is slow: start it now.
+        with contextlib.suppress(Exception):
+            h.prefetch_pet_catalog()
+        data = await self._call(h.pets)
         for pet in data["pets"]:
             pet["thumb_url"] = self._pet_thumb_url(pet["slug"])
         return _json(data)
@@ -1749,7 +1759,13 @@ class Hub:
             offset = max(0, int(request.query.get("offset") or 0))
         except ValueError:
             return _error(400, "offset must be a number")
-        data = await self._call(self._need_hermes().pet_catalog, request.query.get("q", "").strip()[:100], offset)
+        query = request.query.get("q", "").strip()[:100]
+        try:
+            # Within the app's request timeout. The fetch carries on and Hermes caches it, so asking
+            # again in a moment gets the gallery.
+            data = await asyncio.wait_for(self._call(self._need_hermes().pet_catalog, query, offset), PET_CATALOG_WAIT)
+        except asyncio.TimeoutError:
+            return _json({"loading": True, "total": 0, "pets": []})
         for pet in data["pets"]:
             pet["thumb_url"] = self._pet_thumb_url(pet["slug"])
         return _json(data)

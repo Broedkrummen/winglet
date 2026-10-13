@@ -391,6 +391,7 @@ class Hub:
     async def _start_janitor(self, _app: web.Application) -> None:
         if self._janitor is None:
             self._janitor = asyncio.create_task(self._janitor_loop())
+            self._spawn(self.reconcile_jobs())
         if self._bots_watch is None and self.bots_provider is not None:
             self._bots_watch = asyncio.create_task(self._watch_bots())
 
@@ -407,7 +408,6 @@ class Hub:
                 last = state["bots"]
             except Exception:
                 logger.debug("[winglet] bot watch failed", exc_info=True)
-            self._spawn(self.reconcile_jobs())
 
     async def _janitor_loop(self) -> None:
         while True:
@@ -1927,19 +1927,24 @@ class Hub:
 
     # -- the agent's pet: its animated face, from Hermes's pet store and petdex.dev ---------------
 
-    def pet_signature(self, slug: str) -> str:
-        """Pet images load in image views that can't send the device token, so their links are signed."""
+    def pet_signature(self, slug: str, bot: Optional[str] = None) -> str:
+        """Pet images load in image views that can't send the device token, so their links are signed, for the
+        bot whose pet it is."""
         key = self.store.secret("media_key").encode()
-        return hmac.new(key, f"pet:{slug}".encode(), hashlib.sha256).hexdigest()[:32]
+        return hmac.new(key, (f"pet:{bot}:{slug}" if bot else f"pet:{slug}").encode(), hashlib.sha256).hexdigest()[:32]
+
+    def _pet_link_query(self, slug: str) -> str:
+        bot = _BOT.get()
+        return f"{f'bot={quote(bot)}&' if bot else ''}sig={self.pet_signature(slug, bot)}"
 
     def _pet_thumb_url(self, slug: str) -> str:
-        return f"/api/pets/{quote(slug)}/thumb?sig={self.pet_signature(slug)}"
+        return f"/api/pets/{quote(slug)}/thumb?{self._pet_link_query(slug)}"
 
     def _pet_view(self, sheet: Dict[str, Any]) -> Dict[str, Any]:
         """A pet as the app draws it: its spritesheet is a signed link, never a path on the server."""
         slug = sheet["slug"]
         view = {k: v for k, v in sheet.items() if k != "path"}
-        view["sheet_url"] = f"/api/pets/{quote(slug)}/sheet?rev={sheet['revision']}&sig={self.pet_signature(slug)}"
+        view["sheet_url"] = f"/api/pets/{quote(slug)}/sheet?rev={sheet['revision']}&{self._pet_link_query(slug)}"
         view["thumb_url"] = self._pet_thumb_url(slug)
         return view
 
@@ -1949,8 +1954,16 @@ class Hub:
             raise web.HTTPNotFound(text=json.dumps({"error": "No such pet."}), content_type="application/json")
         return slug
 
-    def _pet_link_ok(self, request: web.Request, slug: str) -> bool:
-        return self.hermes is not None and hmac.compare_digest(request.query.get("sig", ""), self.pet_signature(slug))
+    def _pet_link_bot(self, request: web.Request, slug: str) -> Optional[str]:
+        """The bot a signed pet link is for ("" for the main one), or None when the link isn't good."""
+        bot = request.query.get("bot", "")
+        if self.hermes is None or (bot and not _BOT_NAME.fullmatch(bot)):
+            return None
+        if not hmac.compare_digest(request.query.get("sig", ""), self.pet_signature(slug, bot or None)):
+            return None
+        if bot and not any(b["name"] == bot for b in self.bots()):
+            return None  # deleted since the link was made
+        return bot
 
     async def _pet_changed(self) -> None:
         """Every phone redraws the agent's face: members see the same pet as owners."""
@@ -1999,10 +2012,12 @@ class Hub:
 
     async def h_pet_sheet(self, request: web.Request) -> web.StreamResponse:
         slug = self._pet_slug(request)
-        if not self._pet_link_ok(request, slug):
+        bot = self._pet_link_bot(request, slug)
+        if bot is None:
             return _error(404, "not found")
         try:
-            sheet = await asyncio.to_thread(self.hermes.pet_sheet, slug)
+            with self._bot_context(bot or None):
+                sheet = await asyncio.to_thread(self.hermes.pet_sheet, slug)
         except Exception:
             sheet = None
         if not sheet:
@@ -2016,11 +2031,13 @@ class Hub:
 
     async def h_pet_thumb(self, request: web.Request) -> web.Response:
         slug = self._pet_slug(request)
-        if not self._pet_link_ok(request, slug):
+        bot = self._pet_link_bot(request, slug)
+        if bot is None:
             return _error(404, "not found")
         async with self._pet_thumbs:
             try:
-                data = await asyncio.to_thread(self.hermes.pet_thumbnail, slug)
+                with self._bot_context(bot or None):
+                    data = await asyncio.to_thread(self.hermes.pet_thumbnail, slug)
             except Exception:
                 logger.debug("[winglet] pet thumbnail failed", exc_info=True)
                 data = None

@@ -320,3 +320,73 @@ def test_hermes_legacy_sheets_and_an_unreachable_gallery(hermes_home, tmp_path, 
         h.pet_catalog()
     assert h.pet_thumbnail("someone-else") is None
     assert h.pet_thumbnail("old-pal").startswith(b"\x89PNG")  # installed: no network needed
+
+
+class BotsHermes(FakeHermes):
+    """Each bot (Hermes profile) has its own pets."""
+
+    def __init__(self, tmp_path):
+        super().__init__(tmp_path)
+        self.bot = None
+        self.by_bot = {None: {"boba": "Boba"}, "researcher": {"mochi": "Mochi", "boba": "Researcher's Boba"}}
+
+    @property
+    def installed(self):
+        return self.by_bot[self.bot]
+
+    @installed.setter
+    def installed(self, value):
+        pass
+
+    def _sheet(self, slug):
+        path = self.dir / f"{self.bot or 'main'}-{slug}.webp"
+        path.write_bytes(f"{self.bot or 'main'}:{slug}".encode())
+        return {**sheet(slug, self.installed[slug]), "path": str(path)}
+
+    def active_pet(self):
+        return self._sheet(next(iter(self.installed)))
+
+    def set_bot(self, name):
+        previous, self.bot = self.bot, name
+        return previous
+
+    def reset_bot(self, token):
+        self.bot = token
+
+
+async def test_a_bots_pet_links_load_that_bots_pet(client, hub, tmp_path):
+    hub.hermes = BotsHermes(tmp_path)
+    roster = [{"name": "researcher", "title": "Researcher", "description": "", "served": True}]
+    hub.bots_provider = lambda: {"bots": [dict(b) for b in roster], "multiplex": True, "reason": ""}
+    owner = await pair_phone(client, hub, "Sam")
+    pet = (await (await client.get("/api/pet?bot=researcher", headers=owner.auth)).json())["pet"]
+    assert pet["slug"] == "mochi" and "bot=researcher" in pet["sheet_url"] and "bot=researcher" in pet["thumb_url"]
+    # Mochi is only the researcher's: its links still find it.
+    got = await client.get(pet["sheet_url"])
+    assert got.status == 200 and await got.read() == b"researcher:mochi"
+    assert (await client.get(pet["thumb_url"])).status == 200
+    # Both have a Boba: each link gets its own bot's.
+    mine = await (await client.get("/api/pets?bot=researcher", headers=owner.auth)).json()
+    assert {p["slug"] for p in mine["pets"]} == {"mochi", "boba"}
+    main = (await (await client.get("/api/pet", headers=owner.auth)).json())["pet"]
+    assert main["slug"] == "boba" and "bot=" not in main["sheet_url"]
+    assert await (await client.get(main["sheet_url"])).read() == b"main:boba"
+    # A link signed for one bot can't be pointed at another, and a deleted bot's links stop working.
+    assert (await client.get(main["sheet_url"].replace("?rev=", "?bot=researcher&rev="))).status == 404
+    assert (await client.get(pet["sheet_url"].replace("bot=researcher", "bot=other"))).status == 404
+    roster.clear()
+    hub._bots_cache = None
+    assert (await client.get(pet["sheet_url"])).status == 404
+
+
+async def test_restart_jobs_are_reconciled_at_startup_without_bots(hub, monkeypatch):
+    calls = []
+
+    async def reconcile():
+        calls.append(True)
+    monkeypatch.setattr(hub, "reconcile_jobs", reconcile)
+    assert hub.bots_provider is None
+    await hub._start_janitor(None)
+    await asyncio.sleep(0)
+    assert calls == [True]
+    hub._janitor.cancel()

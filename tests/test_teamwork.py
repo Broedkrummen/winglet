@@ -18,12 +18,13 @@ ROSTER = [{"name": "default", "title": "Hermes", "description": "The main bot"},
 def team(monkeypatch):
     sent = []
     state = SimpleNamespace(me="default", result=subprocess.CompletedProcess([], 0, stdout="Pasta on Tuesday.\n", stderr=""),
-                            sent=sent)
+                            sent=sent, senders=[])
     monkeypatch.setattr(teamwork, "_roster", lambda: [dict(b) for b in ROSTER])
     monkeypatch.setattr(teamwork, "_me", lambda: state.me)
 
-    def deliver(profile, content):
+    def deliver(profile, content, sender):
         sent.append((profile, content))
+        state.senders.append(sender)
         if isinstance(state.result, Exception):
             raise state.result
         return state.result
@@ -38,6 +39,7 @@ def test_asking_a_teammate_returns_its_answer(team):
     assert reply == {"bot": "Chef", "reply": "Pasta on Tuesday."}
     # Signed the way Hermes's Bot Mode signs a teammate's message, into the teammate's own profile.
     assert team.sent == [("chef", "Message from 🤖 Hermes (@hermes): What's for dinner this week?")]
+    assert team.senders == ["default"]  # the turn's author, for Hermes's memory
 
 
 def test_a_teammate_can_ask_the_main_bot(team):
@@ -80,6 +82,7 @@ def test_the_tools_and_the_approval_gate_are_registered():
     ctx = SimpleNamespace(register_tool=lambda **kw: tools.append(kw), register_hook=lambda name, fn: hooks.append((name, fn)))
     teamwork.register(ctx)
     assert [t["name"] for t in tools] == ["ask_bot", "make_bot"] and {t["toolset"] for t in tools} == {"bots"}
+    assert teamwork.can_deliver() == (importlib.util.find_spec("tui_gateway") is not None)
     assert hooks == [("pre_tool_call", teamwork.approve_making_bots)]
     teamwork.register(SimpleNamespace())  # a Hermes without plugin tools: never fatal
 
@@ -102,6 +105,18 @@ def test_the_roster_and_delivery_come_from_hermes(tmp_path, monkeypatch):
     from tools.bot_relay import local_delivery_command
     argv = local_delivery_command("chef", "/tmp/q.txt")
     assert argv[1:4] == ["-p", "chef", "chat"] and "Bot Chat" in argv and argv[-2:] == ["--query-file", "/tmp/q.txt"]
-    # The teammate's turn runs as its own profile and never inherits this one's secrets.
-    env = teamwork._child_env("chef")
-    assert env["HERMES_HOME"].endswith("profiles/chef") and "ANTHROPIC_API_KEY" not in env
+    # The teammate's turn runs as its own profile, authored by the bot that asked (so Hermes's memory files it
+    # as a bot-to-bot turn, not the human's), and never inherits the asking turn's author or session.
+    from agent.turn_author import TURN_AUTHOR_ENV
+    from gateway.session_context import _VAR_MAP
+    session_var = next(iter(_VAR_MAP))
+    monkeypatch.setenv(TURN_AUTHOR_ENV, json.dumps({"id": "user:sam", "name": "Sam", "is_bot": False}))
+    monkeypatch.setenv(session_var, "the-asking-session")
+    env = teamwork._child_env("chef", "default")
+    assert env["HERMES_HOME"].endswith("profiles/chef")
+    assert json.loads(env[TURN_AUTHOR_ENV]) == {"id": "bot:default", "name": "hermes", "is_bot": True}
+    assert session_var not in env
+    # Its credentials are its own profile's.
+    (home / "profiles" / "chef" / ".env").write_text("ANTHROPIC_API_KEY=sk-chef\n")
+    assert teamwork._child_env("chef", "default").get("ANTHROPIC_API_KEY") == "sk-chef"
+    assert json.loads(teamwork._child_env("default", "chef")[TURN_AUTHOR_ENV])["id"] == "bot:chef"

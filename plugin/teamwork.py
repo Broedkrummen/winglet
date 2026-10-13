@@ -2,8 +2,10 @@
 
 Hermes Desktop's Bot Mode gives a bot its teammates only in its one "Bot Chat" session. These tools give
 them to every Winglet chat, delivering the same way Bot Mode does: one turn in the teammate's "Bot Chat"
-(``hermes -p <bot> chat -c "Bot Chat"``), signed "Message from 🤖 <name>", so the teammate keeps that
-conversation in the same place whichever app started it. Making a bot always waits for an owner's approval.
+(``hermes -p <bot> chat -c "Bot Chat"``), signed "Message from 🤖 <name>" for the teammate to read and
+authored by the sending bot for Hermes (its memory keeps bot-to-bot turns apart from the human's), so the
+teammate keeps that conversation in the same place whichever app started it. Making a bot always waits for an
+owner's approval.
 """
 
 from __future__ import annotations
@@ -56,15 +58,30 @@ def _error(message: str, **extra: Any) -> str:
     return json.dumps({"error": message, **extra})
 
 
-def _child_env(profile: str) -> Dict[str, str]:
-    """The environment Hermes gives `hermes -p <profile> …` actions: never this profile's secrets."""
+def _handle(profile: str) -> str:
+    return "hermes" if profile == "default" else profile
+
+
+def _author(sender: str) -> Dict[str, Any]:
+    """The turn's author as Bot Mode sets it for a teammate on the same install."""
+    return {"id": f"bot:{sender}", "name": _handle(sender), "is_bot": True}
+
+
+def can_deliver() -> bool:
+    """This Hermes delivers to a teammate the way Bot Mode does, with the sending bot as the turn's author."""
     try:
-        from hermes_cli.web_server_gateway import _profile_action_environment
-        return _profile_action_environment(["-p", profile, "chat"])
+        from tools.bot_relay import delivery_env, local_delivery_command  # noqa: F401
     except Exception:
-        env = {k: v for k, v in os.environ.items() if k != "_HERMES_GATEWAY"}
-        env.pop("HERMES_HOME", None)
-        return env
+        return False
+    return True
+
+
+def _child_env(profile: str, sender: str) -> Dict[str, str]:
+    """Hermes's own environment for a delivery turn: the target profile's (never this one's secrets or
+    session), with the sending bot as its author."""
+    from hermes_cli.profiles import get_profile_dir
+    from tools.bot_relay import delivery_env
+    return delivery_env(_author(sender), get_profile_dir(profile))
 
 
 def _turn_lock(profile: str):
@@ -78,7 +95,7 @@ def _turn_lock(profile: str):
         return contextlib.nullcontext()
 
 
-def _deliver(profile: str, content: str) -> subprocess.CompletedProcess:
+def _deliver(profile: str, content: str, sender: str) -> subprocess.CompletedProcess:
     from tools.bot_relay import local_delivery_command
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as fh:
         fh.write(content)
@@ -86,7 +103,7 @@ def _deliver(profile: str, content: str) -> subprocess.CompletedProcess:
     try:
         with _turn_lock(profile):
             return subprocess.run(local_delivery_command(profile, path), stdin=subprocess.DEVNULL, capture_output=True,
-                                  text=True, timeout=ASK_TIMEOUT_SECONDS, env=_child_env(profile))
+                                  text=True, timeout=ASK_TIMEOUT_SECONDS, env=_child_env(profile, sender))
     finally:
         with contextlib.suppress(OSError):
             os.unlink(path)
@@ -114,9 +131,9 @@ def ask_bot(args: dict, **_: Any) -> str:
     if len(message) > MESSAGE_MAX_CHARS:
         return _error(f"That message is too long ({len(message)} characters, at most {MESSAGE_MAX_CHARS}).")
     sender = next((b for b in roster if b["name"] == me), {"title": me})
-    content = f"Message from 🤖 {sender['title']} (@{'hermes' if me == 'default' else me}): {message}"
+    content = f"Message from 🤖 {sender['title']} (@{_handle(me)}): {message}"
     try:
-        done = _deliver(bot["name"], content)
+        done = _deliver(bot["name"], content, me)
     except subprocess.TimeoutExpired:
         return _error(f"{bot['title']} didn't answer within {ASK_TIMEOUT_SECONDS // 60} minutes.")
     except Exception as exc:
@@ -192,7 +209,8 @@ def register(ctx) -> None:
     gate for making bots. Never fatal: without it, bots still work, they just don't call each other."""
     available = hermes_api.bots_available
     try:
-        ctx.register_tool(name="ask_bot", toolset=TOOLSET, schema=ASK_SCHEMA, handler=ask_bot, check_fn=available,
+        ctx.register_tool(name="ask_bot", toolset=TOOLSET, schema=ASK_SCHEMA, handler=ask_bot,
+                          check_fn=lambda: available() and can_deliver(),
                           description="Ask another bot on this server", emoji="🤝")
         ctx.register_tool(name="make_bot", toolset=TOOLSET, schema=MAKE_SCHEMA, handler=make_bot, check_fn=available,
                           description="Make a new bot on this server", emoji="🐣")

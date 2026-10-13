@@ -112,6 +112,10 @@ def reset_bot(token: contextvars.Token) -> None:
     _BOT.reset(token)
 
 
+def current_bot() -> Optional[str]:
+    return _BOT.get()
+
+
 @contextlib.contextmanager
 def _bot_scope(name: str):
     """Config, skills, memory and secrets of another profile this gateway serves, the way Hermes scopes a

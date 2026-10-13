@@ -130,7 +130,7 @@ ROUTE_POLICY = {
     "h_models": "owner", "h_providers": "owner", "h_identity": "owner", "h_memory": "owner", "h_usage": "owner",
     "h_model_default": "owner_signed", "h_provider_key": "owner_signed", "h_provider_key_delete": "owner_signed",
     "h_identity_put": "owner_signed", "h_memory_edit": "owner_signed",
-    "h_bots": "owner", "h_bot_create": "owner_signed",
+    "h_bots": "owner", "h_bot_create": "owner_signed", "h_bot_rename": "owner_signed", "h_bot_delete": "owner_signed",
     "h_pet": "device", "h_pet_sheet": "public", "h_pet_thumb": "public", "h_pets": "owner", "h_pet_catalog": "owner",
     "h_pet_display": "owner_signed", "h_pet_adopt": "owner_signed", "h_pet_remove": "owner_signed",
     "h_system": "owner", "h_system_updates": "owner", "h_jobs": "owner", "h_job": "owner", "h_logs": "owner",
@@ -335,6 +335,8 @@ class Hub:
         r.add_get("/api/usage", self.h_usage)
         r.add_get("/api/bots", self.h_bots)
         r.add_post("/api/bots", self.h_bot_create)
+        r.add_patch("/api/bots/{name}", self.h_bot_rename)
+        r.add_delete("/api/bots/{name}", self.h_bot_delete)
         r.add_get("/api/pet", self.h_pet)
         r.add_get("/api/pets", self.h_pets)
         r.add_get("/api/pets/catalog", self.h_pet_catalog)
@@ -1867,6 +1869,43 @@ class Hub:
         self.audit("bot.create", device, f"made {title} ({name})")
         self._spawn(self._create_bot(job["id"], name, title, persona, str(body.get("description") or "").strip()[:300]))
         return _json({"job": job}, status=202)
+
+    def _bot_param(self, request: web.Request) -> str:
+        name = request.match_info["name"]
+        if not _BOT_NAME.fullmatch(name) or name == "default" or not any(b["name"] == name for b in self.bots_state(fresh=True)["bots"]):
+            raise web.HTTPNotFound(text=json.dumps({"error": "That bot isn't on this server any more."}),
+                                   content_type="application/json")
+        return name
+
+    async def _bots_changed(self) -> None:
+        state = await asyncio.to_thread(self.bots_state, True)
+        await self.broadcast({"type": "system.bots", "bot": None, "bots": state["bots"]})
+
+    async def h_bot_rename(self, request: web.Request) -> web.Response:
+        device = self._require(request)
+        name = self._bot_param(request)
+        title = str((await self._body(request)).get("title") or "").strip()[:60]
+        if not title:
+            return _error(400, "Give it a name to show.")
+        with self._bot_context(None):
+            bot = await self._call(self._need_hermes().rename_bot, name, title)
+        self.audit("bot.rename", device, f"{name} is now called {title}")
+        await self._bots_changed()
+        return _json({"bot": bot})
+
+    async def h_bot_delete(self, request: web.Request) -> web.Response:
+        """Delete a bot: its Hermes profile (memory, skills, sessions) and its chats here."""
+        device = self._require(request)
+        name = self._bot_param(request)
+        with self._bot_context(None):
+            await self._call(self._need_hermes().delete_bot, name)
+        for chat in self.store.list_chats(bot=name):
+            for row in self.store.chat_uploads(chat["id"]):
+                self._remove_upload(row)
+            self.store.delete_chat(chat["id"])
+        self.audit("bot.delete", device, f"deleted {name}")
+        await self._bots_changed()
+        return _json({"ok": True})
 
     async def _create_bot(self, job_id: str, name: str, title: str, persona: str, description: str) -> None:
         h = self._need_hermes()

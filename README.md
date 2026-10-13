@@ -245,6 +245,11 @@ itself show up too. Hermes serves every profile from the one gateway once there 
 the first new bot, restart the server once (the app offers to). If you used to run a gateway per
 profile, fold them into one first with `hermes gateway migrate --multiplex`.
 
+**Teamwork.** Your bots can call on each other. Say "ask Chef what's for dinner" in any chat and your
+bot asks Chef and brings back the answer, the way Hermes Desktop's Bot Mode does (the message lands in
+Chef's "Bot Chat"). Ask your bot to make a new one ("make me a bot that plans meals") and it does,
+after you approve it like a risky command. Both tools are in the "bots" toolset under Tools.
+
 **On another server.** Pair it as usual; it stacks up in the sidebar with the others. A profile can
 also keep its own gateway and port:
 

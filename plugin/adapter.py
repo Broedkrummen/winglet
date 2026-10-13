@@ -28,7 +28,7 @@ from gateway.platforms._shared import extra_or_secret, get_scoped_secret, seed_e
 from gateway.platforms.base import BasePlatformAdapter, ExecApprovalPrompt, SendResult
 from gateway.platforms.event import MessageEvent, MessageType
 
-from . import bridge, cli, hermes_api
+from . import bridge, cli, hermes_api, teamwork
 from .dependencies import missing_dependencies
 from .store import Store
 
@@ -232,6 +232,10 @@ class WingletAdapter(BasePlatformAdapter):
             hub.reload_mcp = self._reload_mcp
             # Other Hermes profiles this gateway serves are more bots on the same server (no new port or pairing).
             hub.bots_provider = self._bots_state if hermes_api.bots_available() else None
+            if hub.bots_provider is not None:
+                loop = asyncio.get_running_loop()
+                teamwork.on_bots_changed = lambda: loop.call_soon_threadsafe(
+                    lambda: asyncio.ensure_future(hub._bots_changed()))
             # Members' tool limits hold only if every turn's final toolsets can be capped (see toolset_limit).
             hub.limits_members = hermes_api.limit_turn_toolsets(self.gateway_runner, PLATFORM) \
                 if getattr(self, "gateway_runner", None) is not None else False
@@ -704,3 +708,5 @@ def register(ctx) -> None:
         name="winglet", help="Pair phones and manage the Winglet app",
         setup_fn=cli.setup_parser, handler_fn=cli.main,
         description="Winglet: your Hermes agents on your phone. Start with `hermes winglet setup`.")
+    # Bots ask each other, and make new ones with an owner's approval.
+    teamwork.register(ctx)

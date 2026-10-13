@@ -6,6 +6,7 @@ import { FlatList, Modal, Platform, Text, useWindowDimensions, View } from 'reac
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useLock } from '../lib/appLock';
 import { haptic } from '../lib/haptics';
 import { spring } from '../lib/motion';
 import { useApp } from '../lib/store';
@@ -26,6 +27,7 @@ export function MediaViewer({ items, index, onClose }: { items: ViewerItem[]; in
   const { width } = useWindowDimensions();
   const [current, setCurrent] = useState(index ?? 0);
   const [zoomed, setZoomed] = useState(false);
+  const locked = useLock((st) => st.locked);
   const backdrop = useSharedValue(1);
   const list = useRef<FlatList<ViewerItem>>(null);
 
@@ -37,7 +39,8 @@ export function MediaViewer({ items, index, onClose }: { items: ViewerItem[]; in
   }, [index, backdrop]);
 
   const bg = useAnimatedStyle(() => ({ opacity: backdrop.value }));
-  if (index === null) return null;
+  // A native modal sits above the lock screen: hide the photos while locked.
+  if (index === null || locked) return null;
   const item = items[current] ?? items[0];
 
   return (

@@ -1881,9 +1881,10 @@ class Hub:
             return
         state = await asyncio.to_thread(self.bots_state, True)
         served = any(b["name"] == name and b.get("served") for b in state["bots"])
+        # Phones learn about the bot before they hear it's ready, so they can open it straight away.
+        await self.broadcast({"type": "system.bots", "bot": None, "bots": state["bots"]})
         await self._finish_job(job_id, "succeeded", f"{title} is ready." if served else
                                f"{title} is made. Restart the server to start it.", bot=name, needs_restart=not served)
-        await self.broadcast({"type": "system.bots", "bot": None, "bots": state["bots"]})
 
     # -- the agent's pet: its animated face, from Hermes's pet store and petdex.dev ---------------
 

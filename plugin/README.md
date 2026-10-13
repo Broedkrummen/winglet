@@ -81,6 +81,11 @@ display:
 
 ## Multiple bots
 
-Each Hermes profile is a bot. Run a gateway per profile with its own port
-(`hermes -p researcher winglet setup --port 8788`), then pair each one. They all show up in the
-app's sidebar.
+Each Hermes profile is a bot. When the gateway serves every profile (Hermes's default once there are
+two), the other profiles are bots on the same Winglet server: the app lists them, opens a socket per bot
+(`/api/ws?bot=<profile>`) and picks the bot with `bot=` on every request, inside the signed path. Chats
+belong to a bot, and its messages are routed to its profile (`SessionSource.profile`). `GET /api/bots`
+lists them and `POST /api/bots` makes one the way Hermes Desktop does.
+
+A profile can also run its own gateway with its own port
+(`hermes -p researcher winglet setup --port 8788`) and be paired on its own.

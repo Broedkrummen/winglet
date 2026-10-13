@@ -41,6 +41,8 @@ export default function AgentTab() {
   if (!servers.length) return <Redirect href="/pair" />;
   const server = servers.find((x) => x.id === selection.serverId) ?? servers[0];
   const rt = runtime[server.id];
+  const child = !!server.parent;
+  const parent = child ? servers.find((x) => x.id === server.parent) : undefined;
   const view = connectionView(network, rt, server.bot.title);
   const themeLabel = prefs.theme === 'system' ? 'System' : prefs.theme === 'dark' ? 'Dark' : 'Light';
 
@@ -64,10 +66,12 @@ export default function AgentTab() {
         <SectionHeader title="This bot" />
         <ListGroup>
           <ListRow icon={<MessageCircle size={18} color={t.colors.onAccentSoft} />} title="Main chat" onPress={() => router.push(`/chat/${server.id}/${homeChat(rt)}`)} />
-          <ListRow icon={<Sparkles size={18} color={t.colors.success} />} iconColor={t.colors.success} title="Updates" subtitle="Results from scheduled routines"
-            onPress={() => router.push(`/chat/${server.id}/home`)} />
+          {child ? null : (
+            <ListRow icon={<Sparkles size={18} color={t.colors.success} />} iconColor={t.colors.success} title="Updates" subtitle="Results from scheduled routines"
+              onPress={() => router.push(`/chat/${server.id}/home`)} />
+          )}
           <ListRow icon={<Activity size={18} color={t.colors.onAccentSoft} />} title="Connection" value={view.kind === 'online' ? 'Online' : view.title}
-            onPress={() => router.push(`/connection/${server.id}`)} />
+            onPress={() => router.push(`/connection/${server.parent ?? server.id}`)} />
         </ListGroup>
 
         <VerifyNotice server={server} />
@@ -79,7 +83,13 @@ export default function AgentTab() {
           </>
         ) : null}
 
-        {rt?.info?.features?.abilities && isOwner(rt) ? (
+        {child ? (
+          <Text style={s.childNote}>
+            One of the bots on {parent?.bot.title ?? 'your server'}'s server. Its server, devices and security settings are on {parent?.bot.title ?? 'the main bot'}.
+          </Text>
+        ) : null}
+
+        {rt?.info?.features?.abilities && isOwner(rt) && !child ? (
           <>
             <SectionHeader title="Abilities" />
             <ListGroup>
@@ -93,7 +103,7 @@ export default function AgentTab() {
           </>
         ) : null}
 
-        {rt?.info?.features?.control && isOwner(rt) ? (
+        {rt?.info?.features?.control && isOwner(rt) && !child ? (
           <>
             <SectionHeader title="Server" />
             <ListGroup>
@@ -111,13 +121,13 @@ export default function AgentTab() {
           </>
         ) : null}
 
-        {rt?.info?.features?.roles || Platform.OS !== 'web' ? <SectionHeader title="Security" /> : null}
-        <SecurityRows rt={rt} />
+        {!child && (rt?.info?.features?.roles || Platform.OS !== 'web') ? <SectionHeader title="Security" /> : null}
+        {child ? null : <SecurityRows rt={rt} />}
 
         <SectionHeader title="Bots" />
         <ListGroup>
           <ListRow icon={<Smartphone size={18} color={t.colors.onAccentSoft} />} title="Your bots" value={String(servers.length)} onPress={() => router.push('/bots')} />
-          <ListRow icon={<Plus size={18} color={t.colors.success} />} iconColor={t.colors.success} title="Add a bot" onPress={() => router.push('/pair')} />
+          <ListRow icon={<Plus size={18} color={t.colors.success} />} iconColor={t.colors.success} title="Add a bot" onPress={() => router.push('/new-bot')} />
         </ListGroup>
 
         <SectionHeader title="App" />
@@ -191,6 +201,7 @@ const useStyles = makeStyles((t) => ({
   root: { flex: 1, backgroundColor: t.colors.bg },
   content: { paddingHorizontal: 16, maxWidth: 680, width: '100%', alignSelf: 'center' },
   topRow: { minHeight: 48, flexDirection: 'row', alignItems: 'center' },
+  childNote: { ...t.type.caption, color: t.colors.textSecondary, marginTop: 14, paddingHorizontal: 4 },
   profile: { alignItems: 'center', paddingTop: 16, paddingBottom: 6, gap: 6 },
   name: { ...t.type.title, color: t.colors.text, marginTop: 12 },
   description: { ...t.type.callout, color: t.colors.textSecondary, textAlign: 'center', maxWidth: 420 },

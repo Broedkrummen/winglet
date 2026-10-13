@@ -230,6 +230,8 @@ class WingletAdapter(BasePlatformAdapter):
             hub.chat_goal = self._chat_goal if hermes_api.goals_available() else None
             hub.command_resolver = hermes_api.resolve_command
             hub.reload_mcp = self._reload_mcp
+            # Other Hermes profiles this gateway serves are more bots on the same server (no new port or pairing).
+            hub.bots_provider = self._bots_state if hermes_api.bots_available() else None
             # Members' tool limits hold only if every turn's final toolsets can be capped (see toolset_limit).
             hub.limits_members = hermes_api.limit_turn_toolsets(self.gateway_runner, PLATFORM) \
                 if getattr(self, "gateway_runner", None) is not None else False
@@ -283,6 +285,14 @@ class WingletAdapter(BasePlatformAdapter):
             user_id=USER_PREFIX + device["id"], user_name=device.get("name") or "Phone", message_id=message["id"],
             # The device proved itself with its pairing token before reaching this point.
             role_authorized=True)
+        bot = chat.get("bot") or None
+        if bot:
+            if not self._serves(bot):
+                # Hermes would quietly answer as the main bot instead; say what's wrong rather than pretend.
+                await self._hub.post_message(chat["id"], "This bot isn't running yet. Restart the server so Hermes "
+                                             "starts serving it, then send your message again.", role="system", push=False)
+                return
+            source.profile = bot
         media_urls, media_types, kinds = [], [], []
         for f in files or []:
             voice = f.get("kind") == "voice"
@@ -448,11 +458,29 @@ class WingletAdapter(BasePlatformAdapter):
             return None
         source = self.build_source(chat_id=chat_id, chat_name=chat_id, chat_type="dm", user_id=USER_PREFIX + "app",
                                    user_name="Winglet", role_authorized=True)
+        bot = self._bot_of(chat_id)
+        if bot and self._serves(bot):
+            source.profile = bot
         # The runner's own key (it adds the profile's namespace); a DM key leaves the sender out.
         key_for = getattr(runner, "_session_key_for_source", None)
         if key_for is None:
             from gateway.session import build_session_key as key_for
         return key_for(source)
+
+    # -- bots: other profiles this gateway serves --------------------------------------------------
+
+    def _bot_of(self, chat_id: str) -> Optional[str]:
+        chat = self._hub.store.get_chat(chat_id) if self._hub is not None else None
+        return (chat or {}).get("bot") or None
+
+    def _serves(self, bot: str) -> bool:
+        state = hermes_api.multiplex_state(getattr(self, "gateway_runner", None))
+        return state["multiplex"] and bot in state["served"]
+
+    def _bots_state(self) -> Dict[str, Any]:
+        state = hermes_api.multiplex_state(getattr(self, "gateway_runner", None))
+        bots = [{**b, "served": state["multiplex"] and b["name"] in state["served"]} for b in hermes_api.list_bots()]
+        return {"bots": bots, "multiplex": state["multiplex"], "reason": state["reason"]}
 
     def _chat_model(self, chat_id: str) -> Optional[Dict[str, Any]]:
         try:

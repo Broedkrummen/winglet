@@ -116,3 +116,27 @@ test("an owner action this phone can't sign offers to verify it, whether the key
   await assert.rejects(load_(secret, other).signedApi(server, 'POST', '/api/system/restart', {}), /Only an owner/);
   assert.equal(asked.length, 2);
 });
+
+test("another bot on the server is picked with bot= in the path the phone signs", async () => {
+  const seenUrls: string[] = [];
+  const signed: string[] = [];
+  const capture = async (url: string, init: any) => {
+    seenUrls.push(url);
+    if (init?.headers?.['X-Winglet-Signature']) signed.push(url);
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  };
+  const verify = { NEEDS_VERIFY: 'x', useVerify: { getState: () => ({ ask: () => undefined }) } };
+  const secret = crypto_.newSigningKey().secret;
+  const keys: string[] = [];
+  const mod = load('api.ts', { 'react-native': { Platform: { OS: 'android' } }, 'expo/fetch': { fetch: capture }, './crypto': crypto_,
+    './verify': verify, './storage': { getItem: async (k: string) => { keys.push(k); return secret; }, setItem: async () => undefined } });
+  const chef = { ...server, id: 'srv~chef', profile: 'chef', parent: 'srv' };
+  await mod.api(chef, '/api/identity');
+  await mod.api(chef, '/api/chats?limit=5');
+  await mod.signedApi(chef, 'PUT', '/api/identity', { content: 'x' });
+  assert.deepEqual(seenUrls, [`${OLD}/api/identity?bot=chef`, `${OLD}/api/chats?limit=5&bot=chef`, `${OLD}/api/identity?bot=chef`]);
+  assert.equal(signed.length, 1);
+  assert.deepEqual(keys, ['winglet.sign.srv'], "a server's bots sign with its key");
+  assert.equal(mod.wsUrl({ ...chef, wsAuth: true }), `${OLD.replace('https', 'wss')}/api/ws?bot=chef`);
+  assert.equal(mod.wsUrl({ ...chef, wsAuth: false }), `${OLD.replace('https', 'wss')}/api/ws?bot=chef&token=${TOKEN}`);
+});

@@ -86,6 +86,8 @@ _MIGRATIONS = [
     ("devices", "verified", "INTEGER NOT NULL DEFAULT 0"),
     ("pair_codes", "role", "TEXT NOT NULL DEFAULT 'owner'"),
     ("chats", "owner_device", "TEXT"),
+    # The Hermes profile (bot) a chat talks to; NULL is the main one this gateway runs as.
+    ("chats", "bot", "TEXT"),
 ]
 ROLES = ("owner", "member")
 AUDIT_KEEP_SECONDS = 180 * 86400
@@ -284,22 +286,26 @@ class Store:
 
     # -- chats -------------------------------------------------------------------
 
-    def ensure_chat(self, chat_id: str, title: str = "", kind: str = "chat", owner_device: Optional[str] = None) -> Dict[str, Any]:
-        """``owner_device`` marks a member's chat; owners' chats have none, and every owner sees them."""
+    def ensure_chat(self, chat_id: str, title: str = "", kind: str = "chat", owner_device: Optional[str] = None,
+                    bot: Optional[str] = None) -> Dict[str, Any]:
+        """``owner_device`` marks a member's chat; owners' chats have none, and every owner sees them.
+        ``bot`` is the Hermes profile the chat talks to (None: the main one)."""
         now = _now()
-        self._exec("INSERT OR IGNORE INTO chats (id, title, kind, created_at, updated_at, owner_device) VALUES (?, ?, ?, ?, ?, ?)",
-                   (chat_id, (title or chat_id)[:80], kind, now, now, owner_device))
+        self._exec("INSERT OR IGNORE INTO chats (id, title, kind, created_at, updated_at, owner_device, bot) "
+                   "VALUES (?, ?, ?, ?, ?, ?, ?)", (chat_id, (title or chat_id)[:80], kind, now, now, owner_device, bot or None))
         return self.get_chat(chat_id)
 
-    def create_chat(self, title: str = "", owner_device: Optional[str] = None) -> Dict[str, Any]:
-        return self.ensure_chat("c-" + new_id(), (title or "").strip() or "New chat", owner_device=owner_device)
+    def create_chat(self, title: str = "", owner_device: Optional[str] = None, bot: Optional[str] = None) -> Dict[str, Any]:
+        return self.ensure_chat("c-" + new_id(), (title or "").strip() or "New chat", owner_device=owner_device, bot=bot)
 
     def get_chat(self, chat_id: str) -> Optional[Dict[str, Any]]:
         row = self._one("SELECT * FROM chats WHERE id = ?", (chat_id,))
         return dict(row) if row else None
 
-    def list_chats(self) -> List[Dict[str, Any]]:
-        return [dict(r) for r in self._all("SELECT * FROM chats ORDER BY updated_at DESC")]
+    def list_chats(self, bot: Optional[str] = None) -> List[Dict[str, Any]]:
+        """One bot's chats (None: the main bot's)."""
+        return [dict(r) for r in self._all("SELECT * FROM chats WHERE COALESCE(bot, '') = ? ORDER BY updated_at DESC",
+                                           (bot or "",))]
 
     def rename_chat(self, chat_id: str, title: str) -> Optional[Dict[str, Any]]:
         title = (title or "").strip()[:80]

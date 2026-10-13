@@ -13,7 +13,14 @@ export type Server = {
   fingerprint?: string;
   /** The server takes the token in the socket's first frame, not the URL. */
   wsAuth?: boolean;
+  /** Another bot on the same server (a Hermes profile it serves): its name there, and the main bot's id.
+   * It shares the main bot's address, token and pairing; its own id is `<parent>~<profile>`. */
+  profile?: string;
+  parent?: string;
 };
+
+/** A bot on a server, as the server lists it. `served`: Hermes is running it now. */
+export type BotRow = { name: string; title: string; description: string; served?: boolean };
 
 export type Role = 'owner' | 'member';
 

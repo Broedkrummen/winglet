@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import hashlib
 import hmac
 import ipaddress
@@ -77,6 +78,13 @@ MAX_PERSONA = 20_000
 _KEY_ENV = re.compile(r"^[A-Z][A-Z0-9_]{1,62}(_API_KEY|_KEY|_TOKEN)$")
 VERIFY_FIRST = "Verify this device first: scan a new pairing code from your server or another owner's phone."
 BAD_SIGNATURE = "The request's signature doesn't match this device."
+# The bot (Hermes profile) a request or socket is about, from its `bot` query parameter. None is the main
+# bot, the profile this gateway runs as. The parameter sits in the signed path, so it can't be swapped.
+_BOT: contextvars.ContextVar = contextvars.ContextVar("winglet_hub_bot", default=None)
+_BOT_NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
+BOTS_CACHE_SECONDS = 10
+_ANY_BOT = object()
+BOTS_WATCH_SECONDS = 30
 # petdex slugs, and the ones Hermes gives pets it hatches: one plain path segment.
 _PET_SLUG = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}")
 # Thumbnails of pets not installed yet mean a petdex download each; a few at a time.
@@ -122,6 +130,7 @@ ROUTE_POLICY = {
     "h_models": "owner", "h_providers": "owner", "h_identity": "owner", "h_memory": "owner", "h_usage": "owner",
     "h_model_default": "owner_signed", "h_provider_key": "owner_signed", "h_provider_key_delete": "owner_signed",
     "h_identity_put": "owner_signed", "h_memory_edit": "owner_signed",
+    "h_bots": "owner", "h_bot_create": "owner_signed",
     "h_pet": "device", "h_pet_sheet": "public", "h_pet_thumb": "public", "h_pets": "owner", "h_pet_catalog": "owner",
     "h_pet_display": "owner_signed", "h_pet_adopt": "owner_signed", "h_pet_remove": "owner_signed",
     "h_system": "owner", "h_system_updates": "owner", "h_jobs": "owner", "h_job": "owner", "h_logs": "owner",
@@ -226,6 +235,7 @@ class Hub:
         self._recovery_wake = asyncio.Event()
         self._recovery_lock = asyncio.Lock()
         self._janitor: Optional[asyncio.Task] = None
+        self._bots_watch: Optional[asyncio.Task] = None
         # Upload limits: one file, one device per day, and everything stored. Overridable in .env.
         self.max_upload_bytes = _env_mb("WINGLET_MAX_UPLOAD_MB", 50)
         self.device_daily_upload_bytes = _env_mb("WINGLET_DAILY_UPLOAD_MB", 500)
@@ -249,6 +259,10 @@ class Hub:
         self._tasks: Set[asyncio.Task] = set()
         self._update_check: Dict[str, Any] = {}
         self._pet_thumbs = asyncio.Semaphore(PET_THUMB_FETCHES)
+        # The other bots this gateway serves (Hermes profiles), installed by the adapter:
+        # () -> {"bots": [{name, title, description, served}], "multiplex": bool, "reason": str}.
+        self.bots_provider: Optional[Callable[[], Dict[str, Any]]] = None
+        self._bots_cache: Optional[tuple] = None
         self._pet_choices: Dict[str, Dict[str, Any]] = {}
         # Reconnects MCP servers (Hermes's /reload-mcp), installed by the adapter. Server changes wait for it.
         self.reload_mcp: Optional[Callable[[], Awaitable[str]]] = None
@@ -319,6 +333,8 @@ class Hub:
         r.add_get("/api/memory", self.h_memory)
         r.add_post("/api/memory", self.h_memory_edit)
         r.add_get("/api/usage", self.h_usage)
+        r.add_get("/api/bots", self.h_bots)
+        r.add_post("/api/bots", self.h_bot_create)
         r.add_get("/api/pet", self.h_pet)
         r.add_get("/api/pets", self.h_pets)
         r.add_get("/api/pets/catalog", self.h_pet_catalog)
@@ -374,6 +390,22 @@ class Hub:
         if self._janitor is None:
             self._janitor = asyncio.create_task(self._janitor_loop())
             self._spawn(self.reconcile_jobs())
+        if self._bots_watch is None and self.bots_provider is not None:
+            self._bots_watch = asyncio.create_task(self._watch_bots())
+
+    async def _watch_bots(self) -> None:
+        """Tell owners' phones when bots come and go, wherever they were made (Hermes Desktop, the CLI, the
+        agent itself), or the gateway starts or stops serving one."""
+        last = None
+        while True:
+            await asyncio.sleep(BOTS_WATCH_SECONDS)
+            try:
+                state = await asyncio.to_thread(self.bots_state, True)
+                if last is not None and state["bots"] != last:
+                    await self.broadcast({"type": "system.bots", "bot": None, "bots": state["bots"]})
+                last = state["bots"]
+            except Exception:
+                logger.debug("[winglet] bot watch failed", exc_info=True)
 
     async def _janitor_loop(self) -> None:
         while True:
@@ -414,6 +446,8 @@ class Hub:
         self._push_tasks.clear()
         if self._janitor is not None:
             self._janitor.cancel()
+        if self._bots_watch is not None:
+            self._bots_watch.cancel()
             self._janitor = None
         for task in list(self._tasks):
             task.cancel()
@@ -460,6 +494,9 @@ class Hub:
             return _error(401, "not paired")
         if level in ("owner", "owner_signed") and device["role"] != "owner":
             return _error(403, "Only an owner can do that.")
+        bot, problem = self._requested_bot(request, device)
+        if problem is not None:
+            return problem
         if level in ("signed", "owner_signed"):
             problem = await self._signature_problem(request, device)
             if problem:
@@ -470,10 +507,11 @@ class Hub:
                 needs = {"needs": "verify"} if problem in (VERIFY_FIRST, BAD_SIGNATURE) else {}
                 return _json({"error": problem, **needs}, status=403)
         request["device"] = device
-        try:
-            return await handler(request)
-        except Forbidden as exc:
-            return _error(403, str(exc))
+        with self._bot_context(bot):
+            try:
+                return await handler(request)
+            except Forbidden as exc:
+                return _error(403, str(exc))
 
     async def _signature_problem(self, request: web.Request, device: Dict[str, Any]) -> Optional[str]:
         """Why a control request can't run, or None when it's signed by this device's verified key, fresh,
@@ -516,15 +554,26 @@ class Hub:
         return chat
 
     def visible_chats(self, device: Dict[str, Any]) -> List[Dict[str, Any]]:
-        return [c for c in self.store.list_chats() if self.can_see(device, c)]
+        """The current bot's chats this device may see."""
+        return [c for c in self.store.list_chats(bot=_BOT.get()) if self.can_see(device, c)]
+
+    def _in_bot(self, chat_id: str) -> bool:
+        """Whether a chat belongs to the current bot."""
+        chat = self.store.get_chat(chat_id)
+        return chat is not None and (chat.get("bot") or None) == _BOT.get()
 
     def pending_for(self, device: Dict[str, Any]) -> int:
-        if device.get("role") == "owner":
-            return self.store.pending_count()
-        return sum(1 for i in self.store.pending_items() if self.can_see(device, self.store.get_chat(i["chat_id"])))
+        return sum(1 for i in self.store.pending_items()
+                   if self._in_bot(i["chat_id"]) and self.can_see(device, self.store.get_chat(i["chat_id"])))
 
     def home_chat(self, device: Dict[str, Any]) -> str:
-        """Owners share the main chat. Each member gets one of their own, made on first use."""
+        """Owners share the main chat; each other bot has one too. Each member gets one of their own, made on
+        first use."""
+        bot = _BOT.get()
+        if bot:
+            chat_id = "b-" + bot
+            self.store.ensure_chat(chat_id, self.bot()["title"], bot=bot)
+            return chat_id
         if device.get("role") == "owner":
             return "general"
         chat_id = "m-" + device["id"]
@@ -546,6 +595,11 @@ class Hub:
     # -- info & pairing ------------------------------------------------------------------
 
     def bot(self) -> Dict[str, Any]:
+        """Who the current bot is: the profile this gateway runs as, or another one it serves."""
+        name = _BOT.get()
+        if name:
+            row = next((b for b in self.bots() if b["name"] == name), None) or {"name": name, "title": name}
+            return {"name": row["name"], "title": row.get("title") or row["name"], "description": row.get("description") or ""}
         info = dict(self._bot_info() or {})
         info.setdefault("name", "Hermes")
         info.setdefault("title", info["name"])
@@ -554,6 +608,57 @@ class Hub:
 
     def server_id(self) -> str:
         return self.store.secret("server_id", lambda: secrets.token_hex(6))
+
+    # -- bots: other Hermes profiles this gateway serves ---------------------------------------
+
+    def bots_state(self, fresh: bool = False) -> Dict[str, Any]:
+        """{bots: [{name, title, description, served}], multiplex, reason}, read again every few seconds so a bot
+        made in Hermes Desktop or the CLI shows up without a restart."""
+        if self.bots_provider is None:
+            return {"bots": [], "multiplex": False, "reason": ""}
+        now = time.monotonic()
+        if fresh or self._bots_cache is None or now - self._bots_cache[0] > BOTS_CACHE_SECONDS:
+            try:
+                state = self.bots_provider() or {}
+            except Exception:
+                logger.debug("[winglet] couldn't list bots", exc_info=True)
+                state = self._bots_cache[1] if self._bots_cache else {}
+            self._bots_cache = (now, {"bots": list(state.get("bots") or []), "multiplex": bool(state.get("multiplex")),
+                                      "reason": str(state.get("reason") or "")})
+        return self._bots_cache[1]
+
+    def bots(self) -> List[Dict[str, Any]]:
+        return self.bots_state()["bots"]
+
+    def _requested_bot(self, request: web.Request, device: Dict[str, Any]):
+        """(bot, None) for the request's `bot` parameter, or (None, error response). Members talk to the main
+        bot only."""
+        raw = request.query.get("bot", "").strip()
+        if not raw or raw == "default":
+            return None, None
+        if device.get("role") != "owner":
+            return None, _error(403, "Only an owner can talk to other bots.")
+        if not _BOT_NAME.fullmatch(raw) or not any(b["name"] == raw for b in self.bots_state(fresh=raw not in
+                                                                                        {b["name"] for b in self.bots()})["bots"]):
+            return None, _error(404, "That bot isn't on this server any more.")
+        return raw, None
+
+    @contextlib.contextmanager
+    def _bot_context(self, bot: Optional[str]):
+        """Hub and Hermes calls inside are about this bot (Hermes calls run as its profile)."""
+        token = _BOT.set(bot)
+        scoped = bool(bot) and self._has_attr(self.hermes, "set_bot")
+        hermes_token = self.hermes.set_bot(bot) if scoped else None
+        try:
+            yield
+        finally:
+            if scoped:
+                self.hermes.reset_bot(hermes_token)
+            _BOT.reset(token)
+
+    @staticmethod
+    def _has_attr(obj: Any, name: str) -> bool:
+        return obj is not None and callable(getattr(obj, name, None))
 
     def current_device(self, device_id: str) -> Optional[Dict[str, Any]]:
         """A device as it is now, or None once unpaired. Unpairing or a role change can happen in
@@ -579,6 +684,7 @@ class Hub:
                 "abilities": self.hermes is not None, "commands": self.commands_provider is not None,
                 "sessions": self.hermes is not None and self._has(self.hermes, "sessions_available"),
                 "pets": self.hermes is not None and self._has(self.hermes, "pets_available"),
+                "bots": self.bots_provider is not None and self.hermes is not None and self._has(self.hermes, "bots_available"),
                 "connection_status": True}
 
     def about(self) -> Dict[str, Any]:
@@ -793,7 +899,7 @@ class Hub:
         device = self._require(request)
         body = await self._body(request)
         chat = self.store.create_chat(str(body.get("title") or ""),
-                                      owner_device=None if device["role"] == "owner" else device["id"])
+                                      owner_device=None if device["role"] == "owner" else device["id"], bot=_BOT.get())
         await self.broadcast({"type": "chat.update", "chat": chat})
         return _json({"chat": chat})
 
@@ -820,7 +926,8 @@ class Hub:
             return _error(404, "no such chat")
         for row in files:
             self._remove_upload(row)
-        await self.broadcast({"type": "chat.delete", "chat_id": chat_id, "owner_device": chat.get("owner_device")})
+        await self.broadcast({"type": "chat.delete", "chat_id": chat_id, "owner_device": chat.get("owner_device"),
+                              "bot": chat.get("bot")})
         return _json({"ok": True})
 
     async def h_messages(self, request: web.Request) -> web.Response:
@@ -1125,8 +1232,7 @@ class Hub:
             pending = self.store.pending_items()
             seen = {i["id"] for i in pending}
             items = pending + [i for i in self.store.list_inbox() if i["id"] not in seen]
-        if device["role"] != "owner":
-            items = [i for i in items if self.can_see(device, self.store.get_chat(i["chat_id"]))]
+        items = [i for i in items if self._in_bot(i["chat_id"]) and self.can_see(device, self.store.get_chat(i["chat_id"]))]
         return _json({"items": items, "pending": self.pending_for(device)})
 
     async def h_inbox_respond(self, request: web.Request) -> web.Response:
@@ -1206,10 +1312,12 @@ class Hub:
         return item
 
     def _inbox_notification(self, item: Dict[str, Any]) -> Dict[str, Any]:
-        bot = self.bot()["title"]
         chat = self.store.get_chat(item["chat_id"]) or {}
+        with self._bot_context(chat.get("bot") or None):
+            bot = self.bot()["title"]
+        server = self.server_id() + (f"~{chat['bot']}" if chat.get("bot") else "")
         # Tapping it opens exactly this card in the app.
-        url = f"/inbox?server={quote(self.server_id(), safe='')}&item={quote(item['id'], safe='')}"
+        url = f"/inbox?server={quote(server, safe='')}&item={quote(item['id'], safe='')}"
         return {"title": f"{bot} · {item['title']}", "body": _clip(item["body"], 180),
                 "url": url, "kind": item["kind"], "item_id": item["id"],
                 "chat_id": item["chat_id"], "chat_title": chat.get("title", "")}
@@ -1316,12 +1424,21 @@ class Hub:
             if device is None:
                 await ws.close(code=4401, message=b"not paired")
                 return ws
-        self._sockets[ws] = {"device": device}
+        bot, problem = self._requested_bot(request, device)
+        if problem is not None:
+            await ws.close(code=4404, message=b"no such bot")
+            return ws
+        self._sockets[ws] = {"device": device, "bot": bot}
         try:
-            await ws.send_json({"type": "hello", "server_id": self.server_id(), "bot": self.bot(), "device": device,
-                                "me": self.me(device), **self.about(), "chats": self.visible_chats(device),
-                                "typing": sorted(c for c in self._typing if self.can_see(device, self.store.get_chat(c))),
-                                "pending": self.pending_for(device), "paused": self.paused_for(device)})
+            with self._bot_context(bot):
+                hello = {"type": "hello", "server_id": self.server_id(), "bot": self.bot(), "device": device,
+                         "me": self.me(device), **self.about(), "chats": self.visible_chats(device),
+                         "typing": sorted(c for c in self._typing if self._in_bot(c)
+                                          and self.can_see(device, self.store.get_chat(c))),
+                         "pending": self.pending_for(device), "paused": self.paused_for(device)}
+                if device.get("role") == "owner" and bot is None:
+                    hello["bots"] = self.bots()
+                await ws.send_json(hello)
             async for msg in ws:
                 if msg.type != WSMsgType.TEXT:
                     continue
@@ -1329,7 +1446,8 @@ class Hub:
                     data = json.loads(msg.data)
                 except ValueError:
                     continue
-                await self._on_ws(ws, device, data)
+                with self._bot_context(bot):
+                    await self._on_ws(ws, device, data)
         finally:
             self._sockets.pop(ws, None)
         return ws
@@ -1378,6 +1496,22 @@ class Hub:
                     break
         return chat_id is None or self.can_see(device, self.store.get_chat(chat_id))
 
+    def _event_bot(self, event: Dict[str, Any]):
+        """The bot an event is about (None: the main bot), or _ANY_BOT for server-wide events."""
+        if "bot" in event:
+            return event["bot"] or None
+        chat = event.get("chat") if isinstance(event.get("chat"), dict) else None
+        if chat is not None:
+            return chat.get("bot") or None
+        chat_id = event.get("chat_id")
+        for key in ("item", "message"):
+            if chat_id is None and isinstance(event.get(key), dict):
+                chat_id = event[key].get("chat_id")
+        if chat_id is None:
+            return _ANY_BOT
+        row = self.store.get_chat(chat_id)
+        return (row.get("bot") or None) if row else _ANY_BOT
+
     async def broadcast(self, event: Dict[str, Any]) -> None:
         dead = []
         for ws, meta in list(self._sockets.items()):
@@ -1389,9 +1523,13 @@ class Hub:
                 continue
             if not self._event_visible(device, event):
                 continue
+            event_bot = self._event_bot(event)
+            if event_bot is not _ANY_BOT and event_bot != meta.get("bot"):
+                continue
             out = event
-            if "pending" in event and device.get("role") != "owner":
-                out = {**event, "pending": self.pending_for(device)}
+            if "pending" in event:
+                with self._bot_context(meta.get("bot")):
+                    out = {**event, "pending": self.pending_for(device)}
             if event.get("type") == "system.paused" and device.get("role") != "owner":
                 out = {**event, "paused": self._member_pause(event.get("paused"))}
             try:
@@ -1698,21 +1836,76 @@ class Hub:
             return _error(400, "days must be a number")
         return _json(await self._call(self._need_hermes().usage, days))
 
+    # -- bots: other Hermes profiles on this server ----------------------------------------------
+
+    async def h_bots(self, request: web.Request) -> web.Response:
+        """The bots on this server, and whether the gateway serves them all (Hermes's multi-profile mode)."""
+        self._require(request)
+        return _json(await asyncio.to_thread(self.bots_state, True))
+
+    async def h_bot_create(self, request: web.Request) -> web.Response:
+        """Make a new bot the way Hermes Desktop does, as a job (Hermes seeds its skills and tells the gateway)."""
+        device = self._require(request)
+        h = self._need_hermes()
+        if _BOT.get():
+            return _error(400, "Make new bots from the main bot.")
+        body = await self._body(request)
+        name = str(body.get("name") or "").strip().lower()
+        title = str(body.get("title") or "").strip()[:60]
+        persona = str(body.get("persona") or "").strip()
+        if not _BOT_NAME.fullmatch(name) or name == "default":
+            return _error(400, "Give it a short name: lowercase letters, numbers and dashes.")
+        if not title:
+            return _error(400, "Give it a name to show.")
+        if len(persona) > MAX_PERSONA:
+            return _error(400, f"The persona must be at most {MAX_PERSONA:,} characters.")
+        if any(b["name"] == name for b in self.bots_state(fresh=True)["bots"]):
+            return _error(409, f"There's already a bot called {name}.")
+        job = await self._begin_job(request, device, "bot_create", {"bot": name, "message": f"Making {title}…"}, body=body)
+        if isinstance(job, web.Response):
+            return job
+        self.audit("bot.create", device, f"made {title} ({name})")
+        self._spawn(self._create_bot(job["id"], name, title, persona, str(body.get("description") or "").strip()[:300]))
+        return _json({"job": job}, status=202)
+
+    async def _create_bot(self, job_id: str, name: str, title: str, persona: str, description: str) -> None:
+        h = self._need_hermes()
+        try:
+            await asyncio.to_thread(h.create_bot, name, title, persona, description)
+        except h.HermesRefused as exc:
+            await self._finish_job(job_id, "failed", _clip(str(exc), 300))
+            return
+        except Exception:
+            logger.warning("[winglet] bot creation failed", exc_info=True)
+            await self._finish_job(job_id, "failed", "The bot couldn't be made. The server log has the details.")
+            return
+        state = await asyncio.to_thread(self.bots_state, True)
+        served = any(b["name"] == name and b.get("served") for b in state["bots"])
+        # Phones learn about the bot before they hear it's ready, so they can open it straight away.
+        await self.broadcast({"type": "system.bots", "bot": None, "bots": state["bots"]})
+        await self._finish_job(job_id, "succeeded", f"{title} is ready." if served else
+                               f"{title} is made. Restart the server to start it.", bot=name, needs_restart=not served)
+
     # -- the agent's pet: its animated face, from Hermes's pet store and petdex.dev ---------------
 
-    def pet_signature(self, slug: str) -> str:
-        """Pet images load in image views that can't send the device token, so their links are signed."""
+    def pet_signature(self, slug: str, bot: Optional[str] = None) -> str:
+        """Pet images load in image views that can't send the device token, so their links are signed, for the
+        bot whose pet it is."""
         key = self.store.secret("media_key").encode()
-        return hmac.new(key, f"pet:{slug}".encode(), hashlib.sha256).hexdigest()[:32]
+        return hmac.new(key, (f"pet:{bot}:{slug}" if bot else f"pet:{slug}").encode(), hashlib.sha256).hexdigest()[:32]
+
+    def _pet_link_query(self, slug: str) -> str:
+        bot = _BOT.get()
+        return f"{f'bot={quote(bot)}&' if bot else ''}sig={self.pet_signature(slug, bot)}"
 
     def _pet_thumb_url(self, slug: str) -> str:
-        return f"/api/pets/{quote(slug)}/thumb?sig={self.pet_signature(slug)}"
+        return f"/api/pets/{quote(slug)}/thumb?{self._pet_link_query(slug)}"
 
     def _pet_view(self, sheet: Dict[str, Any]) -> Dict[str, Any]:
         """A pet as the app draws it: its spritesheet is a signed link, never a path on the server."""
         slug = sheet["slug"]
         view = {k: v for k, v in sheet.items() if k != "path"}
-        view["sheet_url"] = f"/api/pets/{quote(slug)}/sheet?rev={sheet['revision']}&sig={self.pet_signature(slug)}"
+        view["sheet_url"] = f"/api/pets/{quote(slug)}/sheet?rev={sheet['revision']}&{self._pet_link_query(slug)}"
         view["thumb_url"] = self._pet_thumb_url(slug)
         return view
 
@@ -1722,12 +1915,20 @@ class Hub:
             raise web.HTTPNotFound(text=json.dumps({"error": "No such pet."}), content_type="application/json")
         return slug
 
-    def _pet_link_ok(self, request: web.Request, slug: str) -> bool:
-        return self.hermes is not None and hmac.compare_digest(request.query.get("sig", ""), self.pet_signature(slug))
+    def _pet_link_bot(self, request: web.Request, slug: str) -> Optional[str]:
+        """The bot a signed pet link is for ("" for the main one), or None when the link isn't good."""
+        bot = request.query.get("bot", "")
+        if self.hermes is None or (bot and not _BOT_NAME.fullmatch(bot)):
+            return None
+        if not hmac.compare_digest(request.query.get("sig", ""), self.pet_signature(slug, bot or None)):
+            return None
+        if bot and not any(b["name"] == bot for b in self.bots()):
+            return None  # deleted since the link was made
+        return bot
 
     async def _pet_changed(self) -> None:
         """Every phone redraws the agent's face: members see the same pet as owners."""
-        await self.broadcast({"type": "pet.update"})
+        await self.broadcast({"type": "pet.update", "bot": _BOT.get()})
 
     async def h_pet(self, request: web.Request) -> web.Response:
         """The pet showing for this bot, or none."""
@@ -1772,10 +1973,12 @@ class Hub:
 
     async def h_pet_sheet(self, request: web.Request) -> web.StreamResponse:
         slug = self._pet_slug(request)
-        if not self._pet_link_ok(request, slug):
+        bot = self._pet_link_bot(request, slug)
+        if bot is None:
             return _error(404, "not found")
         try:
-            sheet = await asyncio.to_thread(self.hermes.pet_sheet, slug)
+            with self._bot_context(bot or None):
+                sheet = await asyncio.to_thread(self.hermes.pet_sheet, slug)
         except Exception:
             sheet = None
         if not sheet:
@@ -1789,11 +1992,13 @@ class Hub:
 
     async def h_pet_thumb(self, request: web.Request) -> web.Response:
         slug = self._pet_slug(request)
-        if not self._pet_link_ok(request, slug):
+        bot = self._pet_link_bot(request, slug)
+        if bot is None:
             return _error(404, "not found")
         async with self._pet_thumbs:
             try:
-                data = await asyncio.to_thread(self.hermes.pet_thumbnail, slug)
+                with self._bot_context(bot or None):
+                    data = await asyncio.to_thread(self.hermes.pet_thumbnail, slug)
             except Exception:
                 logger.debug("[winglet] pet thumbnail failed", exc_info=True)
                 data = None
@@ -2514,7 +2719,8 @@ class Hub:
         if message is None or not message["text"].strip():
             return
         chat = self.store.get_chat(chat_id) or {"title": chat_id}
-        bot = self.bot()["title"]
+        with self._bot_context(chat.get("bot") or None):
+            bot = self.bot()["title"]
         title = bot if chat_id != HOME_CHAT_ID else f"{bot} · Update"
         if chat.get("kind") == "chat" and chat.get("title") not in ("", "General"):
             title = f"{bot} · {chat['title']}"
@@ -2522,8 +2728,11 @@ class Hub:
                              "kind": "message", "chat_id": chat_id}, tag=f"chat-{chat_id}")
 
     def chat_path(self, chat_id: str) -> str:
-        """The app's route for a chat (bots are told apart by server id)."""
-        return f"/chat/{quote(self.server_id(), safe='')}/{quote(chat_id, safe='')}"
+        """The app's route for a chat. Bots are told apart by server id; another bot on this server is
+        `<server id>~<bot>`, as the app names it."""
+        chat = self.store.get_chat(chat_id) or {}
+        server = self.server_id() + (f"~{chat['bot']}" if chat.get("bot") else "")
+        return f"/chat/{quote(server, safe='')}/{quote(chat_id, safe='')}"
 
     async def push_now(self, note: Dict[str, Any], *, tag: str, urgency: str = "normal",
                        item: Optional[Dict[str, Any]] = None, device_id: Optional[str] = None) -> Dict[str, int]:

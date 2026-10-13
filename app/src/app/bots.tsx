@@ -25,22 +25,24 @@ export default function BotsScreen() {
       <ListGroup>
         {servers.map((srv) => {
           const view = connectionView(network, runtime[srv.id], srv.bot.title);
+          const parent = srv.parent ? servers.find((x) => x.id === srv.parent) : undefined;
           return (
             <View key={srv.id}>
               <ListRow icon={<BotAvatar name={srv.bot.name} size={32} mood={moodOf(runtime[srv.id])} />} iconColor="transparent"
-                title={srv.bot.title} subtitle={`${view.kind === 'online' ? 'Online' : view.title} · ${addressKind(srv.url)}`}
-                onPress={() => router.push(`/connection/${srv.id}`)} right={
+                title={srv.bot.title} subtitle={parent ? `${view.kind === 'online' ? 'Online' : view.title} · on ${parent.bot.title}'s server`
+                  : `${view.kind === 'online' ? 'Online' : view.title} · ${addressKind(srv.url)}`}
+                onPress={() => router.push(`/connection/${srv.parent ?? srv.id}`)} right={parent ? undefined : (
                   <Button size="sm" variant={confirm === srv.id ? 'danger' : 'ghost'} title={confirm === srv.id ? 'Remove' : ''}
                     accessibilityLabel={confirm === srv.id ? `Confirm removing ${srv.bot.title}` : `Remove ${srv.bot.title}`}
                     icon={<Trash2 size={16} color={t.colors.danger} />}
                     onPress={() => { if (confirm !== srv.id) setConfirm(srv.id); else { setConfirm(null); removeServer(srv.id); } }} />
-                } chevron={false} />
+                )} chevron={false} />
             </View>
           );
         })}
-        <ListRow icon={<Plus size={18} color={t.colors.success} />} iconColor={t.colors.success} title="Add a bot" onPress={() => router.push('/pair')} />
+        <ListRow icon={<Plus size={18} color={t.colors.success} />} iconColor={t.colors.success} title="Add a bot" onPress={() => router.push('/new-bot')} />
       </ListGroup>
-      <Text style={s.note}>Removing a bot unpairs this phone from it. Its chats stay on the server; pair again any time with a new code.</Text>
+      <Text style={s.note}>Removing a server's bot unpairs this phone from that server and its other bots. Their chats stay on the server; pair again any time with a new code.</Text>
     </Screen>
   );
 }

@@ -394,3 +394,37 @@ test('an older pet answer that arrives late never replaces a newer one, on scree
   assert.equal(h.store.getState().runtime.s.pet, null);
   assert.equal(h.cache.get('pet:s'), null);
 });
+
+test("a server's other bots appear as bots of their own, follow its address, and go with it", async () => {
+  const h = harness();
+  await h.connect();
+  const asked: string[] = [];
+  h.setRequest(async (server: any, route: string) => { asked.push(`${server.id} ${route}`); return { items: [], pending: 0, messages: [], deleted_ids: [] }; });
+  const mainSocket = h.socket();
+  h.event({ type: 'hello', chats: [], pending: 0, features: {}, bots: [{ name: 'chef', title: 'Chef', description: 'Meals' }] });
+  await h.tick();
+  const ids = () => Array.from(h.store.getState().servers, (s: any) => s.id);
+  assert.deepEqual(ids(), ['s', 's~chef']);
+  const chef = h.store.getState().servers[1];
+  assert.equal(chef.profile, 'chef');
+  assert.equal(chef.parent, 's');
+  assert.equal(chef.bot.title, 'Chef');
+  assert.equal(chef.token, 'test');
+  assert.ok(h.sockets.length >= 2, 'it has a socket of its own');
+  // Renamed in Hermes, and another made: the list follows.
+  mainSocket.event({ type: 'system.bots', bots: [{ name: 'chef', title: 'Head Chef', description: '' }, { name: 'scout', title: 'Scout', description: '' }] });
+  await h.tick();
+  assert.deepEqual(ids(), ['s', 's~chef', 's~scout']);
+  assert.equal(h.store.getState().servers[1].bot.title, 'Head Chef');
+  // The server moved: its bots move with it.
+  await h.store.getState().updateServer('s', { url: 'http://moved', token: 'new' });
+  assert.ok(h.store.getState().servers.every((s: any) => s.url === 'http://moved' && s.token === 'new'));
+  // A bot deleted on the server leaves the app without unpairing anything.
+  mainSocket.event({ type: 'system.bots', bots: [{ name: 'scout', title: 'Scout', description: '' }] });
+  await h.tick();
+  assert.deepEqual(ids(), ['s', 's~scout']);
+  assert.ok(!asked.some((a) => a.includes('/api/me')), 'no unpair');
+  // Removing the server removes its bots.
+  await h.store.getState().removeServer('s', false);
+  assert.deepEqual(ids(), []);
+});

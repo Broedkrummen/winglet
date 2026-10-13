@@ -16,7 +16,7 @@ export function useNeedsVerify(server?: Server): boolean {
   const me = useApp((st) => (server ? st.runtime[server.id]?.me : undefined));
   const [hasKey, setHasKey] = useState<boolean | null>(null);
   useEffect(() => {
-    if (server) hasSigningKey(server.id).then(setHasKey);
+    if (server) hasSigningKey(server).then(setHasKey);
   }, [server?.id, me?.verified]); // eslint-disable-line react-hooks/exhaustive-deps
   return !!me && me.role === 'owner' && hasKey !== null && (!me.verified || !hasKey);
 }

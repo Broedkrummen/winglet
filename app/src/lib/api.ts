@@ -55,8 +55,14 @@ async function request<T>(url: string, init: RequestInit & { token?: string } = 
   return data as T;
 }
 
+/** A path for this bot: another bot on the same server is picked with `bot=` (inside the signed path). */
+export function botPath(server: Server, path: string): string {
+  if (!server.profile) return path;
+  return `${path}${path.includes('?') ? '&' : '?'}bot=${encodeURIComponent(server.profile)}`;
+}
+
 export function api<T>(server: Server, path: string, init: RequestInit = {}): Promise<T> {
-  return request<T>(`${server.url}${path}`, { ...init, token: server.token });
+  return request<T>(`${server.url}${botPath(server, path)}`, { ...init, token: server.token });
 }
 
 export async function fetchInfo(url: string): Promise<{ server_id: string; bot: Bot; version: string }> {
@@ -83,6 +89,8 @@ export async function serverKey(base: string, fp?: string): Promise<ServerKeyInf
 }
 
 const signKeyName = (serverId: string) => `winglet.sign.${serverId}`;
+/** A server's other bots sign with the server's key: it's one pairing. */
+const keyOf = (server: Pick<Server, 'id' | 'parent'>) => signKeyName(server.parent ?? server.id);
 
 export async function pair(url: string, code: string, deviceName: string, fp?: string): Promise<Server> {
   const base = normalizeUrl(url);
@@ -116,7 +124,7 @@ export async function verifyDevice(server: Server, code: string, fp: string): Pr
     method: 'POST',
     body: JSON.stringify({ sealed: seal(key, 'verify', server.deviceId, { code: normalizeCode(code), sign_key: signing.public, pinned: true }) }),
   });
-  await setItem(signKeyName(server.id), signing.secret);
+  await setItem(keyOf(server), signing.secret);
   return { ...server, fingerprint: key.fingerprint };
 }
 
@@ -145,8 +153,8 @@ export async function moveServer(server: Server, url: string): Promise<Server> {
 }
 
 /** Whether this phone holds the key it signs owner actions with for this server. */
-export async function hasSigningKey(serverId: string): Promise<boolean> {
-  return !!(await getItem(signKeyName(serverId)).catch(() => null));
+export async function hasSigningKey(server: Pick<Server, 'id' | 'parent'>): Promise<boolean> {
+  return !!(await getItem(keyOf(server)).catch(() => null));
 }
 
 /** The phone can't sign for this server (never verified, or its key was lost): offer to verify it. */
@@ -157,13 +165,14 @@ function needsVerify(server: Server, status: number, data?: any): ApiError {
 
 /** An owner action: signed with this phone's key, so a leaked token alone can't do it. */
 export async function signedApi<T>(server: Server, method: 'POST' | 'PATCH' | 'PUT' | 'DELETE', path: string, data?: unknown): Promise<T> {
-  const secret = await getItem(signKeyName(server.id));
+  const secret = await getItem(keyOf(server));
   if (!secret) throw needsVerify(server, 403);
   const body = data === undefined ? '' : JSON.stringify(data);
+  const full = botPath(server, path);
   try {
-    return await request<T>(`${server.url}${path}`, {
+    return await request<T>(`${server.url}${full}`, {
       method, ...(body ? { body } : {}), token: server.token,
-      headers: signedHeaders(secret, server.deviceId, method, path, body),
+      headers: signedHeaders(secret, server.deviceId, method, full, body),
     });
   } catch (e) {
     if (e instanceof ApiError && e.data?.needs === 'verify') throw needsVerify(server, e.status, e.data);
@@ -173,8 +182,8 @@ export async function signedApi<T>(server: Server, method: 'POST' | 'PATCH' | 'P
 
 /** The socket URL. Current servers take the token in the first frame instead, so it isn't in a URL. */
 export function wsUrl(server: Server): string {
-  const base = `${server.url.replace(/^http/, 'ws')}/api/ws`;
-  return server.wsAuth ? base : `${base}?token=${encodeURIComponent(server.token)}`;
+  const base = botPath(server, `${server.url.replace(/^http/, 'ws')}/api/ws`);
+  return server.wsAuth ? base : `${base}${base.includes('?') ? '&' : '?'}token=${encodeURIComponent(server.token)}`;
 }
 
 export function mediaUrl(server: Server, path: string): string {

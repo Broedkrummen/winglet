@@ -658,7 +658,8 @@ class WingletAdapter(BasePlatformAdapter):
         if hub is None:
             return SendResult(success=False, error="Winglet is not running")
         try:
-            attachment = hub.add_media(path, name)
+            # Off the event loop: an agent's video can be hundreds of MB.
+            attachment = await asyncio.to_thread(hub.add_media, path, name)
         except OSError as exc:
             return SendResult(success=False, error=f"could not read {path}: {exc}")
         message = await hub.post_message(chat_id, caption or "", meta={"attachments": [attachment]})

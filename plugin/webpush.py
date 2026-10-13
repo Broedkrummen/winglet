@@ -8,6 +8,7 @@ sees ciphertext.
 from __future__ import annotations
 
 import base64
+import functools
 import hashlib
 import hmac
 import json
@@ -49,6 +50,7 @@ def generate_vapid_private_key() -> str:
                              serialization.NoEncryption()).decode("ascii")
 
 
+@functools.lru_cache(maxsize=4)  # one server key, parsed once rather than on every push
 def _load_private(pem: str) -> ec.EllipticCurvePrivateKey:
     key = serialization.load_pem_private_key(pem.encode("ascii"), password=None)
     if not isinstance(key, ec.EllipticCurvePrivateKey):
@@ -56,6 +58,7 @@ def _load_private(pem: str) -> ec.EllipticCurvePrivateKey:
     return key
 
 
+@functools.lru_cache(maxsize=4)
 def vapid_public_key(pem: str) -> str:
     """The ``applicationServerKey`` browsers need: base64url of the uncompressed public point."""
     return b64url_encode(_public_bytes(_load_private(pem).public_key()))

@@ -82,6 +82,7 @@ export default function ToolsScreen() {
           </ListGroup>
           <Text style={s.note}>Changes apply from the next message.</Text>
 
+          {server.parent ? null : (<>
           <SectionHeader title="Members" />
           <View style={s.card}>
             {info.members.can_limit === false && !info.members.limited ? null : (
@@ -112,6 +113,7 @@ export default function ToolsScreen() {
                 right={<Toggle label="MCP servers for members" value={info.members.mcp} onValueChange={(mcp) => setMembers({ ...info.members, mcp })} />} />
             </ListGroup>
           ) : null}
+          </>)}
         </Animated.View>
       )}
 

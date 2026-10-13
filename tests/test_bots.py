@@ -49,6 +49,13 @@ class FakeHermes:
     def write_persona(self, content):
         self.souls[self.bot] = content
 
+    def rename_bot(self, name, title):
+        self.renamed = (self.bot, name, title)
+        return {"name": name, "title": title, "description": ""}
+
+    def delete_bot(self, name):
+        self.deleted = (self.bot, name)
+
     def create_bot(self, name, title, persona, description=""):
         if name == "bad":
             raise Refused("Profile names can't be 'bad'.")
@@ -206,6 +213,23 @@ async def test_making_a_bot_from_the_phone(client, hub):
     assert hub.features()["bots"] is True
 
 
+async def test_renaming_and_deleting_a_bot(client, hub):
+    owner = await pair_phone(client, hub)
+    hub.store.ensure_chat("b-researcher", "Researcher", bot="researcher")
+    other = hub.store.create_chat("Notes", bot="researcher")
+    body = json.dumps({"title": "Scholar"}).encode()
+    path = "/api/bots/researcher"
+    resp = await client.patch(path, data=body, headers=owner.signed("PATCH", path, body))
+    assert resp.status == 200 and hub.hermes.renamed == (None, "researcher", "Scholar")  # done as the main bot
+    assert (await client.patch("/api/bots/ghost", data=body, headers=owner.signed("PATCH", "/api/bots/ghost", body))).status == 404
+    resp = await client.delete(path, headers=owner.signed("DELETE", path))
+    assert resp.status == 200 and hub.hermes.deleted == (None, "researcher")
+    # Its chats here go with it; the main bot's stay.
+    assert hub.store.get_chat("b-researcher") is None and hub.store.get_chat(other["id"]) is None
+    assert hub.store.get_chat("general") is not None
+    assert {a["action"] for a in hub.store.list_audit(limit=5)} >= {"bot.rename", "bot.delete"}
+
+
 # -- the adapter routes a bot's chat to its profile ----------------------------------------------
 
 
@@ -229,6 +253,29 @@ async def test_a_bots_chat_goes_to_its_profile_only_when_hermes_serves_it(adapte
                                                                           "description": ""}])
     assert adapter._bots_state() == {"bots": [{"name": "researcher", "title": "Researcher", "description": "",
                                                "served": False}], "multiplex": False, "reason": "only one profile exists"}
+
+
+async def test_dashboard_routes_get_the_bots_profile_when_they_take_one(monkeypatch):
+    import contextlib
+    from plugin import hermes_api as h
+    monkeypatch.setattr(h, "_bot_scope", lambda name: contextlib.nullcontext())  # the scope itself is Hermes's
+    got = []
+
+    async def install(body, profile=None):
+        got.append(profile)
+        return {"ok": True, "name": "skills-install-x"}
+
+    async def plain(body):
+        got.append("plain")
+        return {}
+    token = h.set_bot("researcher")
+    try:
+        await h._route(install, "x")
+        await h._route(plain, "x")
+    finally:
+        h.reset_bot(token)
+    await h._route(install, "x")
+    assert got == ["researcher", "plain", None]
 
 
 # -- through Hermes's own profile code ------------------------------------------------------------
@@ -266,3 +313,9 @@ def test_a_bot_made_here_is_a_hermes_profile_with_its_own_persona(tmp_path, monk
     assert h.read_persona()["content"] == "You are Hermes."
     with pytest.raises(h.HermesRefused):
         h.create_bot("chef", "Chef again", "")
+    assert h.rename_bot("chef", "Head Chef")["title"] == "Head Chef"
+    assert h.list_bots()[0]["title"] == "Head Chef" and h._bot_meta("chef")["created"]  # its other settings stay
+    h.delete_bot("chef")
+    assert h.list_bots() == [] and not profile.exists()
+    with pytest.raises(h.HermesRefused):
+        h.delete_bot("chef")

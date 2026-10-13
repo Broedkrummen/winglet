@@ -58,26 +58,27 @@ async def cache_media(path: str, name: str, mime: str, voice: bool = False):
 
 def list_commands() -> list:
     """Gateway slash commands and skill commands, for the app's command palette."""
-    out = []
-    try:
-        from hermes_cli.commands import COMMAND_REGISTRY, _is_gateway_available, _resolve_config_gates
-        gates = _resolve_config_gates()
-        for cmd in COMMAND_REGISTRY:
-            if not _is_gateway_available(cmd, gates):
-                continue
-            out.append({"cmd": f"/{cmd.name}", "hint": cmd.describe(), "args": cmd.args_hint or "",
-                        "category": cmd.category, "kind": "command"})
-    except Exception:
-        logger.debug("[winglet] command registry unavailable", exc_info=True)
-    try:
-        from agent.skill_commands import get_skill_commands
-        for key, meta in sorted((get_skill_commands() or {}).items()):
-            name = key if str(key).startswith("/") else f"/{key}"
-            out.append({"cmd": name, "hint": str((meta or {}).get("description") or "Skill")[:160], "args": "",
-                        "category": "Skills", "kind": "skill"})
-    except Exception:
-        logger.debug("[winglet] skill commands unavailable", exc_info=True)
-    return out
+    with _profile_scope():  # each bot has its own skills, so its own commands
+        out = []
+        try:
+            from hermes_cli.commands import COMMAND_REGISTRY, _is_gateway_available, _resolve_config_gates
+            gates = _resolve_config_gates()
+            for cmd in COMMAND_REGISTRY:
+                if not _is_gateway_available(cmd, gates):
+                    continue
+                out.append({"cmd": f"/{cmd.name}", "hint": cmd.describe(), "args": cmd.args_hint or "",
+                            "category": cmd.category, "kind": "command"})
+        except Exception:
+            logger.debug("[winglet] command registry unavailable", exc_info=True)
+        try:
+            from agent.skill_commands import get_skill_commands
+            for key, meta in sorted((get_skill_commands() or {}).items()):
+                name = key if str(key).startswith("/") else f"/{key}"
+                out.append({"cmd": name, "hint": str((meta or {}).get("description") or "Skill")[:160], "args": "",
+                            "category": "Skills", "kind": "skill"})
+        except Exception:
+            logger.debug("[winglet] skill commands unavailable", exc_info=True)
+        return out
 
 
 def resolve_command(name: str) -> str:
@@ -716,12 +717,22 @@ def _models():
     return models
 
 
+def _takes_profile(fn) -> bool:
+    import inspect
+    try:
+        return "profile" in inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+
+
 async def _route(fn, *args):
-    """Await one of the dashboard's route functions as this profile. Its HTTP errors carry a message
-    meant for a person; they become refusals."""
+    """Await one of the dashboard's route functions as this profile. A route that takes a ``profile``
+    gets the current bot's, so actions it spawns (skill installs) run as that profile too. Its HTTP
+    errors carry a message meant for a person; they become refusals."""
+    kwargs = {"profile": _BOT.get()} if _BOT.get() and _takes_profile(fn) else {}
     try:
         with _profile_scope():
-            return await fn(*args)
+            return await fn(*args, **kwargs)
     except (HermesUnavailable, HermesRefused):
         raise
     except Exception as exc:
@@ -835,6 +846,7 @@ def toolsets() -> List[dict]:
     return out
 
 
+@_scoped
 def set_toolset(name: str, enabled: bool) -> None:
     try:
         from hermes_cli.config import load_config
@@ -914,6 +926,7 @@ def approval_mode() -> str:
     return mode if mode in APPROVAL_MODES else "manual"
 
 
+@_scoped
 def set_approval_mode(mode: str) -> None:
     if mode not in APPROVAL_MODES:
         raise HermesRefused("mode must be manual, smart or off")
@@ -1037,7 +1050,7 @@ async def start_mcp_sign_in(name: str, callback_url: str) -> dict:
             flow.mark_error("Started again", cancelled=True)
     if sum(not f.worker_done for f in _sign_ins.values()) >= _MAX_SIGN_INS:
         raise HermesRefused("Too many sign-ins are in progress. Try again in a few minutes.")
-    flow = DashboardOAuthFlow(flow_id=secrets.token_urlsafe(24), server_name=name, profile=None, hermes_home=home,
+    flow = DashboardOAuthFlow(flow_id=secrets.token_urlsafe(24), server_name=name, profile=_BOT.get(), hermes_home=home,
                               redirect_uri=(cfg.get("oauth") or {}).get("redirect_uri") or callback_url,
                               reconnect_live=True)
     _sign_ins[flow.flow_id] = flow
@@ -1108,7 +1121,7 @@ def list_sessions(limit: int, offset: int) -> dict:
             # Called directly, so every query parameter is passed: their defaults are FastAPI markers.
             page = get_sessions(limit=limit, offset=offset, min_messages=1, archived="exclude", order="recent",
                                 source=None, sources=None, exclude_sources=None, cwd_prefix=None, full=False,
-                                profile=None)
+                                profile=_BOT.get())
     except Exception as exc:
         if isinstance(getattr(exc, "status_code", None), int):
             raise HermesRefused(_detail(exc)) from exc
@@ -1118,7 +1131,7 @@ def list_sessions(limit: int, offset: int) -> dict:
 
 async def search_sessions(query: str, limit: int = 30) -> list:
     r = _router("sessions")
-    found = await _route(lambda: r.search_sessions(q=query, limit=limit, profile=None, source=None, sources=None,
+    found = await _route(lambda: r.search_sessions(q=query, limit=limit, profile=_BOT.get(), source=None, sources=None,
                                                    exclude_sources=None))
     return [{**_session_row(x), "snippet": str(x.get("snippet") or "")[:300], "role": x.get("role")}
             for x in found.get("results") or []]
@@ -1174,8 +1187,8 @@ def _session_message(message: dict) -> Optional[dict]:
 async def session_transcript(session_id: str) -> dict:
     """One conversation's latest 500 messages, as text: images are named, not sent."""
     r = _router("sessions")
-    detail = await _route(lambda: r.get_session_detail(session_id, profile=None))
-    page = await _route(lambda: r.get_session_messages(session_id, profile=None, limit=None, offset=0, order=None,
+    detail = await _route(lambda: r.get_session_detail(session_id, profile=_BOT.get()))
+    page = await _route(lambda: r.get_session_messages(session_id, profile=_BOT.get(), limit=None, offset=0, order=None,
                                                        include_compacted=False, inline_images=False))
     messages = [m for m in (_session_message(x) for x in page.get("messages") or []) if m]
     return {"session": _session_row(detail), "messages": messages,
@@ -1438,3 +1451,37 @@ def multiplex_state(runner) -> dict:
             from gateway.status import read_runtime_status
             reason = str((read_runtime_status() or {}).get("multiplex_standalone_reason") or "")
     return {"multiplex": active or len(served) > 1, "served": served, "reason": reason}
+
+
+def _bot_meta(name: str) -> dict:
+    """The bot's Bot Mode settings (title, color…) as Hermes Desktop stores them in profile.yaml."""
+    import yaml
+    from hermes_cli.profiles import get_profile_dir
+    path = get_profile_dir(name) / "profile.yaml"
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (OSError, ValueError):
+        data = {}
+    meta = (data.get("ui_meta") or {}).get("hermes-bots") if isinstance(data, dict) else None
+    return dict(meta) if isinstance(meta, dict) else {}
+
+
+def rename_bot(name: str, title: str) -> dict:
+    """Change the name a bot goes by, as Hermes Desktop does. Its profile id (what other bots and the
+    CLI call it) stays, so nothing that refers to it breaks."""
+    if name not in {b["name"] for b in list_bots()}:
+        raise HermesRefused("That bot isn't on this server any more.")
+    _rpc("profiles.configure", {"name": name, "ui_meta": {"hermes-bots": {**_bot_meta(name), "title": title}}})
+    from hermes_cli.profiles import get_profile_dir
+    return _bot_row(name, get_profile_dir(name))
+
+
+def delete_bot(name: str) -> None:
+    """Delete a bot's profile, with its memory, skills and sessions, as `hermes profile delete` does."""
+    if name not in {b["name"] for b in list_bots()}:
+        raise HermesRefused("That bot isn't on this server any more.")
+    from hermes_cli.profiles import delete_profile
+    try:
+        delete_profile(name, yes=True)
+    except (ValueError, FileNotFoundError) as exc:
+        raise HermesRefused(str(exc)) from exc

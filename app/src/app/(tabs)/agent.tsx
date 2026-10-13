@@ -5,6 +5,7 @@ import { Redirect, router } from 'expo-router';
 import { ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AgentFace } from '../../components/AgentFace';
+import { ManageBot } from '../../components/ManageBot';
 import { VerifyNotice } from '../../components/VerifyPhone';
 import { BotSwitcher } from '../../components/BotSwitcher';
 import {
@@ -83,19 +84,13 @@ export default function AgentTab() {
           </>
         ) : null}
 
-        {child ? (
-          <Text style={s.childNote}>
-            One of the bots on {parent?.bot.title ?? 'your server'}'s server. Its server, devices and security settings are on {parent?.bot.title ?? 'the main bot'}.
-          </Text>
-        ) : null}
-
-        {rt?.info?.features?.abilities && isOwner(rt) && !child ? (
+        {rt?.info?.features?.abilities && isOwner(rt) ? (
           <>
             <SectionHeader title="Abilities" />
             <ListGroup>
               <ListRow icon={<Sparkles size={18} color={t.colors.onAccentSoft} />} title="Skills" subtitle="What it knows how to do"
                 onPress={() => router.push('/skills')} />
-              <ListRow icon={<SquareTerminal size={18} color={t.colors.onAccentSoft} />} title="Tools" subtitle="What it can use, approvals and members"
+              <ListRow icon={<SquareTerminal size={18} color={t.colors.onAccentSoft} />} title="Tools" subtitle={child ? 'What it can use and approvals' : 'What it can use, approvals and members'}
                 onPress={() => router.push('/tools')} />
               <ListRow icon={<Plug size={18} color={t.colors.onAccentSoft} />} title="MCP servers" subtitle="Connect other apps and services"
                 onPress={() => router.push('/mcp')} />
@@ -120,6 +115,22 @@ export default function AgentTab() {
             </ListGroup>
           </>
         ) : null}
+
+        {child && rt?.info?.features?.control && isOwner(rt) ? (
+          <>
+            <SectionHeader title="Routines and history" />
+            <ListGroup>
+              <ListRow icon={<CalendarClock size={18} color={t.colors.onAccentSoft} />} title="Schedule" subtitle="Routines it runs on its own"
+                onPress={() => router.push('/schedule')} />
+              {rt.info?.features?.sessions ? (
+                <ListRow icon={<MessageSquareText size={18} color={t.colors.onAccentSoft} />} title="Sessions"
+                  subtitle="Its conversations, in any app" onPress={() => router.push('/sessions')} />
+              ) : null}
+            </ListGroup>
+          </>
+        ) : null}
+
+        {child && parent && isOwner(rt) ? <ManageBot server={server} parent={parent} /> : null}
 
         {!child && (rt?.info?.features?.roles || Platform.OS !== 'web') ? <SectionHeader title="Security" /> : null}
         {child ? null : <SecurityRows rt={rt} />}
@@ -201,7 +212,6 @@ const useStyles = makeStyles((t) => ({
   root: { flex: 1, backgroundColor: t.colors.bg },
   content: { paddingHorizontal: 16, maxWidth: 680, width: '100%', alignSelf: 'center' },
   topRow: { minHeight: 48, flexDirection: 'row', alignItems: 'center' },
-  childNote: { ...t.type.caption, color: t.colors.textSecondary, marginTop: 14, paddingHorizontal: 4 },
   profile: { alignItems: 'center', paddingTop: 16, paddingBottom: 6, gap: 6 },
   name: { ...t.type.title, color: t.colors.text, marginTop: 12 },
   description: { ...t.type.callout, color: t.colors.textSecondary, textAlign: 'center', maxWidth: 420 },

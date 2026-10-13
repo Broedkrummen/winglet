@@ -8,6 +8,8 @@ import asyncio
 import importlib.util
 import json
 
+from types import SimpleNamespace
+
 import pytest
 
 from plugin.hub import Hub
@@ -253,6 +255,38 @@ async def test_a_bots_chat_goes_to_its_profile_only_when_hermes_serves_it(adapte
                                                                           "description": ""}])
     assert adapter._bots_state() == {"bots": [{"name": "researcher", "title": "Researcher", "description": "",
                                                "served": False}], "multiplex": False, "reason": "only one profile exists"}
+
+
+async def test_reconnecting_mcp_reloads_the_bot_it_was_asked_for(adapter, aiohttp_client, monkeypatch):  # noqa: F811
+    """Phone → hub → adapter → Hermes's own /reload-mcp, which reloads the profile its message is routed to."""
+    hub = adapter._hub
+    hub.hermes = adapter.module.hermes_api
+    hub.bots_provider = lambda: {"bots": [{"name": "researcher", "title": "Researcher", "description": "",
+                                           "served": True}], "multiplex": True, "reason": ""}
+    hub.reload_mcp = adapter._reload_mcp
+    reloaded = []
+
+    async def execute_mcp_reload(event):
+        reloaded.append(event)
+        return "MCP servers reloaded"
+    adapter.gateway_runner = SimpleNamespace(_execute_mcp_reload=execute_mcp_reload)
+    state = {"multiplex": True, "served": ["default", "researcher"], "reason": ""}
+    monkeypatch.setattr(adapter.module.hermes_api, "multiplex_state", lambda runner: state)
+    client = await aiohttp_client(hub.build_app())
+    owner = await pair_phone(client, hub)
+
+    resp = await post_signed(client, owner, "/api/mcp/reload?bot=researcher", {})
+    assert resp.status == 200 and (await resp.json())["message"] == "MCP servers reloaded"
+    source = reloaded[-1].source
+    assert reloaded[-1].text == "/reload-mcp" and source.profile == "researcher" and source.chat_id == "b-researcher"
+    assert hub.store.get_chat("b-researcher")["bot"] == "researcher"  # its main chat gets the "tools changed" note
+    # The main bot's stays the main bot's.
+    assert (await post_signed(client, owner, "/api/mcp/reload", {})).status == 200
+    assert reloaded[-1].source.chat_id == "general" and not hasattr(reloaded[-1].source, "profile")
+    # A bot the gateway doesn't serve yet: say so, and never reload the main bot instead.
+    state = {"multiplex": False, "served": ["default"], "reason": "only one profile exists"}
+    resp = await post_signed(client, owner, "/api/mcp/reload?bot=researcher", {})
+    assert resp.status == 400 and "isn't running yet" in (await resp.json())["error"] and len(reloaded) == 2
 
 
 async def test_dashboard_routes_get_the_bots_profile_when_they_take_one(monkeypatch):

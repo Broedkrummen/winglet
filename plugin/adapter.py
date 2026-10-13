@@ -444,9 +444,17 @@ class WingletAdapter(BasePlatformAdapter):
         return None if allowed is None else set(allowed) - set(hermes_api.NO_TOOLS)
 
     async def _reload_mcp(self) -> str:
-        """Hermes's /reload-mcp, as if sent from the main chat, which also gets the note that tools changed."""
-        source = self.build_source(chat_id=GENERAL_CHAT_ID, chat_name="General", chat_type="dm",
+        """Hermes's /reload-mcp for the bot the request is about, as if sent from its main chat, which also gets
+        the note that tools changed. Hermes reloads the servers of the profile the message is routed to."""
+        bot = hermes_api.current_bot()
+        if bot and not self._serves(bot):
+            raise hermes_api.HermesRefused("This bot isn't running yet. Restart the server and it connects its MCP "
+                                           "servers as it starts.")
+        chat_id = self._hub.home_chat({"role": "owner"}) if bot else GENERAL_CHAT_ID
+        source = self.build_source(chat_id=chat_id, chat_name=chat_id if bot else "General", chat_type="dm",
                                    user_id=USER_PREFIX + "app", user_name="Winglet", role_authorized=True)
+        if bot:
+            source.profile = bot
         event = MessageEvent(text="/reload-mcp", message_type=MessageType.COMMAND, source=source,
                              timestamp=datetime.now(tz=timezone.utc))
         return await hermes_api.reload_mcp(getattr(self, "gateway_runner", None), event)

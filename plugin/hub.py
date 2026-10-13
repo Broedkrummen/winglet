@@ -79,6 +79,8 @@ _KEY_ENV = re.compile(r"^[A-Z][A-Z0-9_]{1,62}(_API_KEY|_KEY|_TOKEN)$")
 _PET_SLUG = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}")
 # Thumbnails of pets not installed yet mean a petdex download each; a few at a time.
 PET_THUMB_FETCHES = 3
+# Idempotency keys of recent instant pet switches (a pet already installed starts no job to hold one).
+PET_CHOICES_KEPT = 100
 REPLY_CONTEXT = 4000
 # Raster formats only: SVG is a document that can carry script.
 INLINE_IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/bmp"}
@@ -243,6 +245,7 @@ class Hub:
         self._tasks: Set[asyncio.Task] = set()
         self._update_check: Dict[str, Any] = {}
         self._pet_thumbs = asyncio.Semaphore(PET_THUMB_FETCHES)
+        self._pet_choices: Dict[str, Dict[str, Any]] = {}
         # Reconnects MCP servers (Hermes's /reload-mcp), installed by the adapter. Server changes wait for it.
         self.reload_mcp: Optional[Callable[[], Awaitable[str]]] = None
         self.mcp_changed = False
@@ -1798,8 +1801,19 @@ class Hub:
         h = self._need_hermes()
         slug = self._pet_slug(request)
         body = await self._body(request)
+        # A retried request answers as the first one did, and never undoes a choice made since.
+        key = str(body.get("idempotency_key") or "")[:64]
+        if key:
+            if (existing := self.store.job_by_key(key)) is not None:
+                return _json({"job": existing}, status=202)
+            if key in self._pet_choices:
+                return _json({"pet": self._pet_choices[key]})
         if await self._call(h.pet_installed, slug):
             pet = await self._call(h.adopt_pet, slug)
+            if key:
+                self._pet_choices[key] = pet
+                while len(self._pet_choices) > PET_CHOICES_KEPT:
+                    self._pet_choices.pop(next(iter(self._pet_choices)))
             self.audit("pet", device, f"chose {pet['name']}")
             await self._pet_changed()
             return _json({"pet": pet})

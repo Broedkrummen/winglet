@@ -185,14 +185,18 @@ async def test_adopting_a_new_pet_downloads_it_as_a_job(client, hub):
     assert job["kind"] == "pet_install" and job["state"] == "succeeded" and job["detail"]["pet"] == "mochi"
     assert hub.hermes.active == "mochi" and hub.hermes.downloads == ["mochi"]
     assert {"type": "pet.update"} in hub.events
-    # Once it's here, asking again switches without a second download.
-    again = await post_signed(client, owner, path, {"idempotency_key": "k1"})
-    assert again.status == 200 and hub.hermes.downloads == ["mochi"]
     # One that's already installed switches at once.
-    resp = await post_signed(client, owner, "/api/pets/boba/adopt", {})
+    resp = await post_signed(client, owner, "/api/pets/boba/adopt", {"idempotency_key": "k2"})
     assert resp.status == 200 and (await resp.json())["pet"]["slug"] == "boba" and hub.hermes.active == "boba"
+    # Retries answer as the first request did, and never undo a choice made since.
+    again = await post_signed(client, owner, path, {"idempotency_key": "k1"})
+    assert again.status == 202 and (await again.json())["job"]["id"] == job["id"]
+    assert hub.hermes.active == "boba" and hub.hermes.downloads == ["mochi"]
+    assert (await post_signed(client, owner, path, {"idempotency_key": "k3"})).status == 200  # Mochi, on purpose
+    again = await post_signed(client, owner, "/api/pets/boba/adopt", {"idempotency_key": "k2"})
+    assert again.status == 200 and (await again.json())["pet"]["slug"] == "boba" and hub.hermes.active == "mochi"
     assert [a["summary"] for a in hub.store.list_audit(limit=5) if a["action"] == "pet"] == [
-        "chose Boba", "chose Mochi", "adopted mochi from petdex"]
+        "chose Mochi", "chose Boba", "adopted mochi from petdex"]
 
 
 async def test_a_pet_petdex_doesnt_have_fails_the_job(client, hub):

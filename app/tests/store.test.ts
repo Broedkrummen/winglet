@@ -373,3 +373,23 @@ test("the agent's pet loads on connect, follows changes, and is remembered for o
   await h.tick();
   assert.equal(h.store.getState().runtime.s.pet.slug, 'boba');
 });
+
+test('an older pet answer that arrives late never replaces a newer one, on screen or in the cache', async () => {
+  const h = harness();
+  await h.connect();
+  const answers: ((pet: any) => void)[] = [];
+  h.setRequest(async (_, route) => (route === '/api/pet'
+    ? new Promise((resolve) => answers.push((pet) => resolve({ pet })))
+    : { items: [], pending: 0, messages: [], deleted_ids: [] }));
+  h.event({ type: 'hello', chats: [], pending: 0, features: { pets: true } });
+  await h.tick();
+  h.event({ type: 'pet.update' }); // the pet was switched off while the first request was out
+  await h.tick();
+  assert.equal(answers.length, 2);
+  answers[1](null);
+  await h.tick();
+  answers[0]({ slug: 'boba', name: 'Boba' });
+  await h.tick();
+  assert.equal(h.store.getState().runtime.s.pet, null);
+  assert.equal(h.cache.get('pet:s'), null);
+});

@@ -369,6 +369,9 @@ export const useApp = create<AppState>((set, get) => {
     conn.open();
   };
 
+  /** The latest pet request per bot. */
+  const petLoads = new Map<string, number>();
+
   /** Load what this phone remembers about a bot, so it opens instantly and works offline. */
   const hydrateServer = async (serverId: string) => {
     const [chats, inbox, outbox, pet] = await Promise.all([
@@ -542,6 +545,8 @@ export const useApp = create<AppState>((set, get) => {
     loadPet: async (serverId) => {
       const server = get().servers.find((s) => s.id === serverId);
       if (!server) return;
+      const load = (petLoads.get(serverId) ?? 0) + 1;
+      petLoads.set(serverId, load);
       let pet: PetSheet | null = null;
       if (get().runtime[serverId]?.info?.features?.pets) {
         try {
@@ -550,6 +555,8 @@ export const useApp = create<AppState>((set, get) => {
           return; // offline: keep the face we have
         }
       }
+      // Answers can arrive out of order: only the latest request's may show, or be remembered.
+      if (petLoads.get(serverId) !== load) return;
       patch(serverId, () => ({ pet }));
       cacheSet(`pet:${serverId}`, pet);
     },

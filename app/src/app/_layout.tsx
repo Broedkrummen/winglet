@@ -89,7 +89,8 @@ function Navigator() {
   return (
     <SafeAreaProvider style={{ backgroundColor: t.colors.bg }}>
       <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: t.colors.bg }, animation: 'slide_from_right' }}>
-        <Stack.Screen name="(tabs)" options={{ animation: 'fade' }} />
+        {/* Under an open chat or screen, the tabs don't re-render; they catch up when you come back. */}
+        <Stack.Screen name="(tabs)" options={{ animation: 'fade', freezeOnBlur: true }} />
         <Stack.Screen name="pair" options={{ animation: 'fade_from_bottom' }} />
         <Stack.Screen name="scan" options={{ animation: 'fade', presentation: 'fullScreenModal' }} />
       </Stack>

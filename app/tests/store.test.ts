@@ -65,6 +65,7 @@ function harness(os = 'web') {
   const helpers = compile('../src/lib/messages.ts', {});
   const { useApp: store } = compile('../src/lib/store.ts', {
     zustand: { create: (fn: any) => createStore(fn) },
+    'zustand/react/shallow': { useShallow: (fn: any) => fn },
     'react-native': { Platform: { OS: os } },
     './recovery': { RecoveryCoordinator: FakeCoordinator },
     './messages': helpers,
@@ -427,4 +428,21 @@ test("a server's other bots appear as bots of their own, follow its address, and
   // Removing the server removes its bots.
   await h.store.getState().removeServer('s', false);
   assert.deepEqual(ids(), []);
+});
+
+test('a streamed edit replaces only its own row and keeps the others as they were', async () => {
+  const h = harness();
+  await h.connect();
+  h.setRequest(async () => ({ messages: [msg(1), msg(2), msg(3)], deleted_ids: [] }));
+  await h.store.getState().loadMessages('s', 'general');
+  const before = h.messages();
+  h.event({ type: 'message.update', chat_id: 'general', message: { ...before[1], text: 'streaming…', status: 'streaming', updated_at: before[1].updated_at + 1 } });
+  const after = h.messages();
+  assert.equal(after[0], before[0]);
+  assert.equal(after[2], before[2]);
+  assert.equal(after[1].text, 'streaming…');
+  assert.equal(after[1].position, before[1].position);
+  // An older copy arriving late changes nothing.
+  h.event({ type: 'message.update', chat_id: 'general', message: { ...before[1], text: 'stale' } });
+  assert.equal(h.messages()[1].text, 'streaming…');
 });

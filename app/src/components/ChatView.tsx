@@ -3,7 +3,7 @@ import * as Clipboard from 'expo-clipboard';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FlatList, KeyboardAvoidingView, Platform, Pressable, Share as SystemShare, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, Pressable, Share as SystemShare, StyleSheet, Text, View } from 'react-native';
 import { Gesture, GestureDetector, ScrollView } from 'react-native-gesture-handler';
 import Animated, {
   cancelAnimation, FadeIn, FadeInDown, FadeOut, runOnJS, useAnimatedStyle, useSharedValue, withDelay, withRepeat, withSequence,
@@ -15,17 +15,18 @@ import { connectionView } from '../lib/connection';
 import { exportChat } from '../lib/exportChat';
 import { clearFocus, requestFocus, useFocusRequest } from '../lib/focus';
 import { haptic } from '../lib/haptics';
+import { afterOlderPage, atStart, canLoadOlder, newPaging } from '../lib/history';
 import { easeOut, spring, useReducedMotion } from '../lib/motion';
 import { usePrefs } from '../lib/prefs';
 import { mutedUntil, usePushPrefs } from '../lib/pushPrefs';
-import { homeChat, isTyping, useApp } from '../lib/store';
+import { homeChat, isTyping, useApp, useServerState } from '../lib/store';
 import { plainText } from '../lib/text';
 import { FIXED } from '../lib/theme';
 import { makeStyles, useTheme } from '../lib/themeContext';
-import type { InboxItem, Message, ReplyRef, Server } from '../lib/types';
+import type { DraftFile, InboxItem, Message, ReplyRef, Server, Upload } from '../lib/types';
 import { AgentFace } from './AgentFace';
 import { BotAvatar, botColor, UserAvatar } from './BotAvatar';
-import { Composer } from './Composer';
+import { Composer, focusComposer } from './Composer';
 import { ConnectionBanner } from './ConnectionBanner';
 import { FilesSheet } from './FilesSheet';
 import { GoalSheet, GoalStrip, useChatGoal } from './Goal';
@@ -69,14 +70,15 @@ export function ChatView({ server, chatId, showBack, embedded }: { server: Serve
   const t = useTheme();
   const s = useStyles();
   const insets = useSafeAreaInsets();
-  const runtime = useApp((st) => st.runtime[server.id]);
+  // Not the messages of every chat: only this one's, below. Another chat streaming doesn't re-render this one.
+  const runtime = useServerState(server.id);
   const network = useApp((st) => st.network);
   const loadMessages = useApp((st) => st.loadMessages);
   const hydrateChat = useApp((st) => st.hydrateChat);
   const setVisibleChat = useApp((st) => st.setVisibleChat);
   const setReplyTo = useApp((st) => st.setReplyTo);
   const chat = runtime?.chats[chatId];
-  const messages = runtime?.messages[chatId];
+  const messages = useApp((st) => st.runtime[server.id]?.messages[chatId]);
   const loaded = runtime?.loaded[chatId];
   const [, forceTick] = useState(0);
   const [headerH, setHeaderH] = useState(insets.top + 64);
@@ -105,12 +107,14 @@ export function ChatView({ server, chatId, showBack, embedded }: { server: Serve
     if (runtime?.status === 'online' && !loaded) loadMessages(server.id, chatId);
   }, [runtime?.status, loaded, server.id, chatId, loadMessages]);
 
-  // Typing indicators expire client-side; re-render while one is showing.
+  // Typing indicators expire client-side: re-render once, when this one runs out.
+  const typingUntil = runtime?.typing[chatId];
   useEffect(() => {
-    if (!typing) return;
-    const id = setInterval(() => forceTick((n) => n + 1), 2000);
-    return () => clearInterval(id);
-  }, [typing]);
+    const left = (typingUntil ?? 0) - Date.now();
+    if (left <= 0) return;
+    const id = setTimeout(() => forceTick((n) => n + 1), left + 50);
+    return () => clearTimeout(id);
+  }, [typingUntil]);
 
   // Commands the app sent for a control (the model chip's /model) stay out of the conversation.
   const shown = useMemo(() => (messages ?? []).filter((m) => !m.meta?.hidden), [messages]);
@@ -140,7 +144,8 @@ export function ChatView({ server, chatId, showBack, embedded }: { server: Serve
     <KeyboardAvoidingView style={s.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <BlurTargetView ref={target} style={{ flex: 1 }}>
         <MessageList server={server} chatId={chatId} messages={shown} loaded={!!loaded || !!messages?.length}
-          typing={typing} top={headerH} bottom={composerH} onOpen={setSelected} onReply={reply} focus={focus} />
+          typing={typing} top={headerH} bottom={composerH} onOpen={setSelected} onReply={reply} focus={focus}
+          offline={view.kind !== 'online' && view.kind !== 'connecting'} />
       </BlurTargetView>
       <View style={s.headerWrap} onLayout={(e) => setHeaderH(e.nativeEvent.layout.height)} pointerEvents="box-none">
         <Glass target={target} borderless style={[s.header, { paddingTop: topPad + 8 }]}>
@@ -184,6 +189,34 @@ export function ChatView({ server, chatId, showBack, embedded }: { server: Serve
   );
 }
 
+/**
+ * Put a message back in the box to change and send again, with what it replied to. A send that failed also
+ * brings back its photos and files (already uploaded, so nothing is picked again).
+ */
+function editAgain(server: Server, m: Message, failed: boolean) {
+  const st = useApp.getState();
+  st.setDraft(server.id, m.chat_id, m.text);
+  const uploads = failed ? ((m.meta?.attachments ?? []) as Upload[]).filter((u) => u.id) : [];
+  if (uploads.length) {
+    st.updateDraftFiles(server.id, m.chat_id, (files) => [
+      ...files.filter((f) => !uploads.some((u) => u.id === f.localId)),
+      ...uploads.map((u): DraftFile => ({
+        localId: u.id, name: u.name, mime: u.mime, kind: u.kind, size: u.size, progress: 1, status: 'ready', upload: u,
+        previewUri: u.kind === 'image' ? mediaUrl(server, u.url) : undefined,
+      })),
+    ]);
+  }
+  if (m.meta?.reply_to) st.setReplyTo(server.id, m.chat_id, m.meta.reply_to);
+  focusComposer(server.id, m.chat_id);
+}
+
+/** What a screen reader says for a message: who, when, and what it says. */
+function describe(m: Message, who: string, files: number) {
+  const body = m.text ? plainText(m.text) : '';
+  const extra = files ? `${body ? '. ' : ''}${files === 1 ? 'One attachment' : `${files} attachments`}` : '';
+  return `${who}, ${timeOf(m.created_at)}: ${body}${extra}`;
+}
+
 function toReplyRef(m: Message): ReplyRef {
   const first = m.meta?.attachments?.[0];
   const text = m.text ? plainText(m.text).slice(0, 240)
@@ -191,9 +224,9 @@ function toReplyRef(m: Message): ReplyRef {
   return { id: m.id, role: m.role, text };
 }
 
-function MessageList({ server, chatId, messages, loaded, typing, top, bottom, onOpen, onReply, focus }: {
+function MessageList({ server, chatId, messages, loaded, typing, top, bottom, onOpen, onReply, focus, offline }: {
   server: Server; chatId: string; messages: Message[]; loaded: boolean; typing: boolean; top: number; bottom: number;
-  onOpen: (m: Message) => void; onReply: (m: Message) => void; focus: string | null;
+  onOpen: (m: Message) => void; onReply: (m: Message) => void; focus: string | null; offline: boolean;
 }) {
   const t = useTheme();
   const s = useStyles();
@@ -201,45 +234,92 @@ function MessageList({ server, chatId, messages, loaded, typing, top, bottom, on
   const inbox = useApp((st) => st.runtime[server.id]?.inbox);
   const layout = usePrefs((st) => st.prefs.layout);
   const list = useRef<FlatList<Row>>(null);
-  const [away, setAway] = useState<number | null>(null);
+  // Scrolled away from the latest: the newest message then, so only later ones count as new.
+  const [away, setAway] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
-  // Messages already here when the chat opened don't animate in; only new arrivals do.
+  // Messages already here when the chat opened don't animate in; only new arrivals do (not older pages).
   const seen = useRef<Set<string> | null>(null);
   if (seen.current === null && loaded) seen.current = new Set(messages.map((m) => m.id));
+  const today = dayKey(Date.now() / 1000);
 
   const rows = useMemo<Row[]>(() => {
     const out: Row[] = [];
-    let day = '';
+    const days = messages.map((m) => dayKey(m.created_at));
+    const labels = new Map<number, string>();
+    const dayKeys = new Set<string>();
+    let lastSeen = -1;
+    if (seen.current) messages.forEach((m, i) => { if (seen.current!.has(m.id)) lastSeen = i; });
     messages.forEach((m, i) => {
-      const label = dayLabel(m.created_at);
-      if (label !== day) {
-        out.push({ kind: 'day', key: `day-${label}-${i}`, label });
-        day = label;
+      const day = days[i];
+      if (day !== days[i - 1]) {
+        let label = labels.get(day);
+        if (label === undefined) labels.set(day, (label = dayLabel(m.created_at)));
+        // Keyed by the day, so loading older history doesn't remount every separator.
+        const key = dayKeys.has(`day-${day}`) ? `day-${day}-${m.id}` : `day-${day}`;
+        dayKeys.add(key);
+        out.push({ kind: 'day', key, label });
       }
-      const prev = messages[i - 1];
-      const next = messages[i + 1];
       out.push({
         kind: 'msg', key: m.id, m,
-        first: !sameGroup(prev, m) || dayLabel(prev!.created_at) !== label,
-        last: !sameGroup(m, next) || (next ? dayLabel(next.created_at) !== label : true),
+        first: !sameGroup(messages[i - 1], m) || days[i - 1] !== day,
+        last: !sameGroup(m, messages[i + 1]) || days[i + 1] !== day,
         live: typing && i === messages.length - 1,
-        fresh: !!seen.current && !seen.current.has(m.id),
+        fresh: !!seen.current && i > lastSeen,
       });
     });
     return out.reverse(); // inverted: newest at the bottom without manual scrolling
-  }, [messages, typing]);
+  }, [messages, typing, today]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
   const jump = useCallback((id: string) => {
     const index = rowsRef.current.findIndex((r) => r.kind === 'msg' && r.m.id === id);
-    if (index < 0) return;
+    if (index < 0) {
+      // Not loaded yet (an older message): page history in until it's here, then show it.
+      requestFocus(server.id, chatId, id);
+      return;
+    }
     haptic.selection();
     list.current?.scrollToIndex({ index, viewPosition: 0.5, animated: true });
     setFlash(id);
     setTimeout(() => setFlash((f) => (f === id ? null : f)), 1600);
-  }, []);
+  }, [server.id, chatId]);
   const actions = useMemo<Actions>(() => ({ open: onOpen, reply: onReply, jump }), [onOpen, onReply, jump]);
+
+  // Older history, a page at a time as you scroll up: one request at a time, and none while the start of the
+  // chat is what's loaded. That's checked against the oldest message, so after a reconnect replaces what's
+  // loaded with a newer page, scrolling back loads again.
+  const older = useRef(newPaging());
+  const [olderBusy, setOlderBusy] = useState(false);
+  useEffect(() => {
+    older.current = newPaging();
+    setOlderBusy(false);
+  }, [server.id, chatId]);
+  const loadOlder = useCallback(() => {
+    const o = older.current;
+    const current = () => useApp.getState().runtime[server.id]?.messages[chatId];
+    if (!canLoadOlder(o, current())) return;
+    const before = current()?.length ?? 0;
+    o.busy = true;
+    setOlderBusy(true);
+    loadMessages(server.id, chatId, true).catch(() => false).then((ok) => {
+      if (older.current !== o) return;
+      afterOlderPage(o, ok, (current()?.length ?? 0) - before, current());
+      setOlderBusy(false);
+    });
+  }, [server.id, chatId, loadMessages]);
+  const loadedMessages = useApp((st) => st.runtime[server.id]?.messages[chatId]);
+  const startShown = atStart(older.current, loadedMessages);
+
+  // Sending from further up brings you back down to your message.
+  const newest = messages[messages.length - 1];
+  const newestId = useRef(newest?.id);
+  useEffect(() => {
+    if (newest && newest.id !== newestId.current && newest.role === 'user' && (newest.status === 'pending' || newest.status === 'queued')) {
+      list.current?.scrollToOffset({ offset: 0, animated: true });
+    }
+    newestId.current = newest?.id;
+  }, [newest]);
 
   // A message picked in search or the files sheet: page older history in until it's here, then
   // bring it into view. Gives up when a page adds nothing (it was deleted), a page can't be
@@ -280,9 +360,28 @@ function MessageList({ server, chatId, messages, loaded, typing, top, bottom, on
     });
   }, [focus, loaded, messages, paged, jump, loadMessages, server.id, chatId]);
 
+  if (!loaded && messages.length === 0) {
+    return (
+      <View style={[s.center, { flex: 1, paddingTop: top, paddingBottom: bottom, paddingHorizontal: 32, gap: 12 }]}>
+        {offline ? (
+          <>
+            <Text style={s.emptyTitle}>Messages aren't here yet</Text>
+            <Text style={s.emptyText}>They'll load when {server.bot.title} is reachable again.</Text>
+            <Button title="Try again" variant="secondary" size="sm" onPress={() => useApp.getState().retryNow(server.id)} />
+          </>
+        ) : (
+          <>
+            <ActivityIndicator color={t.colors.textSecondary} />
+            <Text style={s.emptyText}>Loading messages…</Text>
+          </>
+        )}
+      </View>
+    );
+  }
   if (loaded && messages.length === 0) return <EmptyChat server={server} chatId={chatId} top={top} bottom={bottom} />;
 
-  const newSince = away === null ? 0 : messages.filter((m) => m.role !== 'user').length - away;
+  const awayAt = away === null ? -1 : messages.findIndex((m) => m.id === away);
+  const newSince = awayAt < 0 ? 0 : messages.slice(awayAt + 1).filter((m) => m.role !== 'user').length;
   return (
     <View style={{ flex: 1 }}>
       <FlatList
@@ -299,7 +398,7 @@ function MessageList({ server, chatId, messages, loaded, typing, top, bottom, on
         )}
         onScroll={(e) => {
           const far = e.nativeEvent.contentOffset.y > AWAY_PX;
-          if (far && away === null) setAway(messages.filter((m) => m.role !== 'user').length);
+          if (far && away === null) setAway(messages[messages.length - 1]?.id ?? '');
           else if (!far && away !== null) setAway(null);
         }}
         scrollEventThrottle={100}
@@ -307,9 +406,12 @@ function MessageList({ server, chatId, messages, loaded, typing, top, bottom, on
           list.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: true });
           setTimeout(() => list.current?.scrollToIndex({ index: info.index, viewPosition: 0.5, animated: true }), 300);
         }}
-        onEndReached={() => messages.length >= 60 && loadMessages(server.id, chatId, true)}
+        onEndReached={loadOlder}
         onEndReachedThreshold={0.4}
         ListHeaderComponent={typing ? <TypingRow server={server} /> : null}
+        ListFooterComponent={olderBusy ? (
+          <View style={s.olderRow}><ActivityIndicator color={t.colors.textSecondary} accessibilityLabel="Loading older messages" /></View>
+        ) : startShown ? <View style={s.olderRow}><Text style={s.olderText}>Start of the conversation</Text></View> : null}
         keyboardShouldPersistTaps="handled"
         initialNumToRender={18}
         maxToRenderPerBatch={12}
@@ -327,6 +429,12 @@ function MessageList({ server, chatId, messages, loaded, typing, top, bottom, on
       ) : null}
     </View>
   );
+}
+
+/** A local calendar day as a number (20261013), cheap to compare across a whole chat. */
+function dayKey(ts: number) {
+  const d = new Date(ts * 1000);
+  return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
 }
 
 function sameGroup(a: Message | undefined, b: Message | undefined) {
@@ -475,6 +583,7 @@ const MessageRow = memo(function MessageRow({ server, message, first, last, live
           delayLongPress={320}
           onHoverIn={() => setHover(true)}
           onHoverOut={() => setHover(false)}
+          accessibilityLabel={describe(message, isBot ? server.bot.title : 'You', attachments.length)}
           accessibilityActions={sendable ? [{ name: 'longpress', label: 'Message options' }, { name: 'reply', label: 'Reply' }] : undefined}
           onAccessibilityAction={(e) => (e.nativeEvent.actionName === 'reply' ? actions.reply(message) : actions.open(message))}
           style={Platform.OS === 'web' ? ({ cursor: 'auto' } as object) : undefined}
@@ -580,9 +689,11 @@ function MessageMenu({ server, message, busy, onClose, onReply, onSelectText }: 
   const [last, setLast] = useState(message);
   if (message && message !== last) setLast(message);
   const m = message ?? last;
+  // Only while the menu is open, and without copying the chat: this runs on every store change.
   const latestBot = useApp((st) => {
-    const list = m ? st.runtime[server.id]?.messages[m.chat_id] : undefined;
-    return list ? [...list].reverse().find((x) => x.role === 'bot')?.id : undefined;
+    const list = message ? st.runtime[server.id]?.messages[message.chat_id] : undefined;
+    for (let i = (list?.length ?? 0) - 1; i >= 0; i--) if (list![i].role === 'bot') return list![i].id;
+    return undefined;
   });
   if (!m) return null;
   const run = (fn: () => void) => () => { onClose(); fn(); };
@@ -600,7 +711,7 @@ function MessageMenu({ server, message, busy, onClose, onReply, onSelectText }: 
         else SystemShare.share({ message: m.text }).catch(() => undefined);
       })} /> : null}
       {m.role === 'user' && m.text ? <SheetAction icon={<Pencil size={20} color={t.colors.text} />} label="Edit and send again" onPress={run(() => {
-        useApp.getState().setDraft(server.id, m.chat_id, m.text);
+        editAgain(server, m, false);
       })} /> : null}
       {m.role === 'bot' && m.id === latestBot && !busy ? <SheetAction icon={<RotateCcw size={20} color={t.colors.text} />} label="Try again" onPress={run(() => {
         haptic.light();
@@ -616,14 +727,13 @@ function FailedActions({ server, message, right }: { server: Server; message: Me
   const s = useStyles();
   const sendMessage = useApp((st) => st.sendMessage);
   const discard = useApp((st) => st.discardMessage);
-  const setDraft = useApp((st) => st.setDraft);
   const clientId = message.meta?.client_id ?? message.id;
   return (
     <View style={[s.state, right && s.stateRight]} accessibilityLiveRegion="polite">
       <RotateCcw size={13} color={t.colors.danger} />
       <Text style={[s.stateText, { color: t.colors.danger }]}>Not delivered</Text>
       <Text accessibilityRole="button" style={s.stateAction} onPress={() => sendMessage(server.id, message.chat_id, message.text, clientId)}>Retry</Text>
-      <Text accessibilityRole="button" style={s.stateAction} onPress={() => { setDraft(server.id, message.chat_id, message.text); discard(server.id, message.chat_id, clientId); }}>Edit</Text>
+      <Text accessibilityRole="button" style={s.stateAction} onPress={() => { editAgain(server, message, true); discard(server.id, message.chat_id, clientId); }}>Edit</Text>
       <Text accessibilityRole="button" style={s.stateAction} onPress={() => discard(server.id, message.chat_id, clientId)}>Delete</Text>
     </View>
   );
@@ -860,6 +970,8 @@ const useStyles = makeStyles((t) => ({
     shadowOffset: { width: 0, height: 3 }, elevation: 4,
   },
   jumpBadge: { position: 'absolute', top: -4, right: -4 },
+  olderRow: { alignItems: 'center', paddingVertical: 14 },
+  olderText: { ...t.type.caption, color: t.colors.textTertiary },
   menuPreview: { ...t.type.callout, color: t.colors.textSecondary, paddingHorizontal: 12, marginBottom: 6 },
   menuNote: { ...t.type.callout, color: t.colors.textSecondary, textAlign: 'center', paddingHorizontal: 12, marginBottom: 6 },
   selectText: { ...t.type.body, color: t.colors.text },

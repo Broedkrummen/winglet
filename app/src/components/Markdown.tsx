@@ -36,8 +36,14 @@ export const Markdown = memo(function Markdown({ text, resolveUrl, tone = 'defau
   } catch {
     return <Text selectable={selectable} style={[s.p, toneStyle(ctx)]}>{text}</Text>;
   }
-  return <View style={s.root}>{renderBlocks(tokens, ctx)}</View>;
+  // Each top-level block renders on its own: as a reply streams in, only the block still growing redraws.
+  return <View style={s.root}>{tokens.map((token, i) => (token.type === 'space' ? null : <Block key={i} token={token} ctx={ctx} />))}</View>;
 });
+
+const Block = memo(function Block({ token, ctx }: { token: Token; ctx: Ctx }) {
+  return <>{renderBlock(token, 0, ctx)}</>;
+}, (a, b) => a.token.raw === b.token.raw && a.ctx.s === b.ctx.s && a.ctx.t === b.ctx.t && a.ctx.tone === b.ctx.tone
+  && a.ctx.sel === b.ctx.sel && a.ctx.resolveUrl === b.ctx.resolveUrl);
 
 function toneStyle(ctx: Ctx) {
   return ctx.tone === 'onAccent' ? ctx.s.onAccent : ctx.tone === 'muted' ? ctx.s.muted : null;

@@ -18,7 +18,7 @@ import { api } from '../../lib/api';
 import { haptic } from '../../lib/haptics';
 import { plainText } from '../../lib/text';
 import { easeOut, useReducedMotion } from '../../lib/motion';
-import { homeChat, useApp } from '../../lib/store';
+import { homeChat, useApp, useServerState } from '../../lib/store';
 import { WIDE_BREAKPOINT } from '../../lib/theme';
 import { makeStyles, useTheme } from '../../lib/themeContext';
 import type { Chat, GoalEntry, InboxItem, Server } from '../../lib/types';
@@ -62,9 +62,9 @@ function HomeFor({ server }: { server: Server }) {
   const tabSpace = useTabBarSpace();
   const { width } = useWindowDimensions();
   const wide = width >= WIDE_BREAKPOINT;
-  const rt = useApp((st) => st.runtime[server.id]);
-  const runtime = useApp((st) => st.runtime);
-  const servers = useApp((st) => st.servers);
+  const rt = useServerState(server.id);
+  // Waiting on other bots: a number, so their chats streaming don't re-render this one.
+  const elsewhere = useApp((st) => st.servers.reduce((n, x) => n + (x.id === server.id ? 0 : st.runtime[x.id]?.pending ?? 0), 0));
   const loadInbox = useApp((st) => st.loadInbox);
   const retryNow = useApp((st) => st.retryNow);
   const [refreshing, setRefreshing] = useState(false);
@@ -78,7 +78,6 @@ function HomeFor({ server }: { server: Server }) {
 
   const head = headline(rt, server.bot.title);
   const pending = pendingItems(rt);
-  const elsewhere = servers.filter((x) => x.id !== server.id).reduce((n, x) => n + (runtime[x.id]?.pending ?? 0), 0);
   const working = workingChats(rt);
   const chats = useMemo(() => Object.values(rt?.chats ?? {}).filter((c) => c.kind === 'chat').sort((a, b) => b.updated_at - a.updated_at).slice(0, 8), [rt?.chats]);
   const updates = useMemo(() => Object.values(rt?.inbox ?? {}).filter((i) => i.kind === 'result').sort((a, b) => b.created_at - a.created_at).slice(0, 3), [rt?.inbox]);
@@ -223,7 +222,7 @@ function Goals({ server }: { server: Server }) {
   const supported = useApp((st) => !!st.runtime[server.id]?.info?.features?.goals);
   const online = useApp((st) => st.runtime[server.id]?.status === 'online');
   const lastReply = useApp((st) => st.runtime[server.id]?.lastReplyAt);
-  const rt = useApp((st) => st.runtime[server.id]);
+  const mainId = useApp((st) => homeChat(st.runtime[server.id]));
   const [goals, setGoals] = useState<GoalEntry[]>([]);
   useEffect(() => {
     if (!supported || !online) return;
@@ -236,13 +235,13 @@ function Goals({ server }: { server: Server }) {
       <View style={s.group}>
         {shown.map((g, i) => (
           <Tap key={g.chat_id} feedback="selection" onPress={() => router.push(`/chat/${server.id}/${g.chat_id}`)}
-            accessibilityLabel={`Goal: ${g.goal.goal}. ${goalStatus(g.goal)}. In ${g.chat_id === homeChat(rt) ? 'the main chat' : g.title}`}
+            accessibilityLabel={`Goal: ${g.goal.goal}. ${goalStatus(g.goal)}. In ${g.chat_id === mainId ? 'the main chat' : g.title}`}
             style={({ hovered }) => [s.goalRow, i > 0 && s.goalDivider, hovered && { backgroundColor: t.colors.surfaceRaised }]}>
             <GoalRing goal={g.goal} size={40} />
             <View style={{ flex: 1, minWidth: 0 }}>
               <Text style={s.goalText} numberOfLines={2}>{g.goal.goal}</Text>
               <Text style={s.goalMeta} numberOfLines={1}>
-                {g.chat_id === homeChat(rt) ? server.bot.title : `#${g.title}`} · {goalStatus(g.goal)}
+                {g.chat_id === mainId ? server.bot.title : `#${g.title}`} · {goalStatus(g.goal)}
               </Text>
             </View>
           </Tap>

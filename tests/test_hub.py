@@ -597,3 +597,16 @@ async def test_push_test_only_rings_the_device_asking(client, hub):
     hub._http.posts.clear()
     data = await (await client.post("/api/push/test", headers={"Authorization": f"Bearer {mine}"})).json()
     assert data["accepted"] == 1 and len(hub._http.posts) == 1
+
+
+def test_chat_previews_read_as_one_line(store):
+    from plugin.store import preview_of
+    assert preview_of("Shopping list:\n- chickpeas\n- coconut milk\n- rice") == "Shopping list: chickpeas, coconut milk, rice"
+    assert preview_of("## Plan\n1. Groceries\n2. Meal prep\n\n| Day | Dinner |\n|---|---|\n| Mon | Pasta |") == \
+        "Plan: Groceries, Meal prep Day · Dinner Mon · Pasta"
+    assert preview_of("> Tip: buy rice.\nDone") == "Tip: buy rice. Done"
+    assert preview_of("a - b") == "a - b"  # a dash inside a sentence stays
+    assert len(preview_of("word " * 100)) == 140
+    chat = store.create_chat("Food")
+    store.add_message(chat["id"], "bot", "List:\n- a\n- b")
+    assert store.get_chat(chat["id"])["preview"] == "List: a, b"

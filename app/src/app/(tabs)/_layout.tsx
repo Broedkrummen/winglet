@@ -17,7 +17,8 @@ export default function TabsLayout() {
   const tabs = (
     <Tabs
       tabBar={() => null}
-      screenOptions={{ headerShown: false, animation: 'fade', sceneStyle: { backgroundColor: t.colors.bg } }}
+      // A tab you can't see doesn't re-render as messages stream in; it catches up when you switch to it.
+      screenOptions={{ headerShown: false, animation: 'fade', sceneStyle: { backgroundColor: t.colors.bg }, freezeOnBlur: true }}
     >
       <Tabs.Screen name="index" options={{ title: 'Home' }} />
       <Tabs.Screen name="chats" options={{ title: 'Chats' }} />

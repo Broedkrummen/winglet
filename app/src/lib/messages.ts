@@ -13,7 +13,11 @@ export function mergeMessages(current: Message[], incoming: Message[], deletedId
   for (const m of older ? [...incoming, ...current] : [...current, ...incoming]) {
     if (deleted.has(m.id)) continue;
     const have = byId.get(m.id);
-    if (!have || m.updated_at >= have.updated_at) byId.set(m.id, { ...m, position: m.position ?? have?.position });
+    if (!have || m.updated_at >= have.updated_at) {
+      // Keep the same object when nothing changes, so rows that didn't change don't re-render.
+      const position = m.position ?? have?.position;
+      byId.set(m.id, position === m.position ? m : { ...m, position });
+    }
   }
   const confirmed = new Set<string>();
   for (const m of byId.values()) {

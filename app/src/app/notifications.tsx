@@ -2,7 +2,7 @@ import * as Clipboard from 'expo-clipboard';
 import { useEffect, useState } from 'react';
 import { Platform, Text, View } from 'react-native';
 import { ScrollView } from 'react-native-gesture-handler';
-import { BotAvatar } from '../components/BotAvatar';
+import { AgentFace } from '../components/AgentFace';
 import { BellOff, BellRing, Copy, Moon } from '../components/icons';
 import { Screen } from '../components/Screen';
 import { Sheet } from '../components/Sheet';
@@ -162,7 +162,7 @@ function NtfySettings({ server }: { server: Server }) {
       <SectionHeader title={server.bot.title} />
       <Card style={{ gap: 14 }}>
         <View style={s.botRow}>
-          <BotAvatar name={server.bot.name} size={36} />
+          <AgentFace server={server} size={36} still />
           <Text style={[s.note, { flex: 1 }]}>
             Android notifications come through the free ntfy app, so Winglet needs no Google services or relay. They only say that {server.bot.title} needs you; details stay on your server.
           </Text>

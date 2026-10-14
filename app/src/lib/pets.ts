@@ -54,3 +54,26 @@ export function petBox(sheet: Pick<PetSheet, 'frame_w' | 'frame_h'>, height: num
   const h = Math.max(1, Math.round(height));
   return { width: Math.max(1, Math.round((h * sheet.frame_w) / sheet.frame_h)), height: h };
 }
+
+/** A stable number for a piece of text (FNV-1a), so the same name or pet always gets the same colour and face. */
+export function hashText(text: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+/** One colour of a palette for a key: the same key always gets the same one. */
+export function paletteColor(palette: readonly string[], key: string): string {
+  return palette[hashText(key) % palette.length];
+}
+
+/**
+ * The colour behind a bot's avatar and Home's glow: its pet's when it has one, so choosing a pet re-tints the
+ * bot everywhere, and the bot's own name's otherwise (the colour it was made with).
+ */
+export function avatarColor(palette: readonly string[], bot: string, pet?: Pick<PetSheet, 'slug'> | null): string {
+  return paletteColor(palette, pet ? `pet:${pet.slug}` : bot || 'hermes');
+}

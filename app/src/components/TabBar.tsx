@@ -3,13 +3,12 @@ import { useEffect, useState, type RefObject } from 'react';
 import { Keyboard, Platform, Pressable, ScrollView, Text, View } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { moodOf } from '../lib/agent';
 import { haptic } from '../lib/haptics';
 import { spring, useReducedMotion } from '../lib/motion';
 import { homeChat, useApp } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
 import { useAddBot } from './AddBot';
-import { BotAvatar } from './BotAvatar';
+import { AgentFace } from './AgentFace';
 import { Glass } from './Glass';
 import { Bot, House, Inbox, MessagesSquare, Plus } from './icons';
 import { Logo } from './Logo';
@@ -144,7 +143,7 @@ export function SideRail() {
             <Tap key={srv.id} accessibilityLabel={`${srv.bot.title}${on ? ', selected' : ''}`} feedback="selection"
               onPress={() => { if (!on) select(srv.id, homeChat(useApp.getState().runtime[srv.id])); }} style={s.railBot}>
               <View style={[s.railBotMark, { opacity: on ? 1 : 0 }]} />
-              <BotAvatar name={srv.bot.name} size={44} shape={on ? 'squircle' : 'circle'} mood={moodOf(runtime[srv.id])} />
+              <AgentFace server={srv} size={44} shape={on ? 'squircle' : 'circle'} still />
               {runtime[srv.id]?.pending ? <Badge count={runtime[srv.id]!.pending} style={s.railBotBadge} /> : null}
             </Tap>
           );

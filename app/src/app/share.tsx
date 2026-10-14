@@ -3,7 +3,7 @@ import { Redirect, router } from 'expo-router';
 import { useEffect } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
-import { BotAvatar } from '../components/BotAvatar';
+import { AgentFace } from '../components/AgentFace';
 import { FileText, Hash, MessageCircle, X } from '../components/icons';
 import { Screen } from '../components/Screen';
 import { Button, Card, IconButton, ListGroup, ListRow, SectionHeader } from '../components/ui';
@@ -54,7 +54,7 @@ export default function ShareScreen() {
         const main = mainChat(rt?.me?.home_chat, rt?.chats, server.deviceId);
         return (
           <Animated.View key={server.id} entering={FadeIn}>
-            <SectionHeader title={server.bot.title} right={<BotAvatar name={server.bot.name} size={22} />} />
+            <SectionHeader title={server.bot.title} right={<AgentFace server={server} size={22} still />} />
             <ListGroup>
               {shareTargets(rt?.chats, main, server.deviceId).map((chat) => (
                 <ListRow key={chat.id} title={chat.main ? `${server.bot.title} (main chat)` : chat.title}

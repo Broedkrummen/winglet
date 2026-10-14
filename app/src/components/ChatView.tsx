@@ -24,8 +24,8 @@ import { plainText } from '../lib/text';
 import { FIXED } from '../lib/theme';
 import { makeStyles, useTheme } from '../lib/themeContext';
 import type { DraftFile, InboxItem, Message, ReplyRef, Server, Upload } from '../lib/types';
-import { AgentFace } from './AgentFace';
-import { BotAvatar, botColor, UserAvatar } from './BotAvatar';
+import { AgentFace, useAvatarColor } from './AgentFace';
+import { UserAvatar } from './BotAvatar';
 import { Composer, focusComposer } from './Composer';
 import { ConnectionBanner } from './ConnectionBanner';
 import { FilesSheet } from './FilesSheet';
@@ -474,6 +474,7 @@ const MessageRow = memo(function MessageRow({ server, message, first, last, live
   const resolve = useCallback((url: string) => mediaUrl(server, url), [server]);
   const entering = fresh ? FadeInDown.duration(260).easing(easeOut) : undefined;
   const [hover, setHover] = useState(false);
+  const botColor = useAvatarColor(server);
 
   if (message.role === 'system') {
     if (message.meta?.inbox_id && inboxItem) {
@@ -529,11 +530,11 @@ const MessageRow = memo(function MessageRow({ server, message, first, last, live
   if (layout === 'compact') {
     content = (
       <View style={[s.compact, first ? { marginTop: 14 } : { marginTop: 2 }]}>
-        <View style={s.gutter}>{first ? (isBot ? <BotAvatar name={server.bot.name} size={36} /> : <UserAvatar size={36} />) : null}</View>
+        <View style={s.gutter}>{first ? (isBot ? <AgentFace server={server} size={36} still /> : <UserAvatar size={36} />) : null}</View>
         <View style={{ flex: 1, minWidth: 0 }}>
           {first ? (
             <View style={s.compactHead}>
-              <Text style={[s.author, { color: isBot ? botColor(server.bot.name) : t.colors.text }]}>{isBot ? server.bot.title : 'You'}</Text>
+              <Text style={[s.author, { color: isBot ? botColor : t.colors.text }]}>{isBot ? server.bot.title : 'You'}</Text>
               <Text style={s.time}>{timeOf(message.created_at)}</Text>
             </View>
           ) : null}
@@ -547,7 +548,7 @@ const MessageRow = memo(function MessageRow({ server, message, first, last, live
       <View style={[s.botRow, first ? { marginTop: 16 } : { marginTop: 4 }]}>
         {first ? (
           <View style={s.botHead}>
-            <BotAvatar name={server.bot.name} size={26} />
+            <AgentFace server={server} size={26} still />
             <Text style={s.botName}>{server.bot.title}</Text>
             <Text style={s.time}>{timeOf(message.created_at)}</Text>
           </View>

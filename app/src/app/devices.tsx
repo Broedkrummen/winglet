@@ -2,7 +2,7 @@ import * as Clipboard from 'expo-clipboard';
 import { router } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { Platform, Share as SystemShare, Text, View } from 'react-native';
-import { BotAvatar } from '../components/BotAvatar';
+import { AgentFace } from '../components/AgentFace';
 import { Activity, Copy, KeyRound, Monitor, QrCode as QrIcon, RefreshCw, ShieldCheck, Smartphone, Trash2, UserPlus } from '../components/icons';
 import { QrCode } from '../components/QrCode';
 import { Screen } from '../components/Screen';
@@ -143,7 +143,7 @@ function ThisPhone({ server }: { server: Server }) {
       <SectionHeader title="This device" />
       <Card style={{ gap: 14 }}>
         <View style={s.meRow}>
-          <BotAvatar name={server.bot.name} size={40} />
+          <AgentFace server={server} size={40} still />
           <View style={{ flex: 1 }}>
             <Text style={s.meName}>{me?.name ?? 'This phone'}</Text>
             <Text style={s.note}>{me?.role === 'member' ? 'Member' : 'Owner'} of {server.bot.title}</Text>

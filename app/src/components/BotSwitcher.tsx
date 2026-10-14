@@ -1,12 +1,11 @@
 import { router } from 'expo-router';
 import { useState } from 'react';
 import { Text, View } from 'react-native';
-import { moodOf } from '../lib/agent';
 import { connectionView } from '../lib/connection';
 import { homeChat, useApp } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
 import { useAddBot } from './AddBot';
-import { BotAvatar } from './BotAvatar';
+import { AgentFace } from './AgentFace';
 import { Check, ChevronDown, Plus, Settings } from './icons';
 import { Sheet, SheetAction } from './Sheet';
 import { Badge, Tap } from './ui';
@@ -30,7 +29,7 @@ export function BotSwitcher() {
     <>
       <Tap feedback="selection" accessibilityLabel={`${server.bot.title}. Switch bot`} onPress={() => setOpen(true)}
         style={({ hovered }) => [s.pill, hovered && { backgroundColor: t.colors.pressed }]}>
-        <BotAvatar name={server.bot.name} size={28} mood={moodOf(runtime[server.id])} />
+        <AgentFace server={server} size={28} still />
         <Text style={s.name} numberOfLines={1}>{server.bot.title}</Text>
         <ChevronDown size={16} color={t.colors.textSecondary} />
         {others ? <Badge count={others} dot style={{ marginLeft: -2 }} /> : null}
@@ -44,7 +43,7 @@ export function BotSwitcher() {
             <Tap key={x.id} feedback="selection" accessibilityLabel={`${x.bot.title}${on ? ', current' : ''}`}
               onPress={() => { if (!on) select(x.id, homeChat(useApp.getState().runtime[x.id])); setOpen(false); }}
               style={({ pressed }) => [s.botRow, pressed && { backgroundColor: t.colors.pressed }]}>
-              <BotAvatar name={x.bot.name} size={44} mood={moodOf(rt)} />
+              <AgentFace server={x} size={44} still />
               <View style={{ flex: 1, minWidth: 0 }}>
                 <Text style={s.botName} numberOfLines={1}>{x.bot.title}</Text>
                 <Text style={s.botSub} numberOfLines={1}>{view.kind === 'online' ? (rt?.pending ? `${rt.pending} waiting for you` : 'Online') : view.title}</Text>

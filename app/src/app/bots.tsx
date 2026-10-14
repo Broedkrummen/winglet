@@ -2,11 +2,10 @@ import { router } from 'expo-router';
 import { useState } from 'react';
 import { Text, View } from 'react-native';
 import { useAddBot } from '../components/AddBot';
-import { BotAvatar } from '../components/BotAvatar';
+import { AgentFace } from '../components/AgentFace';
 import { Plus, Trash2 } from '../components/icons';
 import { Screen } from '../components/Screen';
 import { Button, ListGroup, ListRow, SectionHeader } from '../components/ui';
-import { moodOf } from '../lib/agent';
 import { addressKind, connectionView } from '../lib/connection';
 import { homeChat, useApp } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
@@ -31,7 +30,7 @@ export default function BotsScreen() {
           const parent = srv.parent ? servers.find((x) => x.id === srv.parent) : undefined;
           return (
             <View key={srv.id}>
-              <ListRow icon={<BotAvatar name={srv.bot.name} size={32} mood={moodOf(runtime[srv.id])} />} iconColor="transparent"
+              <ListRow icon={<AgentFace server={srv} size={32} still />} iconColor="transparent"
                 title={srv.bot.title} subtitle={parent ? `${view.kind === 'online' ? 'Online' : view.title} · on ${parent.bot.title}'s server`
                   : `${view.kind === 'online' ? 'Online' : view.title} · ${addressKind(srv.url)}`}
                 onPress={() => { select(srv.id, homeChat(useApp.getState().runtime[srv.id])); router.navigate('/agent'); }} right={parent ? undefined : (

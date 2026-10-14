@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Text, View } from 'react-native';
 import { ScrollView } from 'react-native-gesture-handler';
 import { sendHidden } from '../lib/actions';
@@ -25,21 +25,26 @@ const pickerOf = (m?: Message) => m?.meta?.picker;
 export function ModelButton({ server, chatId }: { server: Server; chatId: string }) {
   const t = useTheme();
   const s = useStyles();
-  const rt = useApp((st) => st.runtime[server.id]);
-  const owner = isOwner(rt);
-  const ready = !!rt?.info?.features?.agent && !!rt?.info?.features?.pickers && rt?.status === 'online';
+  // Primitives only: this sits in the composer, and the runtime object changes with every streamed word.
+  const owner = useApp((st) => isOwner(st.runtime[server.id]));
+  const ready = useApp((st) => {
+    const rt = st.runtime[server.id];
+    return !!rt?.info?.features?.agent && !!rt?.info?.features?.pickers && rt?.status === 'online';
+  });
   const [open, setOpen] = useState(false);
+  const close = useCallback(() => setOpen(false), []);
   const [info, setInfo] = useState<AgentInfo | null>(null);
   // Re-read after a model card in this chat is answered.
   const picks = useApp((st) => (st.runtime[server.id]?.messages[chatId] ?? [])
     .filter((m) => m.meta?.picker?.kind === 'model' && m.meta.picker.status === 'done').length);
 
+  // Also re-read when the sheet opens or closes, so a reasoning change made there shows next time.
   useEffect(() => {
     if (!ready || !owner) return;
     let alive = true;
     api<AgentInfo>(server, `/api/agent?chat=${encodeURIComponent(chatId)}`).then((i) => alive && setInfo(i)).catch(() => undefined);
     return () => { alive = false; };
-  }, [server, chatId, ready, owner, picks]);
+  }, [server, chatId, ready, owner, picks, open]);
 
   if (!ready || !owner || !info?.configured.model) return null;
   const model = info.chat?.model || info.configured.model;
@@ -50,7 +55,7 @@ export function ModelButton({ server, chatId }: { server: Server; chatId: string
         accessibilityLabel={`Model: ${model}${differs ? ', chosen for this chat' : ''}. Change the model or reasoning`}>
         <Cpu size={20} color={differs ? t.colors.onAccentSoft : t.colors.text} />
       </Tap>
-      <ModelSheet server={server} chatId={chatId} visible={open} onClose={() => setOpen(false)} model={model} info={info} />
+      <ModelSheet server={server} chatId={chatId} visible={open} onClose={close} model={model} info={info} />
     </>
   );
 }
@@ -73,37 +78,50 @@ function ModelSheet({ server, chatId, visible, onClose, model, info }: {
     const list = st.runtime[server.id]?.messages[chatId] ?? [];
     return list.find((m) => (slot.claimed ? m.id === slot.claimed : pickerOf(m)?.kind === 'choice' && !slot.before.includes(m.id)));
   });
-  const shown = useRef<string | null>(null);
+  const [shownId, setShownId] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   const [asked, setAsked] = useState(false);
   const [reasoningFailed, setReasoningFailed] = useState(false);
+  // The "didn't answer" timers: one of each at a time, and none left running once the sheet is closed.
+  const modelTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const reasoningTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const stopTimers = () => { clearTimeout(modelTimer.current); clearTimeout(reasoningTimer.current); };
+  useEffect(() => stopTimers, []);
 
   const askModel = () => {
     setFailed(false);
-    shown.current = null;
+    setShownId(null);
     sendHidden(server, chatId, '/model', 'models');
-    setTimeout(() => setFailed(true), WAIT_MS);
+    clearTimeout(modelTimer.current);
+    modelTimer.current = setTimeout(() => setFailed(true), WAIT_MS);
   };
+
+  const p = pickerOf(latest);
+  const openCard = !!latest && p?.status === 'open' && p.expires_at * 1000 > Date.now();
 
   // Coming up: reuse a card that's still open, else ask Hermes for a fresh one.
   useEffect(() => {
     if (!visible) {
-      shown.current = null;
+      stopTimers();
+      setShownId(null);
+      setFailed(false);
       useModelSheet.getState().clear(key);
       setAsked(false);
       setReasoningFailed(false);
       return;
     }
-    const p = pickerOf(latest);
-    if (p?.status === 'open' && p.expires_at * 1000 > Date.now()) shown.current = latest!.id;
+    if (openCard) setShownId(latest!.id);
     else askModel();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
 
   // A card that arrives after asking is the one to show.
-  const p = pickerOf(latest);
-  if (visible && latest && p?.status === 'open' && p.expires_at * 1000 > Date.now() && !shown.current) shown.current = latest.id;
-  const card = latest && shown.current === latest.id ? latest : undefined;
+  useEffect(() => {
+    if (!visible || !openCard || shownId) return;
+    clearTimeout(modelTimer.current);
+    setShownId(latest!.id);
+  }, [visible, openCard, shownId, latest]);
+  const card = latest && shownId === latest.id ? latest : undefined;
   const cardDone = pickerOf(card)?.status === 'done';
 
   // After a pick, a moment to see Hermes's confirmation, then back to the chat.
@@ -115,7 +133,9 @@ function ModelSheet({ server, chatId, visible, onClose, model, info }: {
 
   // The reasoning card: note the first new one as ours, so the chat never shows it.
   useEffect(() => {
-    if (reasoning && !slot?.claimed) useModelSheet.getState().claim(key, reasoning.id);
+    if (!reasoning) return;
+    clearTimeout(reasoningTimer.current);
+    if (!slot?.claimed) useModelSheet.getState().claim(key, reasoning.id);
   }, [reasoning, slot?.claimed, key]);
 
   const askReasoning = () => {
@@ -125,7 +145,8 @@ function ModelSheet({ server, chatId, visible, onClose, model, info }: {
     useModelSheet.getState().ask(key, before, WAIT_MS / 1000 + 3);
     setAsked(true);
     sendHidden(server, chatId, '/reasoning', 'reasoning levels');
-    setTimeout(() => setReasoningFailed(true), WAIT_MS);
+    clearTimeout(reasoningTimer.current);
+    reasoningTimer.current = setTimeout(() => setReasoningFailed(true), WAIT_MS);
   };
   const effort = info.configured.reasoning_effort;
 

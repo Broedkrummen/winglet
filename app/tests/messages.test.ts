@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { chatMessages, groupActivity, inSheet, isActivity, markFailed, mergeMessages } from '../src/lib/messages.ts';
+import { activityKind, chatMessages, groupActivity, inSheet, isActivity, markFailed, mergeMessages } from '../src/lib/messages.ts';
 import type { Message } from '../src/lib/types.ts';
 
 const msg = (id: string, over: Partial<Message> = {}): Message => ({
@@ -127,4 +127,33 @@ test('the chat keeps a picker typed by hand and drops the ones the sheet asked f
   ];
   assert.deepEqual(chatMessages(list, undefined).map((m) => m.id), ['ask2', 'm2', 'x', 'hi', 'reply']);
   assert.deepEqual(chatMessages([], undefined), []);
+});
+
+test('repeated tool lines still count as progress', () => {
+  assert.ok(isActivity(say('a', '🔍 web_search: "cats" (×3)')));
+  assert.ok(isActivity(say('b', '⚡ read_file... (×2)')));
+});
+
+test("Hermes's friendly wording folds only where an answer follows it", () => {
+  const friendly = say('p', '🔍 Searching the web for cats in space\n📖 Reading skill pdf');
+  assert.equal(activityKind(friendly), 'maybe');
+  assert.ok(!isActivity(friendly)); // not certain on its own
+  const ids = (list: Message[], typing = false) => groupActivity(list, typing).map((e) => (e.kind === 'msg' ? e.m.id : `${e.id}+${e.items.length}`));
+  const u = say('u', 'find cats', { role: 'user' });
+  const answer = say('r', 'There are three breeds.');
+  assert.deepEqual(ids([u, friendly, answer]), ['u', 'p+1', 'r']); // the answer came
+  assert.deepEqual(ids([u, friendly], true), ['u', 'p+1']); // still working on it
+  assert.deepEqual(ids([u, friendly]), ['u', 'p']); // ended on it: it may be the answer, so it shows
+  assert.deepEqual(ids([u, friendly, say('u2', 'thanks', { role: 'user' })], true), ['u', 'p', 'u2']); // an old turn that ended on it
+});
+
+test('an answer that merely starts like progress is not folded', () => {
+  const u = say('u', 'status?', { role: 'user' });
+  for (const text of ['📖 Reading is fun, but the report says otherwise.\nIt is done.', '🎉 Running late, sorry!\nHere you go.', '✅ Writing the file took a while']) {
+    const m = say('a', text);
+    // all lines must look like progress; the second line of the first two doesn't, the third is a lone line
+    const out = groupActivity([u, m, say('b', 'Done.')]).map((e) => e.kind);
+    if (text.includes('\n')) assert.deepEqual(out, ['msg', 'msg', 'msg']);
+    else assert.equal(activityKind(m), 'maybe'); // alone it can't be told apart; it folds only with an answer after it
+  }
 });

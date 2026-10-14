@@ -246,7 +246,7 @@ function MessageList({ server, chatId, messages, loaded, typing, top, bottom, on
   const rows = useMemo<Row[]>(() => {
     const out: Row[] = [];
     // Hermes's backend activity (tool calls, status notes) folds into one "…" entry between the replies.
-    const entries = groupActivity(messages);
+    const entries = groupActivity(messages, typing);
     const idOf = (e: Entry) => (e.kind === 'msg' ? e.m.id : e.id);
     const timeOf = (e: Entry) => (e.kind === 'msg' ? e.m.created_at : e.items[0].created_at);
     const days = entries.map((e) => dayKey(timeOf(e)));

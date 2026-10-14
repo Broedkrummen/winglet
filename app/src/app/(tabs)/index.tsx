@@ -1,29 +1,31 @@
 import { Redirect, router } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { Platform, RefreshControl, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
-import Animated, { FadeInDown } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, RadialGradient, Rect, Stop } from 'react-native-svg';
-import { AgentFace } from '../../components/AgentFace';
-import { BotAvatar, botColor } from '../../components/BotAvatar';
+import { useAddBot } from '../../components/AddBot';
+import { AgentFace, useAvatarColor } from '../../components/AgentFace';
 import { BotSwitcher } from '../../components/BotSwitcher';
 import { ConnectionBanner } from '../../components/ConnectionBanner';
 import { GoalRing, goalStatus } from '../../components/Goal';
-import { ArrowUp, Hash, MessageSquarePlus, Plus, Sparkles, Square } from '../../components/icons';
+import { ArrowUp, ChevronRight, Hash, MessageSquarePlus, Plus, Sparkles, Square } from '../../components/icons';
 import { InboxCard } from '../../components/InboxCards';
 import { useTabBarSpace } from '../../components/TabBar';
-import { Chip, IconButton, SectionHeader, Tap } from '../../components/ui';
-import { ago, chatName, greeting, headline, pendingItems, workingChats } from '../../lib/agent';
+import { Badge, IconButton, SectionHeader, Tap } from '../../components/ui';
+import { ago, chatName, headline, pendingItems, workingChats } from '../../lib/agent';
 import { api } from '../../lib/api';
+import { askMainChat, startNewChat } from '../../lib/actions';
+import { mainFirst } from '../../lib/bots';
+import { connectionView } from '../../lib/connection';
 import { haptic } from '../../lib/haptics';
+import { setMainBot, useMainBot } from '../../lib/mainBot';
 import { plainText } from '../../lib/text';
-import { easeOut, useReducedMotion } from '../../lib/motion';
+import { useReducedMotion } from '../../lib/motion';
+import { usePrefs } from '../../lib/prefs';
 import { homeChat, useApp, useServerState } from '../../lib/store';
 import { WIDE_BREAKPOINT } from '../../lib/theme';
 import { makeStyles, useTheme } from '../../lib/themeContext';
 import type { Chat, GoalEntry, InboxItem, Server } from '../../lib/types';
-
-const SUGGESTIONS = ['What can you do?', 'Plan my day', 'What did you get done today?'];
 
 function pairFromHash(): { code: string; fp?: string } | null {
   if (Platform.OS !== 'web') return null;
@@ -34,17 +36,18 @@ function pairFromHash(): { code: string; fp?: string } | null {
 }
 
 /**
- * Home: what your agent is doing and what it needs from you, before anything else. The face up top
- * reacts to its state; the cards below are ordered by urgency.
+ * Home: one bot up front (the main one to begin with) and the rest a tap away. Its face reacts to what it's
+ * doing; below it, what it needs from you and where you left off, ordered by urgency.
  */
 export default function Home() {
   const servers = useApp((s) => s.servers);
   const selection = useApp((s) => s.selection);
   const select = useApp((s) => s.select);
+  const main = useMainBot();
   const hashLink = pairFromHash();
   useEffect(() => {
-    if (!selection.serverId && servers[0]) select(servers[0].id, homeChat(useApp.getState().runtime[servers[0].id]));
-  }, [selection.serverId, servers, select]);
+    if (!selection.serverId && main) select(main.id, homeChat(useApp.getState().runtime[main.id]));
+  }, [selection.serverId, main, select]);
 
   if (hashLink) {
     globalThis.history?.replaceState(null, '', '/');
@@ -65,6 +68,7 @@ function HomeFor({ server }: { server: Server }) {
   const rt = useServerState(server.id);
   // Waiting on other bots: a number, so their chats streaming don't re-render this one.
   const elsewhere = useApp((st) => st.servers.reduce((n, x) => n + (x.id === server.id ? 0 : st.runtime[x.id]?.pending ?? 0), 0));
+  const main = useMainBot();
   const loadInbox = useApp((st) => st.loadInbox);
   const retryNow = useApp((st) => st.retryNow);
   const [refreshing, setRefreshing] = useState(false);
@@ -79,7 +83,6 @@ function HomeFor({ server }: { server: Server }) {
   const head = headline(rt, server.bot.title);
   const pending = pendingItems(rt);
   const working = workingChats(rt);
-  const chats = useMemo(() => Object.values(rt?.chats ?? {}).filter((c) => c.kind === 'chat').sort((a, b) => b.updated_at - a.updated_at).slice(0, 8), [rt?.chats]);
   const updates = useMemo(() => Object.values(rt?.inbox ?? {}).filter((i) => i.kind === 'result').sort((a, b) => b.created_at - a.created_at).slice(0, 3), [rt?.inbox]);
 
   const refresh = async () => {
@@ -97,26 +100,28 @@ function HomeFor({ server }: { server: Server }) {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={t.colors.accent} colors={[t.colors.accentFill]} progressBackgroundColor={t.colors.surfaceRaised} />}
         keyboardShouldPersistTaps="handled"
       >
-        <Aurora color={botColor(server.bot.name)} />
+        <Aurora server={server} />
         <View style={[s.column, wide && s.columnWide]}>
           <View style={s.topRow}>
             {wide ? <View /> : <BotSwitcher />}
-            <IconButton label="New chat" variant="filled" onPress={() => newChat(server.id)}>
+            <IconButton label="New chat" variant="filled" onPress={() => startNewChat(server.id)}>
               <MessageSquarePlus size={20} color={t.colors.text} />
             </IconButton>
           </View>
 
           <View style={s.presence}>
-            <AgentFace server={server} size={108} animated glow />
-            <Text style={s.greeting}>{greeting()}</Text>
-            <Text style={s.headline} accessibilityRole="header" accessibilityLiveRegion="polite">{head.title}</Text>
-            <Text style={s.detail}>{head.detail}</Text>
+            <AgentFace server={server} size={116} animated glow />
+            <Text style={s.name} accessibilityRole="header">{server.bot.title}</Text>
+            <Text style={s.status} accessibilityLiveRegion="polite">{head.title}</Text>
+            {main?.id === server.id ? null : (
+              <Text accessibilityRole="button" style={s.makeMain} onPress={() => { haptic.selection(); setMainBot(server.id); }} suppressHighlighting>
+                Make {server.bot.title} my main bot
+              </Text>
+            )}
           </View>
 
           <QuickAsk server={server} />
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.suggestions}>
-            {SUGGESTIONS.map((q) => <Chip key={q} label={q} icon={<Sparkles size={14} color={t.colors.accent} />} onPress={() => ask(server.id, q)} />)}
-          </ScrollView>
+          <BotStrip current={server} />
 
           <ConnectionBanner server={server} />
 
@@ -145,15 +150,7 @@ function HomeFor({ server }: { server: Server }) {
 
           <Goals server={server} />
 
-          <Section title="Continue" action="All chats" onAction={() => router.navigate('/chats')}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 12, paddingRight: 4 }}>
-              {chats.map((chat, i) => <ChatCard key={chat.id} server={server} chat={chat} index={i} />)}
-              <Tap feedback="selection" accessibilityLabel="New chat" onPress={() => newChat(server.id)} style={[s.chatCard, s.newCard]}>
-                <View style={s.newIcon}><Plus size={22} color={t.colors.onAccentSoft} /></View>
-                <Text style={s.newText}>New chat</Text>
-              </Tap>
-            </ScrollView>
-          </Section>
+          <Continue server={server} />
 
           {updates.length ? (
             <Section title="Recent updates" action="Open" onAction={() => router.push(`/chat/${server.id}/home`)}>
@@ -168,23 +165,6 @@ function HomeFor({ server }: { server: Server }) {
   );
 }
 
-async function newChat(serverId: string) {
-  try {
-    const chat = await useApp.getState().createChat(serverId);
-    if (chat) router.push(`/chat/${serverId}/${chat.id}`);
-  } catch {
-    useApp.getState().toast({ serverId, title: "Couldn't start a chat", body: 'Your bot is out of reach right now. Try again when it’s back.' });
-  }
-}
-
-/** Send a question to the main chat and go there to watch the answer arrive. */
-function ask(serverId: string, text: string) {
-  haptic.light();
-  const main = homeChat(useApp.getState().runtime[serverId]);
-  useApp.getState().sendMessage(serverId, main, text);
-  router.push(`/chat/${serverId}/${main}`);
-}
-
 function QuickAsk({ server }: { server: Server }) {
   const t = useTheme();
   const s = useStyles();
@@ -193,19 +173,20 @@ function QuickAsk({ server }: { server: Server }) {
     const v = text.trim();
     if (!v) return;
     setText('');
-    ask(server.id, v);
+    haptic.light();
+    askMainChat(server.id, v);
   };
   return (
     <View style={s.ask}>
       <TextInput
         value={text}
         onChangeText={setText}
-        placeholder={`Ask ${server.bot.title} anything…`}
+        placeholder={`Message ${server.bot.title}`}
         placeholderTextColor={t.colors.textTertiary}
         style={s.askInput}
         returnKeyType="send"
         onSubmitEditing={send}
-        accessibilityLabel={`Ask ${server.bot.title}`}
+        accessibilityLabel={`Message ${server.bot.title}`}
       />
       <Tap feedback="light" accessibilityLabel="Send" disabled={!text.trim()} onPress={send}
         style={[s.askSend, { backgroundColor: text.trim() ? t.colors.accentFill : t.colors.surfaceSunken }]}>
@@ -293,22 +274,74 @@ function PulseDot() {
   );
 }
 
-function ChatCard({ server, chat, index }: { server: Server; chat: Chat; index: number }) {
+/** Where you left off: the last chat you touched, one tap to pick it up. */
+function Continue({ server }: { server: Server }) {
   const t = useTheme();
   const s = useStyles();
-  const general = useApp((st) => homeChat(st.runtime[server.id])) === chat.id;
+  const rt = useServerState(server.id);
+  const mainId = homeChat(rt);
+  // Chats it's working in show above as "Working now", so this is the latest one that isn't.
+  const last = useMemo(() => {
+    const busy = new Set(workingChats(rt).map((c) => c.id));
+    return Object.values(rt?.chats ?? {}).filter((c) => c.kind === 'chat' && !busy.has(c.id)).sort((x, y) => y.updated_at - x.updated_at)[0];
+  }, [rt]);
+  if (!last) return null;
+  const general = last.id === mainId;
   return (
-    <Animated.View entering={FadeInDown.delay(40 * index).duration(260).easing(easeOut)}>
-      <Tap feedback="selection" scaleTo={0.97} accessibilityLabel={`${chat.title}. ${plainText(chat.preview)}`} onPress={() => router.push(`/chat/${server.id}/${chat.id}`)}
-        style={({ hovered }) => [s.chatCard, hovered && { borderColor: t.colors.borderStrong }]}>
-        <View style={s.cardTop}>
-          {general ? <BotAvatar name={server.bot.name} size={30} /> : <View style={s.hash}><Hash size={16} color={t.colors.onAccentSoft} /></View>}
-          <Text style={s.time}>{ago(chat.updated_at)}</Text>
+    <Section title="Continue" action="All chats" onAction={() => router.navigate('/chats')}>
+      <Tap feedback="selection" scaleTo={0.98} accessibilityLabel={`Continue ${general ? 'the main chat' : last.title}. ${plainText(last.preview)}`}
+        onPress={() => router.push(`/chat/${server.id}/${last.id}`)}
+        style={({ hovered }) => [s.continue, hovered && { borderColor: t.colors.borderStrong }]}>
+        {general ? <AgentFace server={server} size={40} still /> : <View style={s.hash}><Hash size={18} color={t.colors.onAccentSoft} /></View>}
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={s.cardTitle} numberOfLines={1}>{general ? 'Main chat' : last.title}</Text>
+          <Text style={s.cardBody} numberOfLines={1}>{plainText(last.preview) || 'No messages yet'}</Text>
         </View>
-        <Text style={s.cardTitle} numberOfLines={1}>{general ? 'Main chat' : chat.title}</Text>
-        <Text style={s.cardBody} numberOfLines={2}>{plainText(chat.preview) || 'No messages yet'}</Text>
+        <Text style={s.time}>{ago(last.updated_at)}</Text>
+        <ChevronRight size={18} color={t.colors.textTertiary} />
       </Tap>
-    </Animated.View>
+    </Section>
+  );
+}
+
+/** Your other bots as a compact row: tap one to bring it up front. The main bot stays easy to get back to. */
+function BotStrip({ current }: { current: Server }) {
+  const t = useTheme();
+  const s = useStyles();
+  const servers = useApp((st) => st.servers);
+  const runtime = useApp((st) => st.runtime);
+  const network = useApp((st) => st.network);
+  const select = useApp((st) => st.select);
+  const chosen = usePrefs((st) => st.prefs.mainBot);
+  const addBot = useAddBot();
+  const ordered = mainFirst(servers, chosen);
+  const others = ordered.filter((x) => x.id !== current.id);
+  return (
+    <>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.strip}>
+        {others.map((x) => {
+          const rt = runtime[x.id];
+          const view = connectionView(network, rt, x.bot.title);
+          const status = view.kind === 'online' ? (rt?.pending ? 'busy' : 'online') : view.kind === 'connecting' ? 'connecting' : 'offline';
+          return (
+            <Tap key={x.id} feedback="selection" scaleTo={0.95} onPress={() => select(x.id, homeChat(useApp.getState().runtime[x.id]))}
+              accessibilityLabel={`${x.bot.title}${x === ordered[0] ? ', main bot' : ''}${rt?.pending ? `, ${rt.pending} waiting` : ''}. Switch to it`} style={s.botTile}>
+              <View>
+                <AgentFace server={x} size={48} status={status} still />
+                {rt?.pending ? <Badge count={rt.pending} style={{ position: 'absolute', top: -4, right: -6 }} /> : null}
+              </View>
+              <Text style={s.botTileName} numberOfLines={1}>{x.bot.title}</Text>
+              {x === ordered[0] ? <Text style={s.botTileTag}>Main</Text> : null}
+            </Tap>
+          );
+        })}
+        <Tap feedback="selection" scaleTo={0.95} accessibilityLabel="Add a bot" onPress={addBot.open} style={s.botTile}>
+          <View style={s.addTile}><Plus size={22} color={t.colors.success} /></View>
+          <Text style={s.botTileName}>Add</Text>
+        </Tap>
+      </ScrollView>
+      {addBot.sheet}
+    </>
   );
 }
 
@@ -329,8 +362,9 @@ function UpdateRow({ server, item, first }: { server: Server; item: InboxItem; f
 }
 
 /** A soft glow in the bot's colour behind the top of Home. On true black it reads like light. */
-function Aurora({ color }: { color: string }) {
+function Aurora({ server }: { server: Server }) {
   const t = useTheme();
+  const color = useAvatarColor(server);
   const { width } = useWindowDimensions();
   const strength = t.scheme === 'dark' ? 0.42 : 0.2;
   return (
@@ -360,10 +394,10 @@ const useStyles = makeStyles((t) => ({
   column: { paddingHorizontal: 16, width: '100%' },
   columnWide: { maxWidth: 760, alignSelf: 'center', paddingHorizontal: 28 },
   topRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 48 },
-  presence: { alignItems: 'center', paddingTop: 18, paddingBottom: 20, gap: 4 },
-  greeting: { ...t.type.caption, fontSize: 13.5, color: t.colors.textSecondary, marginTop: 16, letterSpacing: 0.2 },
-  headline: { ...t.type.display, color: t.colors.text, textAlign: 'center' },
-  detail: { ...t.type.callout, color: t.colors.textSecondary, textAlign: 'center', maxWidth: 340, marginTop: 2 },
+  presence: { alignItems: 'center', paddingTop: 12, paddingBottom: 20, gap: 4 },
+  name: { ...t.type.display, color: t.colors.text, textAlign: 'center', marginTop: 14 },
+  status: { ...t.type.callout, color: t.colors.textSecondary, textAlign: 'center' },
+  makeMain: { ...t.type.caption, fontFamily: t.fonts.semibold, color: t.colors.accent, paddingVertical: 8 },
   ask: {
     flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 56, paddingLeft: 20, paddingRight: 7, borderRadius: t.radius.pill,
     backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.borderStrong,
@@ -374,7 +408,15 @@ const useStyles = makeStyles((t) => ({
     ...(Platform.OS === 'web' ? ({ outlineStyle: 'none' } as object) : {}),
   },
   askSend: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center' },
-  suggestions: { gap: 8, paddingVertical: 12, paddingHorizontal: 2 },
+  strip: { gap: 14, paddingVertical: 14, paddingHorizontal: 2 },
+  botTile: { width: 64, alignItems: 'center', gap: 4 },
+  botTileName: { ...t.type.caption, fontFamily: t.fonts.semibold, color: t.colors.text, textAlign: 'center', maxWidth: 64 },
+  botTileTag: { ...t.type.caption, fontSize: 11, color: t.colors.textTertiary, marginTop: -3 },
+  addTile: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderStyle: 'dashed', borderColor: t.colors.borderStrong },
+  continue: {
+    flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingVertical: 12, minHeight: 64, borderRadius: t.radius.lg,
+    backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border,
+  },
   link: { ...t.type.callout, fontFamily: t.fonts.semibold, color: t.colors.accent, paddingVertical: 6 },
   elsewhere: {
     flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 12, paddingHorizontal: 14, paddingVertical: 12,
@@ -391,18 +433,10 @@ const useStyles = makeStyles((t) => ({
     backgroundColor: t.colors.surfaceSunken,
   },
   stopText: { fontFamily: t.fonts.semibold, fontSize: 13.5, color: t.colors.text },
-  chatCard: {
-    width: 200, minHeight: 132, padding: 14, gap: 6, borderRadius: t.radius.lg,
-    backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border,
-  },
-  cardTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
-  hash: { width: 30, height: 30, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: t.colors.accentSoft },
+  hash: { width: 40, height: 40, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: t.colors.accentSoft },
   time: { ...t.type.caption, color: t.colors.textTertiary },
   cardTitle: { ...t.type.bodyStrong, fontSize: 15.5, color: t.colors.text },
   cardBody: { ...t.type.callout, color: t.colors.textSecondary },
-  newCard: { alignItems: 'center', justifyContent: 'center', width: 132, borderStyle: 'dashed', borderColor: t.colors.borderStrong, backgroundColor: 'transparent' },
-  newIcon: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: t.colors.accentSoft },
-  newText: { ...t.type.callout, fontFamily: t.fonts.semibold, color: t.colors.text, marginTop: 6 },
   group: { backgroundColor: t.colors.surface, borderRadius: t.radius.lg, borderWidth: 1, borderColor: t.colors.border, overflow: 'hidden' },
   update: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingVertical: 12, minHeight: 60 },
   goalRow: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 14, paddingVertical: 14 },

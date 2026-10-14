@@ -6,7 +6,9 @@ import { AgentFace } from '../components/AgentFace';
 import { Plus, Trash2 } from '../components/icons';
 import { Screen } from '../components/Screen';
 import { Button, ListGroup, ListRow, SectionHeader } from '../components/ui';
+import { mainFirst } from '../lib/bots';
 import { addressKind, connectionView } from '../lib/connection';
+import { usePrefs } from '../lib/prefs';
 import { homeChat, useApp } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
 
@@ -21,18 +23,19 @@ export default function BotsScreen() {
   const select = useApp((st) => st.select);
   const [confirm, setConfirm] = useState<string | null>(null);
   const addBot = useAddBot();
+  const chosenMain = usePrefs((st) => st.prefs.mainBot);
   return (
     <Screen title="Your bots" subtitle="Each bot is a Hermes profile on one of your machines.">
       <SectionHeader title={`${servers.length} paired`} />
       <ListGroup>
-        {servers.map((srv) => {
+        {mainFirst(servers, chosenMain).map((srv, i) => {
           const view = connectionView(network, runtime[srv.id], srv.bot.title);
           const parent = srv.parent ? servers.find((x) => x.id === srv.parent) : undefined;
           return (
             <View key={srv.id}>
               <ListRow icon={<AgentFace server={srv} size={32} still />} iconColor="transparent"
-                title={srv.bot.title} subtitle={parent ? `${view.kind === 'online' ? 'Online' : view.title} · on ${parent.bot.title}'s server`
-                  : `${view.kind === 'online' ? 'Online' : view.title} · ${addressKind(srv.url)}`}
+                title={srv.bot.title} subtitle={`${i === 0 ? 'Main · ' : ''}${parent ? `${view.kind === 'online' ? 'Online' : view.title} · on ${parent.bot.title}'s server`
+                  : `${view.kind === 'online' ? 'Online' : view.title} · ${addressKind(srv.url)}`}`}
                 onPress={() => { select(srv.id, homeChat(useApp.getState().runtime[srv.id])); router.navigate('/agent'); }} right={parent ? undefined : (
                   <Button size="sm" variant={confirm === srv.id ? 'danger' : 'ghost'} title={confirm === srv.id ? 'Remove' : ''}
                     accessibilityLabel={confirm === srv.id ? `Confirm removing ${srv.bot.title}` : `Remove ${srv.bot.title}`}

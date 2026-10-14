@@ -1,7 +1,9 @@
 import { router } from 'expo-router';
 import { useState } from 'react';
 import { Text, View } from 'react-native';
+import { mainFirst } from '../lib/bots';
 import { connectionView } from '../lib/connection';
+import { usePrefs } from '../lib/prefs';
 import { homeChat, useApp } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
 import { useAddBot } from './AddBot';
@@ -19,6 +21,7 @@ export function BotSwitcher() {
   const network = useApp((st) => st.network);
   const selection = useApp((st) => st.selection);
   const select = useApp((st) => st.select);
+  const chosen = usePrefs((st) => st.prefs.mainBot);
   const [open, setOpen] = useState(false);
   const addBot = useAddBot();
   const server = servers.find((x) => x.id === selection.serverId) ?? servers[0];
@@ -35,7 +38,7 @@ export function BotSwitcher() {
         {others ? <Badge count={others} dot style={{ marginLeft: -2 }} /> : null}
       </Tap>
       <Sheet visible={open} onClose={() => setOpen(false)} title="Your bots">
-        {servers.map((x) => {
+        {mainFirst(servers, chosen).map((x, i) => {
           const rt = runtime[x.id];
           const view = connectionView(network, rt, x.bot.title);
           const on = x.id === server.id;
@@ -46,7 +49,9 @@ export function BotSwitcher() {
               <AgentFace server={x} size={44} still />
               <View style={{ flex: 1, minWidth: 0 }}>
                 <Text style={s.botName} numberOfLines={1}>{x.bot.title}</Text>
-                <Text style={s.botSub} numberOfLines={1}>{view.kind === 'online' ? (rt?.pending ? `${rt.pending} waiting for you` : 'Online') : view.title}</Text>
+                <Text style={s.botSub} numberOfLines={1}>
+                  {i === 0 ? 'Main · ' : ''}{view.kind === 'online' ? (rt?.pending ? `${rt.pending} waiting for you` : 'Online') : view.title}
+                </Text>
               </View>
               {rt?.pending ? <Badge count={rt.pending} /> : null}
               {on ? <Check size={20} color={t.colors.accent} /> : null}

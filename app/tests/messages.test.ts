@@ -157,3 +157,12 @@ test('an answer that merely starts like progress is not folded', () => {
     else assert.equal(activityKind(m), 'maybe'); // alone it can't be told apart; it folds only with an answer after it
   }
 });
+
+test('a reply still streaming in is not taken for friendly progress, even if its first line reads like it', () => {
+  const u = say('u', 'what should I read?', { role: 'user' });
+  const streaming = say('a', '📖 Reading list for this week', { status: 'streaming' });
+  assert.equal(activityKind(streaming), null);
+  assert.deepEqual(groupActivity([u, streaming], true).map((e) => e.kind), ['msg', 'msg']);
+  // Tool lines with the tool's own name are progress however they arrive.
+  assert.equal(activityKind(say('p', '🔍 web_search: "cats"', { status: 'streaming' })), 'sure');
+});

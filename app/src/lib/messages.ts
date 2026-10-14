@@ -75,6 +75,8 @@ export function activityKind(m: Message): 'sure' | 'maybe' | null {
   const lines = m.text.split('\n').filter((l) => l.trim());
   if (!lines.length) return null;
   if (lines.every(isProgressLine)) return 'sure';
+  // Hermes posts its progress whole; a reply still streaming in that starts like one is a reply.
+  if (m.status === 'streaming') return null;
   return lines.every((l) => isProgressLine(l) || isFriendlyLine(l)) ? 'maybe' : null;
 }
 

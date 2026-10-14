@@ -17,10 +17,12 @@ export type Prefs = {
   appLock: boolean;
   /** Look on GitHub for a newer app (Android app only). */
   updateCheck: boolean;
+  /** The bot Home puts first and opens to: its id, or empty to use the first one paired. */
+  mainBot: string;
 };
 
 export const DEFAULT_PREFS: Prefs = {
-  theme: 'system', accent: 'iris', layout: 'bubbles', motion: 'system', transparency: 'system', haptics: true, busyMode: 'steer', appLock: false, updateCheck: true,
+  theme: 'system', accent: 'iris', layout: 'bubbles', motion: 'system', transparency: 'system', haptics: true, busyMode: 'steer', appLock: false, updateCheck: true, mainBot: '',
 };
 
 const KEY = 'winglet.prefs';

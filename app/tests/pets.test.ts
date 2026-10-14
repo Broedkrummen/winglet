@@ -8,7 +8,7 @@ const exports: any = {};
 vm.runInNewContext(ts.transpileModule(readFileSync(new URL('../src/lib/pets.ts', import.meta.url), 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText, { exports, require: () => ({}) });
-const { petState, petFrames, petBox, PET_STATES } = exports;
+const { petState, petFrames, petBox, PET_STATES, hashText, paletteColor, avatarColor } = exports;
 
 const CODEX = ['idle', 'running-right', 'running-left', 'waving', 'jumping', 'failed', 'waiting', 'running', 'review'];
 const LEGACY = ['idle', 'wave', 'run', 'failed', 'review', 'jump', 'extra1', 'extra2'];
@@ -53,4 +53,23 @@ test('frames are whole pixels in the sheet’s proportions', () => {
 
 test('every state has a label for previews and screen readers', () => {
   assert.deepEqual(Array.from(PET_STATES, (x: any) => x.state).sort(), ['failed', 'idle', 'jump', 'review', 'run', 'waiting', 'wave']);
+});
+
+const PALETTE = ['#7C6CFF', '#EC4899', '#22C55E', '#F59E0B', '#EF4444', '#06B6D4', '#A855F7', '#14B8A6', '#F97316', '#3B82F6'];
+
+test('the same text always hashes and colours the same way', () => {
+  assert.equal(hashText('hermes'), hashText('hermes'));
+  assert.notEqual(hashText('hermes'), hashText('atlas'));
+  assert.ok(PALETTE.includes(paletteColor(PALETTE, 'anything')));
+  assert.equal(paletteColor(PALETTE, 'atlas'), paletteColor(PALETTE, 'atlas'));
+});
+
+test("a bot's colour follows its pet, and falls back to the one it was made with", () => {
+  assert.equal(avatarColor(PALETTE, 'hermes'), paletteColor(PALETTE, 'hermes'));
+  assert.equal(avatarColor(PALETTE, '', null), paletteColor(PALETTE, 'hermes'));
+  assert.equal(avatarColor(PALETTE, 'hermes', { slug: 'boba' }), paletteColor(PALETTE, 'pet:boba'));
+  // Same pet on two bots: the same colour. Another pet on the same bot: its own.
+  assert.equal(avatarColor(PALETTE, 'atlas', { slug: 'boba' }), avatarColor(PALETTE, 'nova', { slug: 'boba' }));
+  const colours = new Set(['boba', 'mochi', 'pixel', 'ember', 'cloud', 'sprout'].map((slug) => avatarColor(PALETTE, 'hermes', { slug })));
+  assert.ok(colours.size > 1);
 });

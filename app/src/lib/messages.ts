@@ -34,3 +34,72 @@ export function mergeMessages(current: Message[], incoming: Message[], deletedId
 export function markFailed(list: Message[], clientId: string): Message[] {
   return list.map((m) => (m.id === clientId && m.status === 'pending' ? { ...m, status: 'failed' } : m));
 }
+
+/** Hermes's tool names: snake_case (web_search, read_file) or one of its plain ones. */
+const PLAIN_TOOLS = new Set(['terminal', 'process', 'browser', 'todo', 'memory', 'patch', 'delegate', 'clarify', 'cronjob', 'vision', 'search', 'think']);
+/** One line of Hermes's tool progress: an emoji, the tool's name, and what it's doing ("🔍 web_search: "cats""). */
+const PROGRESS_LINE = /^\p{Extended_Pictographic}️?\s+([a-z][a-z0-9]*(?:[_.-][a-z0-9]+)*)(?:\s*:.*|\s*\.{3}|\s*…)?$/u;
+
+function isProgressLine(line: string): boolean {
+  const m = PROGRESS_LINE.exec(line.trim());
+  return !!m && (m[1].includes('_') || PLAIN_TOOLS.has(m[1]));
+}
+
+/**
+ * Hermes narrating its own work, not answering: a tool-progress bubble ("🔍 web_search: …"), or a status note it
+ * keeps updating in place (context pressure, fallback). The server can say so itself (`meta.activity`); otherwise
+ * a bot message counts only when every line of it is tool progress, so a real answer that mentions a tool stays.
+ */
+export function isActivity(m: Message): boolean {
+  const meta = m.meta ?? {};
+  if (m.role === 'user' || meta.inbox_id || meta.picker || meta.kind || meta.attachments?.length || meta.reply_to || meta.routine) return false;
+  if (meta.activity) return true;
+  if (m.role === 'system') return !!meta.status_key;
+  const lines = m.text.split('\n').filter((l) => l.trim());
+  return m.role === 'bot' && m.text.length <= 1200 && lines.length > 0 && lines.every(isProgressLine);
+}
+
+export type Entry = { kind: 'msg'; m: Message } | { kind: 'activity'; id: string; items: Message[] };
+
+/** The messages as the chat shows them: runs of backend activity folded into one entry, the replies as they are. */
+export function groupActivity(messages: readonly Message[]): Entry[] {
+  const out: Entry[] = [];
+  for (const m of messages) {
+    if (!isActivity(m)) {
+      out.push({ kind: 'msg', m });
+      continue;
+    }
+    const last = out[out.length - 1];
+    if (last?.kind === 'activity') last.items.push(m);
+    else out.push({ kind: 'activity', id: m.id, items: [m] });
+  }
+  return out;
+}
+
+type SheetSlot = { before: readonly string[]; claimed?: string; until: number };
+
+/**
+ * Pickers the model sheet asks for, which belong in the sheet and not the chat: a model or reasoning card that
+ * answers a command the sheet sent (`answersHidden`: the latest user message before it is a hidden one), and the
+ * reasoning choice that arrives while the sheet is waiting for it (a card not already in the chat when it asked).
+ * A /model or /reasoning typed in the chat by hand gets its card in the chat, as before.
+ */
+export function inSheet(m: Message, slot: SheetSlot | undefined, now = Date.now(), answersHidden = false): boolean {
+  const picker = m.meta?.picker;
+  if (!picker || (picker.kind !== 'model' && picker.kind !== 'choice')) return false;
+  if (answersHidden) return true;
+  if (!slot || picker.kind !== 'choice') return false;
+  return m.id === slot.claimed || (!slot.claimed && now < slot.until && !slot.before.includes(m.id));
+}
+
+/** The conversation as the chat shows it: without the commands the app sent for a control, or the cards that went to the sheet. */
+export function chatMessages(messages: readonly Message[], slot: SheetSlot | undefined, now = Date.now()): Message[] {
+  const out: Message[] = [];
+  let hiddenAsk = false;
+  for (const m of messages) {
+    if (m.role === 'user') hiddenAsk = !!m.meta?.hidden;
+    if (m.meta?.hidden || inSheet(m, slot, now, hiddenAsk)) continue;
+    out.push(m);
+  }
+  return out;
+}

@@ -4,6 +4,7 @@ import { Platform } from 'react-native';
 import { Redirect, router, useFocusEffect } from 'expo-router';
 import { ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useAddBot } from '../../components/AddBot';
 import { AgentFace } from '../../components/AgentFace';
 import { ManageBot } from '../../components/ManageBot';
 import { VerifyNotice } from '../../components/VerifyPhone';
@@ -40,6 +41,7 @@ export default function AgentTab() {
   const network = useApp((st) => st.network);
   const prefs = usePrefs((st) => st.prefs);
   const appUpdate = useAppUpdate((st) => st.update);
+  const addBot = useAddBot();
   if (!servers.length) return <Redirect href="/pair" />;
   const server = servers.find((x) => x.id === selection.serverId) ?? servers[0];
   const child = !!server.parent;
@@ -138,8 +140,9 @@ export default function AgentTab() {
         <SectionHeader title="Bots" />
         <ListGroup>
           <ListRow icon={<Smartphone size={18} color={t.colors.onAccentSoft} />} title="Your bots" value={String(servers.length)} onPress={() => router.push('/bots')} />
-          <ListRow icon={<Plus size={18} color={t.colors.success} />} iconColor={t.colors.success} title="Add a bot" onPress={() => router.push('/new-bot')} />
+          <ListRow icon={<Plus size={18} color={t.colors.success} />} iconColor={t.colors.success} title="Add a bot" onPress={addBot.open} />
         </ListGroup>
+        {addBot.sheet}
 
         <SectionHeader title="App" />
         <ListGroup>

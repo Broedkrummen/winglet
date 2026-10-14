@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Platform, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import Animated, { FadeIn, LinearTransition } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { BotAvatar } from '../../components/BotAvatar';
+import { AgentFace } from '../../components/AgentFace';
 import { BotSwitcher } from '../../components/BotSwitcher';
 import { ChatView } from '../../components/ChatView';
 import { ConnectionBanner } from '../../components/ConnectionBanner';
@@ -11,8 +11,9 @@ import { Hash, MessageSquarePlus, Pencil, Search, Sparkles, Trash2, X } from '..
 import { Sheet, SheetAction } from '../../components/Sheet';
 import { useTabBarSpace } from '../../components/TabBar';
 import { Button, Field, IconButton, SectionHeader, Skeleton, Tap } from '../../components/ui';
-import { ago, moodOf } from '../../lib/agent';
+import { ago } from '../../lib/agent';
 import { api } from '../../lib/api';
+import { startNewChat } from '../../lib/actions';
 import { requestFocus } from '../../lib/focus';
 import { plainText } from '../../lib/text';
 import { homeChat, isTyping, useApp } from '../../lib/store';
@@ -48,7 +49,6 @@ function ChatList({ server, activeChatId }: { server: Server; activeChatId?: str
   const wide = width >= WIDE_BREAKPOINT;
   const rt = useApp((st) => st.runtime[server.id]);
   const select = useApp((st) => st.select);
-  const createChat = useApp((st) => st.createChat);
   const [query, setQuery] = useState('');
   const [menu, setMenu] = useState<Chat | null>(null);
 
@@ -66,14 +66,7 @@ function ChatList({ server, activeChatId }: { server: Server; activeChatId?: str
     if (wide) select(server.id, id);
     else router.push(`/chat/${server.id}/${id}`);
   };
-  const newChat = async () => {
-    try {
-      const chat = await createChat(server.id);
-      if (chat) open(chat.id);
-    } catch {
-      useApp.getState().toast({ serverId: server.id, title: "Couldn't start a chat", body: 'Your bot is out of reach right now.' });
-    }
-  };
+  const newChat = () => startNewChat(server.id, open);
 
   return (
     <View style={s.root}>
@@ -100,7 +93,7 @@ function ChatList({ server, activeChatId }: { server: Server; activeChatId?: str
             {general && match(general) ? (
               <Tap feedback="selection" scaleTo={0.98} accessibilityLabel={`Main chat. ${plainText(general.preview)}`} onPress={() => open(mainId)}
                 style={({ hovered }) => [s.main, activeChatId === mainId && s.active, hovered && { borderColor: t.colors.borderStrong }]}>
-                <BotAvatar name={server.bot.name} size={52} mood={moodOf(rt)} animated={isTyping(rt, mainId)} />
+                <AgentFace server={server} size={52} animated={isTyping(rt, mainId)} still={!isTyping(rt, mainId)} />
                 <View style={{ flex: 1, minWidth: 0 }}>
                   <View style={s.rowHead}>
                     <Text style={s.mainTitle} numberOfLines={1}>{server.bot.title}</Text>

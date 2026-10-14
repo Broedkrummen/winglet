@@ -3,7 +3,7 @@ import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Linking, Text, View } from 'react-native';
 import { InstallButton } from '../components/AppUpdate';
-import { BotAvatar } from '../components/BotAvatar';
+import { AgentFace } from '../components/AgentFace';
 import { Activity, CircleArrowUp, ExternalLink, HardDrive, RefreshCw } from '../components/icons';
 import { Logo } from '../components/Logo';
 import { Screen } from '../components/Screen';
@@ -41,7 +41,7 @@ export default function AboutScreen() {
           return (
             <Card key={srv.id} style={{ gap: 10 }}>
               <View style={s.botRow}>
-                <BotAvatar name={srv.bot.name} size={36} />
+                <AgentFace server={srv} size={36} still />
                 <View style={{ flex: 1 }}>
                   <Text style={s.botName}>{srv.bot.title}</Text>
                   <Text style={s.small}>{info ? `Winglet ${info.version || '?'} · Hermes ${info.hermes_version || 'unknown'}` : 'Versions show once connected'}</Text>

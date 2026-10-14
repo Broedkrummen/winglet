@@ -6,26 +6,21 @@ import Animated, {
 } from 'react-native-reanimated';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { useReducedMotion } from '../lib/motion';
+import { avatarColor, hashText } from '../lib/pets';
 import { useTheme } from '../lib/themeContext';
 import { AVATAR, BOT_COLORS } from '../lib/theme';
 
 /** What the agent is up to, as its face shows it. */
 export type Mood = 'idle' | 'working' | 'waiting' | 'happy' | 'offline';
 
-function hash(text: string): number {
-  let h = 2166136261;
-  for (let i = 0; i < text.length; i++) {
-    h ^= text.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return h >>> 0;
-}
+const hash = hashText;
 
+/** The colour a bot is made with, from its name. A bot with a pet takes the pet's instead (see AgentFace). */
 export function botColor(name: string): string {
-  return BOT_COLORS[hash(name || 'hermes') % BOT_COLORS.length];
+  return avatarColor(BOT_COLORS, name);
 }
 
-function shade(hex: string, amount: number): string {
+export function shade(hex: string, amount: number): string {
   const n = parseInt(hex.slice(1), 16);
   const ch = (v: number) => Math.max(0, Math.min(255, Math.round(amount >= 0 ? v + (255 - v) * amount : v * (1 + amount))));
   return `#${[(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => ch(v).toString(16).padStart(2, '0')).join('')}`;

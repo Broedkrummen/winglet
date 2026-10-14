@@ -4,7 +4,7 @@ import Animated, { FadeOutUp, LinearTransition, SlideInUp } from 'react-native-r
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useApp } from '../lib/store';
 import { makeStyles } from '../lib/themeContext';
-import { BotAvatar } from './BotAvatar';
+import { AgentFace } from './AgentFace';
 import { Glass } from './Glass';
 import { Tap } from './ui';
 import { easeOut } from '../lib/motion';
@@ -27,7 +27,7 @@ export function Toasts() {
             <Tap feedback="selection" accessibilityRole="alert" accessibilityLabel={`${toast.title}. ${toast.body}`} scaleTo={0.98}
               onPress={() => { dismiss(toast.id); if (toast.href) router.push(toast.href as never); }}>
               <Glass style={s.toast}>
-                {server ? <BotAvatar name={server.bot.name} size={36} /> : null}
+                {server ? <AgentFace server={server} size={36} still /> : null}
                 <View style={{ flex: 1 }}>
                   <Text style={s.title} numberOfLines={1}>{toast.title}</Text>
                   <Text style={s.body} numberOfLines={2}>{toast.body}</Text>

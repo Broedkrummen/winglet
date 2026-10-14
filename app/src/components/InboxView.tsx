@@ -4,12 +4,12 @@ import { FlatList, ScrollView, Text, useWindowDimensions, View } from 'react-nat
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useShallow } from 'zustand/react/shallow';
-import { ago, moodOf } from '../lib/agent';
+import { ago } from '../lib/agent';
 import { useApp, useServerState } from '../lib/store';
 import { WIDE_BREAKPOINT } from '../lib/theme';
 import { makeStyles, useTheme } from '../lib/themeContext';
 import type { InboxItem, Server } from '../lib/types';
-import { BotAvatar } from './BotAvatar';
+import { AgentFace } from './AgentFace';
 import { CheckCheck } from './icons';
 import { InboxCard } from './InboxCards';
 import { useTabBarSpace } from './TabBar';
@@ -87,7 +87,7 @@ export function InboxView() {
                 <Chip label="All bots" selected={!only} onPress={() => setOnly(null)} />
                 {servers.map((srv, i) => (
                   <Chip key={srv.id} label={`${srv.bot.title}${pendings[i] ? ` · ${pendings[i]}` : ''}`}
-                    icon={<BotAvatar name={srv.bot.name} size={20} />} selected={only === srv.id} onPress={() => setOnly(only === srv.id ? null : srv.id)} />
+                    icon={<AgentFace server={srv} size={20} still />} selected={only === srv.id} onPress={() => setOnly(only === srv.id ? null : srv.id)} />
                 ))}
               </ScrollView>
             ) : null}
@@ -120,7 +120,7 @@ function EntryMeta({ server, item }: { server: Server; item: InboxItem }) {
   const chat = rt?.chats[item.chat_id];
   return (
     <View style={s.meta}>
-      <BotAvatar name={server.bot.name} size={24} mood={moodOf(rt)} />
+      <AgentFace server={server} size={24} still />
       <Text style={s.metaText} numberOfLines={1}>
         <Text style={s.metaBot}>{server.bot.title}</Text>
         {'  ·  '}{chat?.kind === 'home' ? 'Updates' : `#${chat?.title ?? item.chat_id}`}

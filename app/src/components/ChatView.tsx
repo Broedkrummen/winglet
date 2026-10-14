@@ -16,6 +16,8 @@ import { exportChat } from '../lib/exportChat';
 import { clearFocus, requestFocus, useFocusRequest } from '../lib/focus';
 import { haptic } from '../lib/haptics';
 import { afterOlderPage, atStart, canLoadOlder, newPaging } from '../lib/history';
+import { chatMessages, groupActivity, isActivity, type Entry } from '../lib/messages';
+import { useModelSheet } from '../lib/modelSheet';
 import { easeOut, spring, useReducedMotion } from '../lib/motion';
 import { usePrefs } from '../lib/prefs';
 import { mutedUntil, usePushPrefs } from '../lib/pushPrefs';
@@ -24,8 +26,8 @@ import { plainText } from '../lib/text';
 import { FIXED } from '../lib/theme';
 import { makeStyles, useTheme } from '../lib/themeContext';
 import type { DraftFile, InboxItem, Message, ReplyRef, Server, Upload } from '../lib/types';
-import { AgentFace } from './AgentFace';
-import { BotAvatar, botColor, UserAvatar } from './BotAvatar';
+import { AgentFace, useAvatarColor } from './AgentFace';
+import { UserAvatar } from './BotAvatar';
 import { Composer, focusComposer } from './Composer';
 import { ConnectionBanner } from './ConnectionBanner';
 import { FilesSheet } from './FilesSheet';
@@ -33,12 +35,11 @@ import { GoalSheet, GoalStrip, useChatGoal } from './Goal';
 import { PausedBanner } from './PausedBanner';
 import { Glass } from './Glass';
 import {
-  Activity, ArrowDown, Bell, BellOff, CalendarClock, ChevronLeft, Clock, Copy, Download, FileText, Images, Info, MoreHorizontal, Pencil, Reply,
+  Activity, ArrowDown, Bell, BellOff, CalendarClock, ChevronDown, ChevronLeft, Clock, Copy, Download, FileText, Images, MoreHorizontal, Pencil, Reply,
   RotateCcw, Share, Target, Trash2,
 } from './icons';
 import { InboxCard } from './InboxCards';
 import { Markdown } from './Markdown';
-import { ModelChip } from './ModelChip';
 import { PickerCard } from './PickerCard';
 import { MessageAttachments } from './MessageAttachments';
 import { Sheet, SheetAction } from './Sheet';
@@ -58,6 +59,7 @@ const TOUCH = Platform.OS !== 'web' || !!globalThis.matchMedia?.('(hover: none)'
 
 type Row =
   | { kind: 'msg'; key: string; m: Message; first: boolean; last: boolean; live: boolean; fresh: boolean }
+  | { kind: 'activity'; key: string; items: Message[]; working: boolean }
   | { kind: 'day'; key: string; label: string };
 
 type Actions = {
@@ -116,8 +118,10 @@ export function ChatView({ server, chatId, showBack, embedded }: { server: Serve
     return () => clearTimeout(id);
   }, [typingUntil]);
 
-  // Commands the app sent for a control (the model chip's /model) stay out of the conversation.
-  const shown = useMemo(() => (messages ?? []).filter((m) => !m.meta?.hidden), [messages]);
+  // Commands the app sent for a control (/model, /reasoning) stay out of the conversation, and so do the cards
+  // Hermes answers them with: those are in the model sheet beside the message box.
+  const sheetSlot = useModelSheet((st) => st.slots[`${server.id}:${chatId}`]);
+  const shown = useMemo(() => chatMessages(messages ?? [], sheetSlot), [messages, sheetSlot]);
 
   const reply = useCallback((m: Message) => {
     haptic.selection();
@@ -162,7 +166,6 @@ export function ChatView({ server, chatId, showBack, embedded }: { server: Serve
               <Text style={s.headerSub} numberOfLines={1}>{main ? status : `${server.bot.title} · ${status}`}</Text>
             </View>
           </View>
-          <ModelChip server={server} chatId={chatId} />
           <IconButton label="Chat options" onPress={() => setMenu(true)}><MoreHorizontal size={22} color={t.colors.text} /></IconButton>
         </Glass>
         <View style={s.hairline} />
@@ -244,26 +247,35 @@ function MessageList({ server, chatId, messages, loaded, typing, top, bottom, on
 
   const rows = useMemo<Row[]>(() => {
     const out: Row[] = [];
-    const days = messages.map((m) => dayKey(m.created_at));
+    // Hermes's backend activity (tool calls, status notes) folds into one "…" entry between the replies.
+    const entries = groupActivity(messages);
+    const idOf = (e: Entry) => (e.kind === 'msg' ? e.m.id : e.id);
+    const timeOf = (e: Entry) => (e.kind === 'msg' ? e.m.created_at : e.items[0].created_at);
+    const days = entries.map((e) => dayKey(timeOf(e)));
     const labels = new Map<number, string>();
     const dayKeys = new Set<string>();
     let lastSeen = -1;
-    if (seen.current) messages.forEach((m, i) => { if (seen.current!.has(m.id)) lastSeen = i; });
-    messages.forEach((m, i) => {
+    if (seen.current) entries.forEach((e, i) => { if (seen.current!.has(idOf(e))) lastSeen = i; });
+    const grouped = (a: Entry | undefined, b: Entry | undefined) => a?.kind === 'msg' && b?.kind === 'msg' && sameGroup(a.m, b.m);
+    entries.forEach((e, i) => {
       const day = days[i];
       if (day !== days[i - 1]) {
         let label = labels.get(day);
-        if (label === undefined) labels.set(day, (label = dayLabel(m.created_at)));
+        if (label === undefined) labels.set(day, (label = dayLabel(timeOf(e))));
         // Keyed by the day, so loading older history doesn't remount every separator.
-        const key = dayKeys.has(`day-${day}`) ? `day-${day}-${m.id}` : `day-${day}`;
+        const key = dayKeys.has(`day-${day}`) ? `day-${day}-${idOf(e)}` : `day-${day}`;
         dayKeys.add(key);
         out.push({ kind: 'day', key, label });
       }
+      if (e.kind === 'activity') {
+        out.push({ kind: 'activity', key: `activity-${e.id}`, items: e.items, working: typing && i === entries.length - 1 });
+        return;
+      }
       out.push({
-        kind: 'msg', key: m.id, m,
-        first: !sameGroup(messages[i - 1], m) || days[i - 1] !== day,
-        last: !sameGroup(m, messages[i + 1]) || days[i + 1] !== day,
-        live: typing && i === messages.length - 1,
+        kind: 'msg', key: e.m.id, m: e.m,
+        first: !grouped(entries[i - 1], e) || days[i - 1] !== day,
+        last: !grouped(e, entries[i + 1]) || days[i + 1] !== day,
+        live: typing && i === entries.length - 1,
         fresh: !!seen.current && i > lastSeen,
       });
     });
@@ -273,7 +285,8 @@ function MessageList({ server, chatId, messages, loaded, typing, top, bottom, on
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
   const jump = useCallback((id: string) => {
-    const index = rowsRef.current.findIndex((r) => r.kind === 'msg' && r.m.id === id);
+    // A message folded into a run of activity is found in its "…" row, which opens to show it.
+    const index = rowsRef.current.findIndex((r) => (r.kind === 'msg' && r.m.id === id) || (r.kind === 'activity' && r.items.some((m) => m.id === id)));
     if (index < 0) {
       // Not loaded yet (an older message): page history in until it's here, then show it.
       requestFocus(server.id, chatId, id);
@@ -381,7 +394,7 @@ function MessageList({ server, chatId, messages, loaded, typing, top, bottom, on
   if (loaded && messages.length === 0) return <EmptyChat server={server} chatId={chatId} top={top} bottom={bottom} />;
 
   const awayAt = away === null ? -1 : messages.findIndex((m) => m.id === away);
-  const newSince = awayAt < 0 ? 0 : messages.slice(awayAt + 1).filter((m) => m.role !== 'user').length;
+  const newSince = awayAt < 0 ? 0 : messages.slice(awayAt + 1).filter((m) => m.role !== 'user' && !isActivity(m)).length;
   return (
     <View style={{ flex: 1 }}>
       <FlatList
@@ -391,7 +404,9 @@ function MessageList({ server, chatId, messages, loaded, typing, top, bottom, on
         contentContainerStyle={{ paddingTop: bottom + 10, paddingBottom: top + 10 }}
         data={rows}
         keyExtractor={(r) => r.key}
-        renderItem={({ item }) => item.kind === 'day' ? <DayChip label={item.label} /> : (
+        renderItem={({ item }) => item.kind === 'day' ? <DayChip label={item.label} /> : item.kind === 'activity' ? (
+          <ActivityRow items={item.items} working={item.working} flash={flash !== null && item.items.some((m) => m.id === flash)} />
+        ) : (
           <MessageRow server={server} message={item.m} first={item.first} last={item.last} live={item.live} fresh={item.fresh}
             layout={layout} flash={flash === item.m.id} actions={actions}
             inboxItem={item.m.meta?.inbox_id ? inbox?.[item.m.meta.inbox_id] : undefined} />
@@ -408,7 +423,7 @@ function MessageList({ server, chatId, messages, loaded, typing, top, bottom, on
         }}
         onEndReached={loadOlder}
         onEndReachedThreshold={0.4}
-        ListHeaderComponent={typing ? <TypingRow server={server} /> : null}
+        ListHeaderComponent={typing && rows[0]?.kind !== 'activity' ? <TypingRow server={server} /> : null}
         ListFooterComponent={olderBusy ? (
           <View style={s.olderRow}><ActivityIndicator color={t.colors.textSecondary} accessibilityLabel="Loading older messages" /></View>
         ) : startShown ? <View style={s.olderRow}><Text style={s.olderText}>Start of the conversation</Text></View> : null}
@@ -474,20 +489,11 @@ const MessageRow = memo(function MessageRow({ server, message, first, last, live
   const resolve = useCallback((url: string) => mediaUrl(server, url), [server]);
   const entering = fresh ? FadeInDown.duration(260).easing(easeOut) : undefined;
   const [hover, setHover] = useState(false);
+  const botColor = useAvatarColor(server);
 
   if (message.role === 'system') {
     if (message.meta?.inbox_id && inboxItem) {
       return <Animated.View entering={entering} style={[s.lane, s.systemCard]}><InboxCard serverId={server.id} item={inboxItem} /></Animated.View>;
-    }
-    if (message.meta?.status_key) {
-      return (
-        <View style={s.statusWrap} accessibilityLiveRegion="polite">
-          <View style={s.statusPill}>
-            <Info size={13} color={t.colors.textSecondary} />
-            <Text style={s.statusText}>{message.text}</Text>
-          </View>
-        </View>
-      );
     }
     return <View style={s.systemLine}><Text style={s.systemText}>{message.text}</Text></View>;
   }
@@ -529,11 +535,11 @@ const MessageRow = memo(function MessageRow({ server, message, first, last, live
   if (layout === 'compact') {
     content = (
       <View style={[s.compact, first ? { marginTop: 14 } : { marginTop: 2 }]}>
-        <View style={s.gutter}>{first ? (isBot ? <BotAvatar name={server.bot.name} size={36} /> : <UserAvatar size={36} />) : null}</View>
+        <View style={s.gutter}>{first ? (isBot ? <AgentFace server={server} size={36} still /> : <UserAvatar size={36} />) : null}</View>
         <View style={{ flex: 1, minWidth: 0 }}>
           {first ? (
             <View style={s.compactHead}>
-              <Text style={[s.author, { color: isBot ? botColor(server.bot.name) : t.colors.text }]}>{isBot ? server.bot.title : 'You'}</Text>
+              <Text style={[s.author, { color: isBot ? botColor : t.colors.text }]}>{isBot ? server.bot.title : 'You'}</Text>
               <Text style={s.time}>{timeOf(message.created_at)}</Text>
             </View>
           ) : null}
@@ -547,7 +553,7 @@ const MessageRow = memo(function MessageRow({ server, message, first, last, live
       <View style={[s.botRow, first ? { marginTop: 16 } : { marginTop: 4 }]}>
         {first ? (
           <View style={s.botHead}>
-            <BotAvatar name={server.bot.name} size={26} />
+            <AgentFace server={server} size={26} still />
             <Text style={s.botName}>{server.bot.title}</Text>
             <Text style={s.time}>{timeOf(message.created_at)}</Text>
           </View>
@@ -752,6 +758,36 @@ function Cursor({ onAccent }: { onAccent: boolean }) {
   return <Animated.View style={[{ width: 9, height: 17, borderRadius: 3, marginTop: 4, backgroundColor: onAccent ? t.colors.onAccent : t.colors.accent }, style]} />;
 }
 
+/**
+ * Everything Hermes does that isn't a reply (reading a skill, searching, running a tool) folded into one "…".
+ * Tap it to see the steps; by default only the replies show.
+ */
+const ActivityRow = memo(function ActivityRow({ items, working, flash }: { items: Message[]; working: boolean; flash: boolean }) {
+  const t = useTheme();
+  const s = useStyles();
+  const [open, setOpen] = useState(false);
+  // Jumped to a step in here (from search or a reply): show it.
+  useEffect(() => { if (flash) setOpen(true); }, [flash]);
+  const n = items.length;
+  return (
+    <View style={[s.lane, s.activity]}>
+      <Tap feedback="selection" scaleTo={0.96} onPress={() => setOpen((o) => !o)} style={s.activityPill} accessibilityState={{ expanded: open }}
+        accessibilityLabel={`${working ? 'Working. ' : ''}${n} background ${n === 1 ? 'step' : 'steps'}. ${open ? 'Hide' : 'Show'}`}>
+        {working ? <Dots /> : (
+          <View style={s.activityDots}>{[0, 1, 2].map((i) => <View key={i} style={[s.activityDot, { backgroundColor: t.colors.textSecondary }]} />)}</View>
+        )}
+        <Text style={s.activityText}>{working ? 'Working' : `${n} ${n === 1 ? 'step' : 'steps'}`}</Text>
+        <ChevronDown size={14} color={t.colors.textSecondary} style={open ? { transform: [{ rotate: '180deg' }] } : undefined} />
+      </Tap>
+      {open ? (
+        <Animated.View entering={FadeIn.duration(160)} style={s.activityList}>
+          {items.map((m) => <Text key={m.id} selectable style={s.activityLine}>{m.text}</Text>)}
+        </Animated.View>
+      ) : null}
+    </View>
+  );
+});
+
 function TypingRow({ server }: { server: Server }) {
   const s = useStyles();
   return (
@@ -932,12 +968,6 @@ const useStyles = makeStyles((t) => ({
   systemCard: { paddingHorizontal: 14, marginTop: 14 },
   systemLine: { alignItems: 'center', marginVertical: 10, paddingHorizontal: 24 },
   systemText: { ...t.type.caption, color: t.colors.textSecondary, textAlign: 'center' },
-  statusWrap: { alignItems: 'center', marginVertical: 8, paddingHorizontal: 20 },
-  statusPill: {
-    flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 6, borderRadius: t.radius.pill,
-    backgroundColor: t.colors.surfaceSunken, maxWidth: 560,
-  },
-  statusText: { ...t.type.caption, color: t.colors.textSecondary, flexShrink: 1 },
   quote: {
     flexDirection: 'row', gap: 8, paddingVertical: 6, paddingRight: 10, paddingLeft: 8, marginBottom: 6, borderRadius: 10,
     backgroundColor: t.colors.surfaceSunken, alignSelf: 'stretch', maxWidth: 420,
@@ -950,6 +980,16 @@ const useStyles = makeStyles((t) => ({
   stateRight: { justifyContent: 'flex-end' },
   stateText: { ...t.type.caption, color: t.colors.textSecondary },
   stateAction: { ...t.type.caption, fontFamily: t.fonts.semibold, color: t.colors.accent, paddingHorizontal: 6, paddingVertical: 6 },
+  activity: { paddingHorizontal: 16, marginTop: 8, alignItems: 'flex-start' },
+  activityPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, minHeight: 30, borderRadius: t.radius.pill,
+    backgroundColor: t.colors.surfaceSunken, marginLeft: 34,
+  },
+  activityDots: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  activityDot: { width: 4, height: 4, borderRadius: 2 },
+  activityText: { ...t.type.caption, color: t.colors.textSecondary },
+  activityList: { marginLeft: 34, marginTop: 6, paddingLeft: 10, gap: 3, borderLeftWidth: 2, borderLeftColor: t.colors.border, alignSelf: 'stretch', paddingRight: 8 },
+  activityLine: { ...t.type.caption, fontFamily: t.fonts.mono, fontSize: 12, color: t.colors.textSecondary },
   typing: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingTop: 14 },
   typingBubble: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: t.radius.pill, backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border },
   emptyTitle: { ...t.type.title, color: t.colors.text, textAlign: 'center', marginTop: 8 },

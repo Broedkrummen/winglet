@@ -1,15 +1,16 @@
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Text, TextInput, View } from 'react-native';
+import { PairRows, useBotHost } from '../components/AddBot';
 import { BotAvatar } from '../components/BotAvatar';
-import { Bot, QrCode, RotateCw } from '../components/icons';
+import { Bot, RotateCw } from '../components/icons';
 import { JobSheet } from '../components/JobSheet';
 import { Screen } from '../components/Screen';
-import { Button, Card, Field, ListGroup, ListRow, SectionHeader } from '../components/ui';
+import { Button, Card, Field, SectionHeader } from '../components/ui';
 import { api, ApiError, signedApi } from '../lib/api';
 import { botName } from '../lib/bots';
 import { idempotencyKey } from '../lib/control';
-import { isOwner, useApp } from '../lib/store';
+import { useApp } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
 import type { BotRow, Job } from '../lib/types';
 
@@ -22,12 +23,7 @@ type BotsState = { bots: BotRow[]; multiplex: boolean; reason: string };
 export default function NewBotScreen() {
   const t = useTheme();
   const s = useStyles();
-  const main = useApp((st) => {
-    const selected = st.servers.find((x) => x.id === st.selection.serverId) ?? st.servers[0];
-    return selected?.parent ? st.servers.find((x) => x.id === selected.parent) : selected;
-  });
-  const rt = useApp((st) => (main ? st.runtime[main.id] : undefined));
-  const canMake = !!main && !!rt?.info?.features?.bots && isOwner(rt);
+  const { main, canMake } = useBotHost();
   const [state, setState] = useState<BotsState | null>(null);
   const [title, setTitle] = useState('');
   const [name, setName] = useState('');
@@ -131,10 +127,7 @@ export default function NewBotScreen() {
       ) : null}
 
       <SectionHeader title="On another server" />
-      <ListGroup>
-        <ListRow icon={<QrCode size={18} color={t.colors.onAccentSoft} />} title="Pair a bot" subtitle="Scan the code from `hermes winglet pair`"
-          onPress={() => router.push('/pair')} />
-      </ListGroup>
+      <PairRows />
 
       <JobSheet server={main} job={job} onClose={() => setJob(null)} onDone={done} />
       <JobSheet server={main} job={restarting} onClose={() => setRestarting(null)} />

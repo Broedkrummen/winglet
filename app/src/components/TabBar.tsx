@@ -3,12 +3,14 @@ import { useEffect, useState, type RefObject } from 'react';
 import { Keyboard, Platform, Pressable, ScrollView, Text, View } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { moodOf } from '../lib/agent';
+import { mainFirst } from '../lib/bots';
 import { haptic } from '../lib/haptics';
 import { spring, useReducedMotion } from '../lib/motion';
+import { usePrefs } from '../lib/prefs';
 import { homeChat, useApp } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
-import { BotAvatar } from './BotAvatar';
+import { useAddBot } from './AddBot';
+import { AgentFace } from './AgentFace';
 import { Glass } from './Glass';
 import { Bot, House, Inbox, MessagesSquare, Plus } from './icons';
 import { Logo } from './Logo';
@@ -113,6 +115,8 @@ export function SideRail() {
   const runtime = useApp((st) => st.runtime);
   const selected = useApp((st) => st.selection.serverId);
   const select = useApp((st) => st.select);
+  const addBot = useAddBot();
+  const chosenMain = usePrefs((st) => st.prefs.mainBot);
   const index = activeIndex(pathname);
   return (
     <View style={[s.rail, { paddingTop: insets.top + 14, paddingBottom: insets.bottom + 14 }]} accessibilityRole="tablist">
@@ -136,21 +140,22 @@ export function SideRail() {
       </View>
       <View style={s.railDivider} />
       <ScrollView style={{ flexGrow: 0 }} contentContainerStyle={{ alignItems: 'center', gap: 10 }} showsVerticalScrollIndicator={false}>
-        {servers.map((srv) => {
+        {mainFirst(servers, chosenMain).map((srv) => {
           const on = srv.id === selected;
           return (
             <Tap key={srv.id} accessibilityLabel={`${srv.bot.title}${on ? ', selected' : ''}`} feedback="selection"
               onPress={() => { if (!on) select(srv.id, homeChat(useApp.getState().runtime[srv.id])); }} style={s.railBot}>
               <View style={[s.railBotMark, { opacity: on ? 1 : 0 }]} />
-              <BotAvatar name={srv.bot.name} size={44} shape={on ? 'squircle' : 'circle'} mood={moodOf(runtime[srv.id])} />
+              <AgentFace server={srv} size={44} shape={on ? 'squircle' : 'circle'} still />
               {runtime[srv.id]?.pending ? <Badge count={runtime[srv.id]!.pending} style={s.railBotBadge} /> : null}
             </Tap>
           );
         })}
-        <Tap accessibilityLabel="Add a bot" feedback="selection" onPress={() => router.push('/pair')} style={s.addBot}>
+        <Tap accessibilityLabel="Add a bot" feedback="selection" onPress={addBot.open} style={s.addBot}>
           <Plus size={22} color={t.colors.success} />
         </Tap>
       </ScrollView>
+      {addBot.sheet}
     </View>
   );
 }

@@ -73,14 +73,19 @@ function Tile({ label, value }: { label: string; value: string }) {
   );
 }
 
-/** One series, one hue: a bar per day, tap one for its numbers. */
-function DailyBars({ rows }: { rows: Usage['daily'] }) {
+/**
+ * One series, one hue: a bar per day, tap one for its numbers. The pick is a day, not a position: switching
+ * period keeps it when that day is in the new one, and shows the latest day when it isn't.
+ */
+export function DailyBars({ rows }: { rows: Usage['daily'] }) {
   const t = useTheme();
   const s = useStyles();
-  const [picked, setPicked] = useState<number | null>(null);
+  const [day, setDay] = useState<string | null>(null);
   if (!rows.length) return <Card><Text style={s.empty}>No sessions in this period.</Text></Card>;
   const max = Math.max(1, ...rows.map(tokens));
-  const shown = picked !== null ? rows[picked] : rows[rows.length - 1];
+  const chosen = day === null ? undefined : rows.find((r) => r.day === day);
+  const picked = chosen ? rows.indexOf(chosen) : null;
+  const shown = chosen ?? rows[rows.length - 1];
   const label = (day: string) => new Date(`${day}T12:00:00`).toLocaleDateString([], { month: 'short', day: 'numeric' });
   return (
     <Card style={{ gap: 12 }}>
@@ -95,7 +100,7 @@ function DailyBars({ rows }: { rows: Usage['daily'] }) {
             const h = Math.max(2, (tokens(r) / max) * 140);
             const on = picked === i;
             return (
-              <Pressable key={r.day} onPress={() => setPicked(on ? null : i)} style={s.hit} hitSlop={4}
+              <Pressable key={r.day} onPress={() => setDay(on ? null : r.day)} style={s.hit} hitSlop={4}
                 accessibilityRole="button" accessibilityLabel={`${label(r.day)}: ${compact(tokens(r))} tokens, ${money(r.estimated_cost ?? 0)}`}>
                 <View style={[s.bar, { height: h, backgroundColor: t.colors.accent, opacity: picked === null || on ? 1 : 0.35 }]} />
               </Pressable>

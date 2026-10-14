@@ -72,11 +72,25 @@ def test_last_seen_is_written_at_most_once_a_minute(store, monkeypatch):
     assert len([w for w in writes if "last_seen" in w]) == 2
 
 
-def test_retries_are_matched_within_a_day(store, monkeypatch):
-    sent = store.add_message("general", "user", "hi", meta={"client_id": "c1"})
-    assert store.find_user_message("general", "c1")["id"] == sent["id"]
-    monkeypatch.setattr(store_module, "_now", lambda: time.time() + store_module.RETRY_WINDOW_SECONDS + 5)
-    assert store.find_user_message("general", "c1") is None
+async def test_a_resend_after_days_offline_still_finds_the_original(client, hub, monkeypatch):
+    """The phone kept a send it never heard back about and resends it on reconnect, days later: the agent
+    mustn't run it twice. The lookup goes through an index, so it stays quick however long the chat is."""
+    calls = []
+
+    async def on_user_message(chat, text, device, message):
+        calls.append(text)
+    hub.on_user_message = on_user_message
+    hub.store.ensure_chat("general", "General")
+    auth = {"Authorization": f"Bearer {await pair(client, hub)}"}
+    body = {"text": "deploy it", "client_id": "retry-after-offline"}
+    first = await (await client.post("/api/chats/general/messages", json=body, headers=auth)).json()
+    later = time.time() + 2 * 86400
+    monkeypatch.setattr(store_module, "_now", lambda: later)
+    again = await (await client.post("/api/chats/general/messages", json=body, headers=auth)).json()
+    assert again["message"]["id"] == first["message"]["id"] and calls == ["deploy it"]
+    lookup = plan(hub.store, "SELECT rowid AS position, * FROM messages WHERE chat_id = ? "
+                             "AND json_extract(meta, '$.client_id') = ? AND role = 'user'", ("general", "c"))
+    assert "messages_client_id" in lookup
 
 
 def test_pending_counts_by_bot_and_member_in_one_query(store):

@@ -43,6 +43,8 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS messages_chat ON messages (chat_id, created_at);
 -- Pages are read newest first by rowid; this index carries it, so a page never sorts the whole chat.
 CREATE INDEX IF NOT EXISTS messages_chat_rowid ON messages (chat_id);
+-- A phone's resend of a send it never heard back about, however long it was offline, finds the original here.
+CREATE INDEX IF NOT EXISTS messages_client_id ON messages (chat_id, json_extract(meta, '$.client_id')) WHERE role = 'user';
 CREATE TABLE IF NOT EXISTS message_deletions (
     id TEXT PRIMARY KEY, chat_id TEXT NOT NULL
 );
@@ -105,8 +107,6 @@ DELETIONS_KEEP_SECONDS = 90 * 86400
 INBOX_KEEP_SECONDS = 90 * 86400
 # A device's "last seen" is written at most this often (it's read to the minute).
 LAST_SEEN_EVERY_SECONDS = 60
-# A retried send arrives within minutes; older messages aren't searched for its client id.
-RETRY_WINDOW_SECONDS = 86400
 
 
 def _hash(secret: str) -> str:
@@ -401,9 +401,9 @@ class Store:
 
     def find_user_message(self, chat_id: str, client_id: str) -> Optional[Dict[str, Any]]:
         """A message this chat already received with the app's ``client_id`` (retry detection)."""
-        row = self._one("SELECT rowid AS position, * FROM messages WHERE chat_id = ? AND created_at > ? "
-                        "AND role = 'user' AND json_extract(meta, '$.client_id') = ?",
-                        (chat_id, _now() - RETRY_WINDOW_SECONDS, client_id))
+        # Matches the messages_client_id index (same expression, same role), so it's a lookup, not a scan.
+        row = self._one("SELECT rowid AS position, * FROM messages WHERE chat_id = ? "
+                        "AND json_extract(meta, '$.client_id') = ? AND role = 'user'", (chat_id, client_id))
         return self._message(row) if row else None
 
     def streaming_messages(self, chat_id: str) -> List[Dict[str, Any]]:

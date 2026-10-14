@@ -29,28 +29,19 @@ export function chatName(chat: Chat | undefined): string {
   return chat.kind === 'home' ? 'Updates' : chat.title;
 }
 
-/** One headline for Home: what the agent is doing, in plain words. */
-export function headline(rt: ServerState | undefined, bot: string): { title: string; detail: string } {
+/** One line for Home: what the agent is doing, in plain words. */
+export function headline(rt: ServerState | undefined, bot: string): { title: string } {
   const mood = moodOf(rt);
   const pending = pendingItems(rt);
   const working = workingChats(rt);
-  if (mood === 'offline') return { title: `${bot} is out of reach`, detail: 'Your chats are saved on this phone. Messages you send now go out when it’s back.' };
+  if (mood === 'offline') return { title: `${bot} is out of reach` };
   if (mood === 'waiting') {
-    return { title: `${bot} needs you`, detail: pending.length === 1 ? 'One thing is waiting for your answer.' : `${pending.length} things are waiting for your answer.` };
+    return { title: pending.length === 1 ? `${bot} needs you` : `${bot} needs you · ${pending.length}` };
   }
   if (mood === 'working') {
-    return { title: working.length === 1 ? `Working on ${chatName(working[0])}` : `Working on ${working.length} things`, detail: 'You can keep chatting, or check in on its progress.' };
+    return { title: working.length === 1 ? `Working on ${chatName(working[0])}` : `Working on ${working.length} things` };
   }
-  return { title: 'All quiet', detail: `Ask ${bot} anything. It can use tools, run code and remember.` };
-}
-
-/** "Good morning" and friends, by the phone's clock. */
-export function greeting(date = new Date()): string {
-  const h = date.getHours();
-  if (h < 5) return 'Up late';
-  if (h < 12) return 'Good morning';
-  if (h < 18) return 'Good afternoon';
-  return 'Good evening';
+  return { title: 'All quiet' };
 }
 
 export function ago(ts: number, now = Date.now() / 1000): string {

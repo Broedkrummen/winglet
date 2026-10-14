@@ -11,7 +11,7 @@ import { VerifyNotice } from '../../components/VerifyPhone';
 import { BotSwitcher } from '../../components/BotSwitcher';
 import {
   Activity, BarChart, Bell, Brain, CalendarClock, Cpu, Fingerprint, HeartPulse, Info, Key, MessageCircle, MessageSquareText, Palette, PawPrint, Plug, Plus, ScrollText,
-  ShieldCheck, Smartphone, Sparkles, SquareTerminal, UserRoundPen,
+  ShieldCheck, Smartphone, Sparkles, SquareTerminal, Star, UserRoundPen,
 } from '../../components/icons';
 import { shortModel } from '../../components/PickerCard';
 import { api } from '../../lib/api';
@@ -20,6 +20,7 @@ import { ListGroup, ListRow, SectionHeader, Toggle } from '../../components/ui';
 import { lockAvailable, unlock } from '../../lib/appLock';
 import { useAppUpdate } from '../../lib/appUpdateCheck';
 import { connectionView } from '../../lib/connection';
+import { setMainBot, useMainBot } from '../../lib/mainBot';
 import { usePrefs } from '../../lib/prefs';
 import { homeChat, isOwner, type ServerState, useApp, useServerState } from '../../lib/store';
 import type { AgentInfo, Server } from '../../lib/types';
@@ -42,6 +43,7 @@ export default function AgentTab() {
   const prefs = usePrefs((st) => st.prefs);
   const appUpdate = useAppUpdate((st) => st.update);
   const addBot = useAddBot();
+  const mainBot = useMainBot();
   if (!servers.length) return <Redirect href="/pair" />;
   const server = servers.find((x) => x.id === selection.serverId) ?? servers[0];
   const child = !!server.parent;
@@ -75,6 +77,10 @@ export default function AgentTab() {
           )}
           <ListRow icon={<Activity size={18} color={t.colors.onAccentSoft} />} title="Connection" value={view.kind === 'online' ? 'Online' : view.title}
             onPress={() => router.push(`/connection/${server.parent ?? server.id}`)} />
+          <ListRow icon={<Star size={18} color={t.colors.onAccentSoft} />} title="Main bot"
+            subtitle={mainBot?.id === server.id ? 'Home and the app open on this bot' : 'Make Home and the app open on this bot'}
+            value={mainBot?.id === server.id ? 'This bot' : undefined} chevron={mainBot?.id !== server.id}
+            onPress={mainBot?.id === server.id ? undefined : () => setMainBot(server.id)} />
         </ListGroup>
 
         <VerifyNotice server={server} />

@@ -1,5 +1,5 @@
 import { LinearGradient } from 'expo-linear-gradient';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator, Platform, Pressable, Switch, Text, TextInput, View,
   type AccessibilityRole, type PressableProps, type StyleProp, type TextInputProps, type ViewStyle,
@@ -11,7 +11,7 @@ import { haptic } from '../lib/haptics';
 import { FIXED } from '../lib/theme';
 import { spring, useReducedMotion } from '../lib/motion';
 import { makeStyles, useTheme } from '../lib/themeContext';
-import { ChevronRight } from './icons';
+import { ChevronRight, CircleAlert, RotateCcw, Search, X } from './icons';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
@@ -308,7 +308,77 @@ export function Card({ children, style, onPress, accessibilityLabel }: { childre
   );
 }
 
+/** A screen whose first load failed: what went wrong and a way to try again, instead of a skeleton forever. */
+export function LoadError({ message, onRetry, style }: { message: string; onRetry: () => unknown; style?: StyleProp<ViewStyle> }) {
+  const t = useTheme();
+  const s = useStyles();
+  return (
+    <View style={[s.loadError, style]} accessibilityLiveRegion="polite">
+      <CircleAlert size={22} color={t.colors.danger} />
+      <Text style={s.loadErrorText}>{message || "Couldn't load this."}</Text>
+      <Button title="Try again" size="sm" variant="secondary" icon={<RotateCcw size={15} color={t.colors.text} />} onPress={() => { onRetry(); }} />
+    </View>
+  );
+}
+
+/**
+ * A button for something that can't be undone: the first tap arms it ("Tap again to …"), the second does it.
+ * It disarms itself after a few seconds.
+ */
+export function ConfirmButton({ title, confirmTitle, onConfirm, icon, size = 'md', style, accessibilityLabel, loading }: {
+  title: string; confirmTitle?: string; onConfirm: () => unknown; icon?: ReactNode; size?: 'sm' | 'md' | 'lg';
+  style?: StyleProp<ViewStyle>; accessibilityLabel?: string; loading?: boolean;
+}) {
+  const [armed, setArmed] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  const press = () => {
+    if (timer.current) clearTimeout(timer.current);
+    if (!armed) {
+      haptic.light();
+      setArmed(true);
+      timer.current = setTimeout(() => setArmed(false), 4000);
+      return;
+    }
+    setArmed(false);
+    onConfirm();
+  };
+  const label = armed ? confirmTitle ?? `Tap again to ${title.charAt(0).toLowerCase()}${title.slice(1)}` : title;
+  return (
+    <Button title={label} variant={armed ? 'danger' : 'ghost'} size={size} icon={icon} style={style} loading={loading} onPress={press}
+      accessibilityLabel={armed ? `Confirm: ${accessibilityLabel ?? title}` : accessibilityLabel ?? title} feedback="none" />
+  );
+}
+
+/** A search box with a clear button, the same on every screen. */
+export function SearchField({ value, onChangeText, placeholder, style }: {
+  value: string; onChangeText: (text: string) => void; placeholder: string; style?: StyleProp<ViewStyle>;
+}) {
+  const t = useTheme();
+  const s = useStyles();
+  return (
+    <View style={[s.search, style]}>
+      <Search size={16} color={t.colors.textTertiary} />
+      <TextInput value={value} onChangeText={onChangeText} placeholder={placeholder} placeholderTextColor={t.colors.textTertiary}
+        style={s.searchInput} autoCapitalize="none" autoCorrect={false} accessibilityLabel={placeholder} returnKeyType="search" />
+      {value ? (
+        <Pressable onPress={() => onChangeText('')} accessibilityRole="button" accessibilityLabel="Clear search" hitSlop={10} style={s.searchClear}>
+          <X size={14} color={t.colors.bg} />
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
 const useStyles = makeStyles((t) => ({
+  loadError: { alignItems: 'center', gap: 10, paddingVertical: 28, paddingHorizontal: 20 },
+  loadErrorText: { ...t.type.callout, color: t.colors.textSecondary, textAlign: 'center', maxWidth: 360 },
+  search: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, height: 46, borderRadius: t.radius.pill,
+    backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border,
+  },
+  searchInput: { flex: 1, ...t.type.body, color: t.colors.text, ...({ outlineStyle: 'none' } as object) },
+  searchClear: { width: 20, height: 20, borderRadius: 10, backgroundColor: t.colors.textTertiary, alignItems: 'center', justifyContent: 'center' },
   buttonShell: { borderRadius: t.radius.pill, overflow: 'hidden' },
   buttonInner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 20 },
   buttonText: { fontFamily: t.fonts.semibold, fontSize: 15.5 },

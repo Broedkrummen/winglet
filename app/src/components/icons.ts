@@ -68,6 +68,7 @@ export { default as Pencil } from 'lucide-react-native/icons/pencil';
 export { default as Play } from 'lucide-react-native/icons/play';
 export { default as Plug } from 'lucide-react-native/icons/plug';
 export { default as PawPrint } from 'lucide-react-native/icons/paw-print';
+export { default as Pin } from 'lucide-react-native/icons/pin';
 export { default as Plus } from 'lucide-react-native/icons/plus';
 export { default as Power } from 'lucide-react-native/icons/power';
 export { default as QrCode } from 'lucide-react-native/icons/qr-code';

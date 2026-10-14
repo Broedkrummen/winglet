@@ -5,7 +5,7 @@ import { JobSheet } from '../components/JobSheet';
 import { CheckCircle2, CircleAlert, ExternalLink, Plug, RefreshCw, Search, Trash2 } from '../components/icons';
 import { Screen } from '../components/Screen';
 import { Sheet } from '../components/Sheet';
-import { Button, Card, Field, ListGroup, ListRow, SectionHeader, Skeleton, Toggle } from '../components/ui';
+import { Button, Card, ConfirmButton, Field, ListGroup, ListRow, LoadError, SearchField, SectionHeader, Skeleton, Toggle } from '../components/ui';
 import { matches, missingEnv, prettyName, serverPlace, shortDescription, signsIn } from '../lib/abilities';
 import { api, ApiError, serverKey, signedApi } from '../lib/api';
 import { idempotencyKey } from '../lib/control';
@@ -34,10 +34,12 @@ export default function McpScreen() {
 
   const load = useCallback(() => {
     if (!server) return;
-    api<McpInfo>(server, '/api/mcp').then((d) => { setInfo(d); setError(''); }).catch((e) => setError((e as Error).message));
-    api<{ entries: McpCatalogEntry[] }>(server, '/api/mcp/catalog').then((d) => setCatalog(d.entries)).catch(() => setCatalog([]));
+    return Promise.all([
+      api<McpInfo>(server, '/api/mcp').then((d) => { setInfo(d); setError(''); }).catch((e) => setError((e as Error).message)),
+      api<{ entries: McpCatalogEntry[] }>(server, '/api/mcp/catalog').then((d) => setCatalog(d.entries)).catch(() => setCatalog([])),
+    ]);
   }, [server]);
-  useEffect(load, [load]);
+  useEffect(() => { load(); }, [load]);
 
   const available = useMemo(() => (catalog ?? []).filter((e) => !e.installed && matches(query, e.name, e.description)), [catalog, query]);
   if (!server) return null;
@@ -70,11 +72,11 @@ export default function McpScreen() {
   };
 
   return (
-    <Screen title="MCP servers" subtitle="Connect your agent to other apps and services. Each server gives it new tools.">
-      {error ? <Text style={s.error}>{error}</Text> : null}
-      {!info ? (
+    <Screen title="MCP servers" subtitle="Connect your agent to other apps and services. Each server gives it new tools." onRefresh={load}>
+      {error && info ? <Text style={s.error}>{error}</Text> : null}
+      {!info ? (error ? <LoadError message={error} onRetry={load} /> : (
         <View style={{ gap: 12, marginTop: 20 }}>{[0, 1].map((i) => <Skeleton key={i} height={64} radius={16} />)}</View>
-      ) : (
+      )) : (
         <Animated.View entering={FadeIn}>
           {info.needs_reload ? (
             <Card style={s.banner}>
@@ -105,8 +107,7 @@ export default function McpScreen() {
           )}
 
           <SectionHeader title="Add a server" />
-          <Field value={query} onChangeText={setQuery} placeholder="Search Linear, Notion, GitHub…" autoCapitalize="none" autoCorrect={false}
-            accessibilityLabel="Search MCP servers" />
+          <SearchField value={query} onChangeText={setQuery} placeholder="Search Linear, Notion, GitHub…" />
           <Text style={s.note}>From Hermes's list of approved servers. Each one shows what it connects to before you add it.</Text>
           {!catalog ? <Skeleton height={64} radius={16} style={{ marginTop: 12 }} /> : available.length ? (
             <ListGroup style={{ marginTop: 12 }}>
@@ -256,8 +257,8 @@ function ServerSheet({ server, item, onClose, onChanged }: { server: Server; ite
         {signsIn(x) ? <Button title={signIn?.status === 'approved' ? 'Sign in again' : 'Sign in'} loading={busy === 'sign-in'}
           disabled={!!busy} onPress={startSignIn} /> : null}
         {x.source !== 'plugin' ? (
-          <Button title="Remove" variant="danger" icon={<Trash2 size={16} color={t.colors.danger} />} loading={busy === 'remove'}
-            disabled={!!busy} onPress={remove} />
+          <ConfirmButton title="Remove" confirmTitle="Tap again to remove it and its keys" icon={<Trash2 size={16} color={t.colors.danger} />}
+            loading={busy === 'remove'} onConfirm={remove} accessibilityLabel={`Remove ${x.name}`} />
         ) : null}
       </View>
     </Sheet>

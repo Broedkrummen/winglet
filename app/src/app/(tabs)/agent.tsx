@@ -1,7 +1,7 @@
 import Constants from 'expo-constants';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Platform } from 'react-native';
-import { Redirect, router } from 'expo-router';
+import { Redirect, router, useFocusEffect } from 'expo-router';
 import { ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AgentFace } from '../../components/AgentFace';
@@ -20,7 +20,7 @@ import { lockAvailable, unlock } from '../../lib/appLock';
 import { useAppUpdate } from '../../lib/appUpdateCheck';
 import { connectionView } from '../../lib/connection';
 import { usePrefs } from '../../lib/prefs';
-import { homeChat, isOwner, type ServerState, useApp } from '../../lib/store';
+import { homeChat, isOwner, type ServerState, useApp, useServerState } from '../../lib/store';
 import type { AgentInfo, Server } from '../../lib/types';
 import { ACCENTS, WIDE_BREAKPOINT } from '../../lib/theme';
 import { makeStyles, useTheme } from '../../lib/themeContext';
@@ -35,13 +35,13 @@ export default function AgentTab() {
   const wide = width >= WIDE_BREAKPOINT;
   const servers = useApp((st) => st.servers);
   const selection = useApp((st) => st.selection);
-  const runtime = useApp((st) => st.runtime);
+  // This bot's state, not every bot's messages: a reply streaming in doesn't re-render this tab.
+  const rt = useServerState((servers.find((x) => x.id === selection.serverId) ?? servers[0])?.id);
   const network = useApp((st) => st.network);
   const prefs = usePrefs((st) => st.prefs);
   const appUpdate = useAppUpdate((st) => st.update);
   if (!servers.length) return <Redirect href="/pair" />;
   const server = servers.find((x) => x.id === selection.serverId) ?? servers[0];
-  const rt = runtime[server.id];
   const child = !!server.parent;
   const parent = child ? servers.find((x) => x.id === server.parent) : undefined;
   const view = connectionView(network, rt, server.bot.title);
@@ -158,10 +158,12 @@ export default function AgentTab() {
 function BrainRows({ server, rt }: { server: Server; rt?: ServerState }) {
   const t = useTheme();
   const [info, setInfo] = useState<AgentInfo | null>(null);
-  useEffect(() => {
-    if (rt?.status !== 'online') return;
+  // Each time the tab comes into view, so a model just changed under Default model shows here.
+  const online = rt?.status === 'online';
+  useFocusEffect(useCallback(() => {
+    if (!online) return;
     api<AgentInfo>(server, '/api/agent').then(setInfo).catch(() => undefined);
-  }, [server, rt?.status]);
+  }, [server, online]));
   return (
     <ListGroup>
       <ListRow icon={<Cpu size={18} color={t.colors.onAccentSoft} />} title="Default model"

@@ -1,19 +1,38 @@
 import { router } from 'expo-router';
-import type { ReactNode } from 'react';
-import { ScrollView, Text, View } from 'react-native';
+import { useState, type ReactNode } from 'react';
+import { RefreshControl, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { haptic } from '../lib/haptics';
 import { makeStyles, useTheme } from '../lib/themeContext';
 import { ChevronLeft } from './icons';
 import { IconButton } from './ui';
 
-/** A pushed screen: back button, large title, and a centred scrolling column. */
-export function Screen({ title, subtitle, children, right }: { title: string; subtitle?: string; children: ReactNode; right?: ReactNode }) {
+/** A pushed screen: back button, large title, and a centred scrolling column. Pull down to refresh it. */
+export function Screen({ title, subtitle, children, right, onRefresh }: {
+  title: string; subtitle?: string; children: ReactNode; right?: ReactNode;
+  /** Reload what the screen shows; the spinner stays until it's done. */
+  onRefresh?: () => unknown;
+}) {
   const t = useTheme();
   const s = useStyles();
   const insets = useSafeAreaInsets();
+  const [refreshing, setRefreshing] = useState(false);
+  const refresh = async () => {
+    haptic.soft();
+    setRefreshing(true);
+    try {
+      await Promise.all([Promise.resolve(onRefresh?.()).catch(() => undefined), new Promise((r) => setTimeout(r, 400))]);
+    } finally {
+      setRefreshing(false);
+    }
+  };
   return (
     <View style={s.root}>
-      <ScrollView contentContainerStyle={[s.content, { paddingTop: insets.top + 6, paddingBottom: insets.bottom + 40 }]} keyboardShouldPersistTaps="handled">
+      <ScrollView contentContainerStyle={[s.content, { paddingTop: insets.top + 6, paddingBottom: insets.bottom + 40 }]} keyboardShouldPersistTaps="handled"
+        refreshControl={onRefresh ? (
+          <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={t.colors.accent} colors={[t.colors.accentFill]}
+            progressBackgroundColor={t.colors.surfaceRaised} />
+        ) : undefined}>
         <View style={s.top}>
           <IconButton label="Back" variant="filled" onPress={() => (router.canGoBack() ? router.back() : router.replace('/agent'))}>
             <ChevronLeft size={24} color={t.colors.text} />

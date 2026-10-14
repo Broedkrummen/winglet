@@ -14,7 +14,7 @@ import { agoText } from '../lib/agent';
 import { api, ApiError, signedApi } from '../lib/api';
 import { bytes, duration, idempotencyKey } from '../lib/control';
 import { haptic } from '../lib/haptics';
-import { useApp } from '../lib/store';
+import { useApp, useServerState } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
 import type { Job, PauseState, Server, SystemInfo, UpdatesInfo } from '../lib/types';
 
@@ -30,7 +30,7 @@ export default function ServerScreen() {
   const t = useTheme();
   const s = useStyles();
   const server = useApp((st) => st.servers.find((x) => x.id === st.selection.serverId) ?? st.servers[0]);
-  const rt = useApp((st) => (server ? st.runtime[server.id] : undefined));
+  const rt = useServerState(server?.id);
   const [info, setInfo] = useState<SystemInfo | null>(null);
   const [updates, setUpdates] = useState<UpdatesInfo | null>(null);
   const [checking, setChecking] = useState(false);

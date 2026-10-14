@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { shortModel } from '../components/PickerCard';
 import { Screen } from '../components/Screen';
-import { Card, SectionHeader, Segmented, Skeleton } from '../components/ui';
+import { Card, LoadError, SectionHeader, Segmented, Skeleton } from '../components/ui';
 import { api } from '../lib/api';
 import { useApp } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
@@ -24,23 +24,29 @@ export default function UsageScreen() {
   const s = useStyles();
   const server = useApp((st) => st.servers.find((x) => x.id === st.selection.serverId) ?? st.servers[0]);
   const [days, setDays] = useState<'7' | '30' | '90'>('30');
-  const [data, setData] = useState<Usage | null>(null);
+  // Each period's figures, kept: switching back shows them at once while they refresh.
+  const [byDays, setByDays] = useState<Record<string, Usage>>({});
   const [error, setError] = useState('');
+  const data = byDays[days] ?? null;
 
-  useEffect(() => {
+  const load = () => {
     if (!server) return;
-    setData(null);
-    api<Usage>(server, `/api/usage?days=${days}`).then(setData).catch((e) => setError((e as Error).message));
-  }, [server?.id, days]); // eslint-disable-line react-hooks/exhaustive-deps
+    const period = days;
+    return api<Usage>(server, `/api/usage?days=${period}`)
+      .then((d) => { setByDays((all) => ({ ...all, [period]: d })); setError(''); })
+      .catch((e) => setError((e as Error).message));
+  };
+  useEffect(() => { setError(''); load(); }, [server?.id, days]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const totalTokens = (data?.totals.total_input ?? 0) + (data?.totals.total_output ?? 0);
   const cost = data?.totals.total_actual_cost || data?.totals.total_estimated_cost || 0;
   return (
-    <Screen title="Usage" subtitle="Tokens and estimated cost from your agent's sessions. Costs are estimates from public prices.">
+    <Screen title="Usage" subtitle="Tokens and estimated cost from your agent's sessions. Costs are estimates from public prices." onRefresh={load}>
       <Segmented label="Period" value={days} onChange={setDays}
         options={[{ value: '7', label: '7 days' }, { value: '30', label: '30 days' }, { value: '90', label: '90 days' }]} />
-      {error ? <Text style={s.error}>{error}</Text> : null}
-      {!data ? <View style={{ gap: 12, marginTop: 16 }}><Skeleton height={88} radius={20} /><Skeleton height={200} radius={20} /></View> : (
+      {error && data ? <Text style={s.error}>{error}</Text> : null}
+      {!data ? (error ? <LoadError message={error} onRetry={load} />
+        : <View style={{ gap: 12, marginTop: 16 }}><Skeleton height={88} radius={20} /><Skeleton height={200} radius={20} /></View>) : (
         <>
           <View style={s.tiles}>
             <Tile label="Tokens" value={compact(totalTokens)} />
@@ -67,14 +73,19 @@ function Tile({ label, value }: { label: string; value: string }) {
   );
 }
 
-/** One series, one hue: a bar per day, tap one for its numbers. */
-function DailyBars({ rows }: { rows: Usage['daily'] }) {
+/**
+ * One series, one hue: a bar per day, tap one for its numbers. The pick is a day, not a position: switching
+ * period keeps it when that day is in the new one, and shows the latest day when it isn't.
+ */
+export function DailyBars({ rows }: { rows: Usage['daily'] }) {
   const t = useTheme();
   const s = useStyles();
-  const [picked, setPicked] = useState<number | null>(null);
+  const [day, setDay] = useState<string | null>(null);
   if (!rows.length) return <Card><Text style={s.empty}>No sessions in this period.</Text></Card>;
   const max = Math.max(1, ...rows.map(tokens));
-  const shown = picked !== null ? rows[picked] : rows[rows.length - 1];
+  const chosen = day === null ? undefined : rows.find((r) => r.day === day);
+  const picked = chosen ? rows.indexOf(chosen) : null;
+  const shown = chosen ?? rows[rows.length - 1];
   const label = (day: string) => new Date(`${day}T12:00:00`).toLocaleDateString([], { month: 'short', day: 'numeric' });
   return (
     <Card style={{ gap: 12 }}>
@@ -89,7 +100,7 @@ function DailyBars({ rows }: { rows: Usage['daily'] }) {
             const h = Math.max(2, (tokens(r) / max) * 140);
             const on = picked === i;
             return (
-              <Pressable key={r.day} onPress={() => setPicked(on ? null : i)} style={s.hit} hitSlop={4}
+              <Pressable key={r.day} onPress={() => setDay(on ? null : r.day)} style={s.hit} hitSlop={4}
                 accessibilityRole="button" accessibilityLabel={`${label(r.day)}: ${compact(tokens(r))} tokens, ${money(r.estimated_cost ?? 0)}`}>
                 <View style={[s.bar, { height: h, backgroundColor: t.colors.accent, opacity: picked === null || on ? 1 : 0.35 }]} />
               </Pressable>

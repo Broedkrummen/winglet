@@ -2,9 +2,9 @@ import { router } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Text, View } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
-import { MessageSquareText, Search } from '../components/icons';
+import { MessageSquareText, Pin, Search } from '../components/icons';
 import { Screen } from '../components/Screen';
-import { Button, Field, Skeleton, Tap } from '../components/ui';
+import { Button, LoadError, SearchField, Skeleton, Tap } from '../components/ui';
 import { ago } from '../lib/agent';
 import { api } from '../lib/api';
 import { markedParts, sessionTitle, sourceLabel } from '../lib/sessions';
@@ -25,24 +25,27 @@ export default function SessionsScreen() {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SessionRow[] | null>(null);
   const [error, setError] = useState('');
+  const [searchError, setSearchError] = useState('');
   const searchSeq = useRef(0);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     if (!server) return;
-    api<{ sessions: SessionRow[]; total: number }>(server, `/api/sessions?limit=${PAGE}&offset=0`)
+    return api<{ sessions: SessionRow[]; total: number }>(server, `/api/sessions?limit=${PAGE}&offset=0`)
       .then((d) => { setRows(d.sessions); setTotal(d.total); setError(''); })
       .catch((e) => setError((e as Error).message));
   }, [server]);
+  useEffect(() => { load(); }, [load]);
 
   // Search as you type, after a pause; only the latest answer counts.
   useEffect(() => {
     const q = query.trim();
-    if (!server || q.length < 2) { setResults(null); return; }
     const seq = ++searchSeq.current;
+    setSearchError('');
+    if (!server || q.length < 2) { setResults(null); return; }
     const id = setTimeout(() => {
       api<{ results: SessionRow[] }>(server, `/api/sessions/search?q=${encodeURIComponent(q)}`)
         .then((d) => { if (seq === searchSeq.current) setResults(d.results); })
-        .catch((e) => { if (seq === searchSeq.current) setError((e as Error).message); });
+        .catch((e) => { if (seq === searchSeq.current) setSearchError((e as Error).message); });
     }, 300);
     return () => clearTimeout(id);
   }, [query, server]);
@@ -62,16 +65,18 @@ export default function SessionsScreen() {
 
   if (!server) return null;
   const searching = query.trim().length >= 2;
-  const list = searching ? results : rows;
+  // Pinned conversations first, as Hermes shows them; the rest stay most recent first.
+  const list = searching ? results : rows && [...rows.filter((r) => r.pinned), ...rows.filter((r) => !r.pinned)];
   return (
-    <Screen title="Sessions" subtitle="Every conversation your agent has had, in any app or routine. Most recent first.">
+    <Screen title="Sessions" subtitle="Every conversation your agent has had, in any app or routine. Most recent first." onRefresh={searching ? undefined : load}>
       <View style={{ marginTop: 16 }}>
-        <Field value={query} onChangeText={setQuery} placeholder="Search what was said" autoCapitalize="none" autoCorrect={false}
-          accessibilityLabel="Search sessions" returnKeyType="search" />
+        <SearchField value={query} onChangeText={setQuery} placeholder="Search what was said" />
       </View>
-      {error ? <Text style={s.error}>{error}</Text> : null}
+      {searching ? (searchError ? <Text style={s.error}>{searchError}</Text> : null) : error && list ? <Text style={s.error}>{error}</Text> : null}
       {!list ? (
-        <View style={{ gap: 10, marginTop: 18 }}>{[0, 1, 2, 3].map((i) => <Skeleton key={i} height={68} radius={16} />)}</View>
+        error && !searching ? <LoadError message={error} onRetry={load} style={{ marginTop: 12 }} />
+          : searching && searchError ? null
+          : <View style={{ gap: 10, marginTop: 18 }}>{[0, 1, 2, 3].map((i) => <Skeleton key={i} height={68} radius={16} />)}</View>
       ) : (
         <Animated.View entering={FadeIn} style={s.group}>
           {list.map((row, i) => (
@@ -98,7 +103,8 @@ function SessionItem({ row, first, onPress }: { row: SessionRow; first: boolean;
   const t = useTheme();
   const s = useStyles();
   const when = row.last_active ?? row.started_at;
-  const meta = [sourceLabel(row.source), row.message_count ? `${row.message_count} messages` : null].filter(Boolean).join(' · ');
+  const meta = [sourceLabel(row.source), row.message_count ? `${row.message_count} messages` : null,
+    row.tool_call_count ? `${row.tool_call_count} tool ${row.tool_call_count === 1 ? 'call' : 'calls'}` : null].filter(Boolean).join(' · ');
   return (
     <Tap feedback="selection" scaleTo={0.99} onPress={onPress} accessibilityLabel={`${sessionTitle(row)}, ${meta}. Open`}
       style={({ pressed, hovered }) => [s.row, !first && s.rowBorder, (pressed || hovered) && { backgroundColor: t.colors.pressed }]}>
@@ -108,6 +114,7 @@ function SessionItem({ row, first, onPress }: { row: SessionRow; first: boolean;
       </View>
       <View style={{ flex: 1, minWidth: 0 }}>
         <View style={s.head}>
+          {row.pinned ? <Pin size={13} color={t.colors.textTertiary} accessibilityLabel="Pinned" /> : null}
           <Text style={s.title} numberOfLines={1}>{sessionTitle(row)}</Text>
           {when ? <Text style={s.time}>{ago(when)}</Text> : null}
         </View>
@@ -115,6 +122,9 @@ function SessionItem({ row, first, onPress }: { row: SessionRow; first: boolean;
           <Text style={s.preview} numberOfLines={2}>
             {markedParts(row.snippet).map((p, i) => (p.hit ? <Text key={i} style={s.hit}>{p.text}</Text> : p.text))}
           </Text>
+        ) : row.title && row.preview ? (
+          // How it started, under a titled conversation (untitled ones already show it as their title).
+          <Text style={s.preview} numberOfLines={1}>{row.preview.replace(/^\[[^\]]*\]\s*/, '')}</Text>
         ) : null}
         <Text style={s.meta} numberOfLines={1}>{meta}</Text>
       </View>

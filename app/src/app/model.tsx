@@ -1,10 +1,11 @@
+import { router } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Text, TextInput, View } from 'react-native';
-import { Check, Search } from '../components/icons';
+import { ActivityIndicator, Text, View } from 'react-native';
+import { Check } from '../components/icons';
 import { shortModel } from '../components/PickerCard';
 import { Screen } from '../components/Screen';
 import { Sheet } from '../components/Sheet';
-import { Button, Card, ListGroup, ListRow, SectionHeader, Skeleton } from '../components/ui';
+import { Button, Card, ListGroup, ListRow, LoadError, SearchField, SectionHeader, Skeleton } from '../components/ui';
 import { api, signedApi } from '../lib/api';
 import { haptic } from '../lib/haptics';
 import { useApp } from '../lib/store';
@@ -23,12 +24,13 @@ export default function ModelScreen() {
   const [busy, setBusy] = useState('');
   const [confirm, setConfirm] = useState<{ provider: string; model: string; message: string } | null>(null);
   const [error, setError] = useState('');
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   const load = () => {
     if (!server) return;
-    api<Options>(server, '/api/models').then(setOptions).catch((e) => setError((e as Error).message));
+    return api<Options>(server, '/api/models').then((d) => { setOptions(d); setError(''); }).catch((e) => setError((e as Error).message));
   };
-  useEffect(load, [server?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, [server?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const set = async (provider: string, model: string, confirmed = false) => {
     if (!server) return;
@@ -44,7 +46,9 @@ export default function ModelScreen() {
         load();
       }
     } catch (e) {
-      setError((e as Error).message);
+      // A toast, where you're looking: the screen's own error line is at the top of a long list.
+      haptic.error();
+      useApp.getState().toast({ serverId: server.id, title: "Couldn't change the model", body: (e as Error).message });
     } finally {
       setBusy('');
     }
@@ -56,7 +60,8 @@ export default function ModelScreen() {
   })).filter((p) => p.models.length), [options, q]);
 
   return (
-    <Screen title="Default model" subtitle="New chats start with this model. Each chat can switch on its own from the model button at the top.">
+    <Screen title="Default model" subtitle="New chats start with this model. Each chat can switch on its own from the model button at the top."
+      onRefresh={load}>
       {options ? (
         <Card style={s.current}>
           <Text style={s.label}>Now</Text>
@@ -64,21 +69,20 @@ export default function ModelScreen() {
           <Text style={s.note}>{options.providers.find((p) => p.slug === options.provider)?.name ?? options.provider}</Text>
         </Card>
       ) : null}
-      <View style={s.search}>
-        <Search size={17} color={t.colors.textTertiary} />
-        <TextInput value={query} onChangeText={setQuery} placeholder="Find a model" placeholderTextColor={t.colors.textTertiary}
-          style={s.searchInput} autoCapitalize="none" autoCorrect={false} accessibilityLabel="Find a model" />
-      </View>
-      {error ? <Text style={s.error}>{error}</Text> : null}
-      {!options ? (
+      <SearchField value={query} onChangeText={setQuery} placeholder="Find a model" style={{ marginTop: 16 }} />
+      {error && options ? <Text style={s.error}>{error}</Text> : null}
+      {!options ? (error ? <LoadError message={error} onRetry={load} /> : (
         <View style={{ gap: 10, marginTop: 16 }}>{[0, 1, 2].map((i) => <Skeleton key={i} height={52} radius={16} />)}</View>
-      ) : providers.length === 0 ? (
-        <Card style={{ marginTop: 16 }}><Text style={s.note}>{q ? `No model matches “${query}”.` : 'No providers are set up yet. Add one under Providers.'}</Text></Card>
+      )) : providers.length === 0 ? (
+        <Card style={{ marginTop: 16, gap: 12 }}>
+          <Text style={s.note}>{q ? `No model matches “${query}”.` : 'No providers are set up yet. Add one with its API key.'}</Text>
+          {q ? null : <Button title="Add a provider" variant="tonal" size="sm" onPress={() => router.push('/providers')} />}
+        </Card>
       ) : providers.map((p) => (
         <View key={p.slug}>
           <SectionHeader title={p.name} />
           <ListGroup>
-            {p.models.slice(0, q ? 60 : 30).map((m) => {
+            {p.models.slice(0, expanded.has(p.slug) ? undefined : q ? 60 : 30).map((m) => {
               const current = m === options.model && p.slug === options.provider;
               const key = `${p.slug}/${m}`;
               return (
@@ -87,6 +91,9 @@ export default function ModelScreen() {
                   onPress={current || busy ? undefined : () => set(p.slug, m)} />
               );
             })}
+            {!expanded.has(p.slug) && p.models.length > (q ? 60 : 30) ? (
+              <ListRow title={`Show all ${p.models.length}`} onPress={() => setExpanded((all) => new Set(all).add(p.slug))} />
+            ) : null}
           </ListGroup>
         </View>
       ))}
@@ -107,11 +114,6 @@ const useStyles = makeStyles((t) => ({
   label: { ...t.type.label, fontSize: 11.5, color: t.colors.textSecondary },
   currentModel: { ...t.type.title, color: t.colors.text },
   note: { ...t.type.callout, color: t.colors.textSecondary },
-  search: {
-    flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, height: 46, borderRadius: t.radius.pill,
-    backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border, marginTop: 16,
-  },
-  searchInput: { flex: 1, ...t.type.body, color: t.colors.text, ...({ outlineStyle: 'none' } as object) },
   error: { ...t.type.callout, color: t.colors.danger, marginTop: 10 },
   sheetText: { ...t.type.callout, color: t.colors.textSecondary, textAlign: 'center' },
 }));

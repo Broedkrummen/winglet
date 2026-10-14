@@ -3,7 +3,7 @@ import { Text, View } from 'react-native';
 import { CheckCircle2, Key, Plug } from '../components/icons';
 import { Screen } from '../components/Screen';
 import { Sheet } from '../components/Sheet';
-import { Button, Field, ListGroup, ListRow, SectionHeader, Skeleton } from '../components/ui';
+import { Button, ConfirmButton, Field, ListGroup, ListRow, LoadError, SectionHeader, Skeleton } from '../components/ui';
 import { api, serverKey, signedApi } from '../lib/api';
 import { seal } from '../lib/crypto';
 import { haptic } from '../lib/haptics';
@@ -24,20 +24,23 @@ export default function ProvidersScreen() {
 
   const load = () => {
     if (!server) return;
-    api<{ providers: Provider[] }>(server, '/api/providers').then((d) => setProviders(d.providers)).catch((e) => setError((e as Error).message));
+    return api<{ providers: Provider[] }>(server, '/api/providers').then((d) => { setProviders(d.providers); setError(''); })
+      .catch((e) => setError((e as Error).message));
   };
-  useEffect(load, [server?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, [server?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [allOthers, setAllOthers] = useState(false);
 
   const ready = (providers ?? []).filter((p) => p.authenticated);
   const keyed = (providers ?? []).filter((p) => !p.authenticated && p.auth_type === 'api_key' && p.key_env);
   const other = (providers ?? []).filter((p) => !p.authenticated && !(p.auth_type === 'api_key' && p.key_env));
 
   return (
-    <Screen title="Providers" subtitle="Model providers your agent can use. Keys are encrypted on this phone for your server alone and never shown again.">
-      {error ? <Text style={s.error}>{error}</Text> : null}
-      {!providers ? (
+    <Screen title="Providers" subtitle="Model providers your agent can use. Keys are encrypted on this phone for your server alone and never shown again."
+      onRefresh={load}>
+      {error && providers ? <Text style={s.error}>{error}</Text> : null}
+      {!providers ? (error ? <LoadError message={error} onRetry={load} /> : (
         <View style={{ gap: 10, marginTop: 16 }}>{[0, 1, 2].map((i) => <Skeleton key={i} height={56} radius={16} />)}</View>
-      ) : (
+      )) : (
         <>
           <SectionHeader title="Ready" />
           <ListGroup>
@@ -62,7 +65,8 @@ export default function ProvidersScreen() {
               <SectionHeader title="Set up on the server" />
               <Text style={[s.note, { marginBottom: 8 }]}>These sign in through a browser. Run `hermes model` on the server to connect them.</Text>
               <ListGroup>
-                {other.slice(0, 20).map((p) => <ListRow key={p.slug} icon={<Plug size={18} color={t.colors.textSecondary} />} title={p.name} />)}
+                {(allOthers ? other : other.slice(0, 20)).map((p) => <ListRow key={p.slug} icon={<Plug size={18} color={t.colors.textSecondary} />} title={p.name} />)}
+                {other.length > 20 && !allOthers ? <ListRow title={`Show all ${other.length}`} onPress={() => setAllOthers(true)} /> : null}
               </ListGroup>
             </>
           ) : null}
@@ -108,10 +112,13 @@ function KeySheet({ provider, onClose, onSaved }: { provider: Provider | null; o
   const remove = async () => {
     if (!server || !p) return;
     setBusy(true);
+    setError('');
     try {
       await signedApi(server, 'DELETE', `/api/providers/key/${p.key_env}`);
+      haptic.success();
       onSaved();
     } catch (e) {
+      haptic.error();
       setError((e as Error).message);
     } finally {
       setBusy(false);
@@ -125,7 +132,7 @@ function KeySheet({ provider, onClose, onSaved }: { provider: Provider | null; o
         <Field value={value} onChangeText={setValue} placeholder={p.authenticated ? 'Paste a new key to replace it' : `Paste your ${p.name} API key`}
           secureTextEntry autoCapitalize="none" autoCorrect={false} hint={`Saved on your server as ${p.key_env}. It's checked with ${p.name} first.`} />
         <Button title={p.authenticated ? 'Replace key' : 'Save key'} loading={busy} disabled={!value.trim()} onPress={save} />
-        {p.authenticated ? <Button title="Remove key" variant="ghost" onPress={remove} /> : null}
+        {p.authenticated ? <ConfirmButton title="Remove key" loading={busy} onConfirm={remove} accessibilityLabel={`Remove the ${p.name} key`} /> : null}
         {error ? <Text style={[s.note, { color: t.colors.danger, textAlign: 'center' }]}>{error}</Text> : null}
       </View>
     </Sheet>

@@ -22,7 +22,7 @@ import { watchNetwork } from '../lib/network';
 import { attachPersistence } from '../lib/persist';
 import { usePrefs } from '../lib/prefs';
 import { registerServiceWorker } from '../lib/push';
-import { homeChat, useApp } from '../lib/store';
+import { useApp } from '../lib/store';
 import { ThemeProvider, useTheme } from '../lib/themeContext';
 
 export default function RootLayout() {
@@ -37,12 +37,13 @@ export default function RootLayout() {
   const checkForUpdate = useAppUpdate((s) => s.check);
   const [opened, setOpened] = useState(false);
 
-  // Every time the app starts it opens on the main bot, not on whichever one was open last.
+  // Every time the app starts it opens on the main bot, not on whichever one was open last. Its chats aren't
+  // loaded yet, so no chat is picked here: the screens fall back to its main chat once they know it.
   useEffect(() => {
     if (!ready || !prefsLoaded || opened) return;
-    const { servers, select, runtime } = useApp.getState();
+    const { servers, select, selection } = useApp.getState();
     const main = resolveMainBot(servers, usePrefs.getState().prefs.mainBot);
-    if (main) select(main.id, homeChat(runtime[main.id]));
+    if (main && main.id !== selection.serverId) select(main.id);
     setOpened(true);
   }, [ready, prefsLoaded, opened]);
 

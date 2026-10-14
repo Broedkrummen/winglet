@@ -8,10 +8,9 @@ import { Button, IconButton } from '../components/ui';
 import { defaultDeviceName, fetchInfo, pair, parsePairLink, verifyDevice } from '../lib/api';
 import { useApp } from '../lib/store';
 import { FIXED } from '../lib/theme';
-import { makeStyles, useTheme } from '../lib/themeContext';
+import { makeStyles } from '../lib/themeContext';
 
 export default function ScanScreen() {
-  const t = useTheme();
   const styles = useStyles();
   const insets = useSafeAreaInsets();
   const [permission, requestPermission] = useCameraPermissions();

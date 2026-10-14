@@ -16,7 +16,7 @@ import { bytes, duration, idempotencyKey } from '../lib/control';
 import { haptic } from '../lib/haptics';
 import { useApp, useServerState } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
-import type { Job, PauseState, Server, SystemInfo, UpdatesInfo } from '../lib/types';
+import type { Job, PauseState, SystemInfo, UpdatesInfo } from '../lib/types';
 
 type Confirm = 'restart' | 'hermes' | 'winglet';
 const JOB_LABEL: Record<Job['kind'], string> = {

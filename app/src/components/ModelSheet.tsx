@@ -124,12 +124,13 @@ function ModelSheet({ server, chatId, visible, onClose, model, info }: {
   const card = latest && shownId === latest.id ? latest : undefined;
   const cardDone = pickerOf(card)?.status === 'done';
 
-  // After a pick, a moment to see Hermes's confirmation, then back to the chat.
+  // After a pick (a model or a reasoning level), a moment to see Hermes's confirmation, then back to the chat.
+  const picked = cardDone || pickerOf(reasoning)?.status === 'done';
   useEffect(() => {
-    if (!visible || !cardDone) return;
+    if (!visible || !picked) return;
     const id = setTimeout(onClose, 1400);
     return () => clearTimeout(id);
-  }, [visible, cardDone, onClose]);
+  }, [visible, picked, onClose]);
 
   // The reasoning card: note the first new one as ours, so the chat never shows it.
   useEffect(() => {

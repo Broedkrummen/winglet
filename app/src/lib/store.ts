@@ -4,7 +4,7 @@ import { Platform } from 'react-native';
 import { RecoveryCoordinator } from './recovery';
 import { api, ApiError, wsUrl } from './api';
 import { cacheGet, cacheRemove, cacheSet } from './cache';
-import { markFailed, mergeMessages } from './messages';
+import { activityKind, markFailed, mergeMessages } from './messages';
 import { getJSON, setJSON } from './storage';
 import { NEEDS_VERIFY } from './verify';
 import type { Attachment, BotRow, Chat, ConnStatus, DraftFile, InboxItem, Job, Me, Message, PauseState, PetSheet, ReplyRef, Server, ServerInfo } from './types';
@@ -301,7 +301,9 @@ export const useApp = create<AppState>((set, get) => {
           // The server has it (the HTTP reply may have been lost): it's no longer ours to resend.
           updateOutbox(serverId, (o) => o.filter((x) => x.client_id !== clientId));
         }
-        if (m.role === 'bot' && m.status === 'final') {
+        // A reply ends the bot's turn. Its tool-progress bubbles arrive as final messages too, but it's still
+        // working: Hermes only re-sends "typing" a moment later, and the chat shouldn't flicker in between.
+        if (m.role === 'bot' && m.status === 'final' && !activityKind(m)) {
           patch(serverId, (s) => {
             const typing = { ...s.typing };
             delete typing[ev.chat_id];

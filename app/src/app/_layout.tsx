@@ -5,7 +5,7 @@ import { Inter_700Bold } from '@expo-google-fonts/inter/700Bold';
 import { Inter_800ExtraBold } from '@expo-google-fonts/inter/800ExtraBold';
 import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { AppState, Platform, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -16,6 +16,7 @@ import { Toasts } from '../components/Toasts';
 import { VerifySheet } from '../components/VerifyPhone';
 import { clearUpdateDownloads } from '../lib/appInstall';
 import { lockOnStart, onAppVisibility } from '../lib/appLock';
+import { resolveMainBot } from '../lib/bots';
 import { useAppUpdate } from '../lib/appUpdateCheck';
 import { watchNetwork } from '../lib/network';
 import { attachPersistence } from '../lib/persist';
@@ -34,6 +35,17 @@ export default function RootLayout() {
   const loadPrefs = usePrefs((s) => s.load);
   const updateCheck = usePrefs((s) => s.loaded && s.prefs.updateCheck);
   const checkForUpdate = useAppUpdate((s) => s.check);
+  const [opened, setOpened] = useState(false);
+
+  // Every time the app starts it opens on the main bot, not on whichever one was open last. Its chats aren't
+  // loaded yet, so no chat is picked here: the screens fall back to its main chat once they know it.
+  useEffect(() => {
+    if (!ready || !prefsLoaded || opened) return;
+    const { servers, select, selection } = useApp.getState();
+    const main = resolveMainBot(servers, usePrefs.getState().prefs.mainBot);
+    if (main && main.id !== selection.serverId) select(main.id);
+    setOpened(true);
+  }, [ready, prefsLoaded, opened]);
 
   useEffect(() => {
     const detach = attachPersistence();
@@ -73,7 +85,7 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <ThemeProvider>
         {/* A font that fails to load falls back to the system font rather than a blank screen. */}
-        {(!fontsLoaded && !fontError) || !ready || !prefsLoaded ? <Splash /> : <Navigator />}
+        {(!fontsLoaded && !fontError) || !ready || !prefsLoaded || !opened ? <Splash /> : <Navigator />}
       </ThemeProvider>
     </GestureHandlerRootView>
   );

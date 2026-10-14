@@ -37,35 +37,73 @@ export function markFailed(list: Message[], clientId: string): Message[] {
 
 /** Hermes's tool names: snake_case (web_search, read_file) or one of its plain ones. */
 const PLAIN_TOOLS = new Set(['terminal', 'process', 'browser', 'todo', 'memory', 'patch', 'delegate', 'clarify', 'cronjob', 'vision', 'search', 'think']);
-/** One line of Hermes's tool progress: an emoji, the tool's name, and what it's doing ("🔍 web_search: "cats""). */
-const PROGRESS_LINE = /^\p{Extended_Pictographic}️?\s+([a-z][a-z0-9]*(?:[_.-][a-z0-9]+)*)(?:\s*:.*|\s*\.{3}|\s*…)?$/u;
+/** One line of Hermes's tool progress: an emoji, the tool's name, and what it's doing ("🔍 web_search: "cats""), and "(×3)" when it repeats. */
+const PROGRESS_LINE = /^\p{Extended_Pictographic}\uFE0F?\s+([a-z][a-z0-9]*(?:[_.-][a-z0-9]+)*)(?:\s*:.*|\s*\.{3}|\s*…)?(?:\s+\(×\d+\))?$/u;
+/** The same lines in Hermes's friendly wording ("🔍 Searching the web for cats"): the verbs it has for its built-in tools. */
+const FRIENDLY_VERBS = [
+  'Searching the web', 'Searching past sessions', 'Searching files', 'Reading skill', 'Listing skills', 'Updating skill', 'Updating memory',
+  'Updating tasks', 'Looking at the image', 'Generating image', 'Generating video', 'Generating speech', 'Running code', 'Running', 'Reading',
+  'Browsing', 'Clicking', 'Typing', 'Writing', 'Editing', 'Delegating', 'Scheduling', 'Asking',
+];
+const FRIENDLY_LINE = new RegExp(`^\\p{Extended_Pictographic}\\uFE0F?\\s+(?:${FRIENDLY_VERBS.join('|')})(?:\\s.*)?$`, 'u');
 
 function isProgressLine(line: string): boolean {
   const m = PROGRESS_LINE.exec(line.trim());
   return !!m && (m[1].includes('_') || PLAIN_TOOLS.has(m[1]));
 }
 
-/**
- * Hermes narrating its own work, not answering: a tool-progress bubble ("🔍 web_search: …"), or a status note it
- * keeps updating in place (context pressure, fallback). The server can say so itself (`meta.activity`); otherwise
- * a bot message counts only when every line of it is tool progress, so a real answer that mentions a tool stays.
- */
-export function isActivity(m: Message): boolean {
+const isFriendlyLine = (line: string) => FRIENDLY_LINE.test(line.trim());
+
+/** A bot message that could be Hermes narrating its work, with no attachment, picker, card or reply on it. */
+function isPlainBot(m: Message): boolean {
   const meta = m.meta ?? {};
-  if (m.role === 'user' || meta.inbox_id || meta.picker || meta.kind || meta.attachments?.length || meta.reply_to || meta.routine) return false;
-  if (meta.activity) return true;
-  if (m.role === 'system') return !!meta.status_key;
-  const lines = m.text.split('\n').filter((l) => l.trim());
-  return m.role === 'bot' && m.text.length <= 1200 && lines.length > 0 && lines.every(isProgressLine);
+  return m.role === 'bot' && !(meta.inbox_id || meta.picker || meta.kind || meta.attachments?.length || meta.reply_to || meta.routine) && m.text.length <= 1200;
 }
+
+/**
+ * How sure we are that a message is Hermes narrating its own work, not answering. "sure": the server says so
+ * (`meta.activity`), it's a status note Hermes updates in place, or every line is a tool-progress line with
+ * the tool's own name. "maybe": every line is in Hermes's friendly wording, which a real answer could also
+ * start with, so it counts only where an answer follows (see `groupActivity`).
+ */
+export function activityKind(m: Message): 'sure' | 'maybe' | null {
+  const meta = m.meta ?? {};
+  if (m.role === 'user' || meta.inbox_id || meta.picker || meta.kind || meta.attachments?.length || meta.reply_to || meta.routine) return null;
+  if (meta.activity) return 'sure';
+  if (m.role === 'system') return meta.status_key ? 'sure' : null;
+  if (!isPlainBot(m)) return null;
+  const lines = m.text.split('\n').filter((l) => l.trim());
+  if (!lines.length) return null;
+  if (lines.every(isProgressLine)) return 'sure';
+  // Hermes posts its progress whole; a reply still streaming in that starts like one is a reply.
+  if (m.status === 'streaming') return null;
+  return lines.every((l) => isProgressLine(l) || isFriendlyLine(l)) ? 'maybe' : null;
+}
+
+/** Hermes narrating its work (see `activityKind`), without the ones that depend on what comes after. */
+export const isActivity = (m: Message) => activityKind(m) === 'sure';
 
 export type Entry = { kind: 'msg'; m: Message } | { kind: 'activity'; id: string; items: Message[] };
 
-/** The messages as the chat shows them: runs of backend activity folded into one entry, the replies as they are. */
-export function groupActivity(messages: readonly Message[]): Entry[] {
+/**
+ * The messages as the chat shows them: runs of backend activity folded into one entry, the replies as they are.
+ * A "maybe" message folds when the reply it led up to comes after it, or while the bot is still working on it
+ * (`typing`) and nothing from you comes after it. A turn that ended on one keeps it visible: it may be the answer.
+ */
+export function groupActivity(messages: readonly Message[], typing = false): Entry[] {
+  const hidden = new Set<string>();
+  let answered = false; // a real reply later in the same turn
+  let open = true; // no message from you later: this is the turn still in progress
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role === 'user') { answered = false; open = false; continue; }
+    const kind = activityKind(m);
+    if (kind === 'sure' || (kind === 'maybe' && (answered || (open && typing)))) hidden.add(m.id);
+    else if (m.role === 'bot') answered = true;
+  }
   const out: Entry[] = [];
   for (const m of messages) {
-    if (!isActivity(m)) {
+    if (!hidden.has(m.id)) {
       out.push({ kind: 'msg', m });
       continue;
     }

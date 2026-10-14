@@ -6,11 +6,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AgentFace } from '../../components/AgentFace';
 import { BotSwitcher } from '../../components/BotSwitcher';
 import { ChatView } from '../../components/ChatView';
+import { ChatMenu } from '../../components/ChatMenu';
 import { ConnectionBanner } from '../../components/ConnectionBanner';
-import { Hash, MessageSquarePlus, Pencil, Search, Sparkles, Trash2, X } from '../../components/icons';
-import { Sheet, SheetAction } from '../../components/Sheet';
+import { Hash, MessageSquarePlus, Search, Sparkles, X } from '../../components/icons';
 import { useTabBarSpace } from '../../components/TabBar';
-import { Button, Field, IconButton, SectionHeader, Skeleton, Tap } from '../../components/ui';
+import { Button, IconButton, SectionHeader, Skeleton, Tap } from '../../components/ui';
 import { ago } from '../../lib/agent';
 import { api } from '../../lib/api';
 import { startNewChat } from '../../lib/actions';
@@ -136,7 +136,7 @@ function ChatList({ server, activeChatId }: { server: Server; activeChatId?: str
           </>
         )}
       </ScrollView>
-      <ChatMenu server={server} chat={menu} onClose={() => setMenu(null)} />
+      <ChatMenu server={server} chatId={menu?.id ?? ''} title={menu ? `#${menu.title}` : ''} visible={!!menu} onClose={() => setMenu(null)} />
     </View>
   );
 }
@@ -228,39 +228,6 @@ function splitMatch(text: string, query: string): { text: string; hit: boolean }
   }
   if (from < text.length) out.push({ text: text.slice(from), hit: false });
   return out;
-}
-
-function ChatMenu({ server, chat, onClose }: { server: Server; chat: Chat | null; onClose: () => void }) {
-  const t = useTheme();
-  const renameChat = useApp((s) => s.renameChat);
-  const deleteChat = useApp((s) => s.deleteChat);
-  const [mode, setMode] = useState<'menu' | 'rename' | 'delete'>('menu');
-  const [title, setTitle] = useState('');
-  const close = () => { setMode('menu'); onClose(); };
-  return (
-    <Sheet visible={!!chat} onClose={close} title={chat ? `#${chat.title}` : undefined}>
-      {mode === 'menu' ? (
-        <>
-          <SheetAction icon={<Pencil size={20} color={t.colors.text} />} label="Rename" onPress={() => { setTitle(chat?.title ?? ''); setMode('rename'); }} />
-          <SheetAction icon={<Trash2 size={20} color={t.colors.danger} />} label="Delete chat" destructive onPress={() => setMode('delete')} />
-        </>
-      ) : mode === 'rename' ? (
-        <View style={{ gap: 14, paddingHorizontal: 4 }}>
-          <Field value={title} onChangeText={setTitle} placeholder="Chat name" autoFocus onSubmitEditing={async () => { if (chat) await renameChat(server.id, chat.id, title); close(); }} />
-          <Button title="Save" onPress={async () => { if (chat) await renameChat(server.id, chat.id, title); close(); }} />
-        </View>
-      ) : (
-        <View style={{ gap: 14, paddingHorizontal: 4 }}>
-          <Text style={{ ...t.type.callout, color: t.colors.textSecondary, textAlign: 'center' }}>
-            This removes the chat from Winglet on every device. Hermes keeps its own session history.
-          </Text>
-          <Button title="Delete chat" variant="danger" icon={<Trash2 size={16} color={t.colors.danger} />}
-            onPress={async () => { if (chat) await deleteChat(server.id, chat.id); close(); }} />
-          <Button title="Cancel" variant="secondary" onPress={() => setMode('menu')} />
-        </View>
-      )}
-    </Sheet>
-  );
 }
 
 const useStyles = makeStyles((t) => ({

@@ -12,7 +12,6 @@ import Animated, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { mediaUrl } from '../lib/api';
 import { connectionView } from '../lib/connection';
-import { exportChat } from '../lib/exportChat';
 import { clearFocus, requestFocus, useFocusRequest } from '../lib/focus';
 import { haptic } from '../lib/haptics';
 import { afterOlderPage, atStart, canLoadOlder, newPaging } from '../lib/history';
@@ -20,7 +19,6 @@ import { chatMessages, groupActivity, isActivity, type Entry } from '../lib/mess
 import { useModelSheet } from '../lib/modelSheet';
 import { easeOut, spring, useReducedMotion } from '../lib/motion';
 import { usePrefs } from '../lib/prefs';
-import { mutedUntil, usePushPrefs } from '../lib/pushPrefs';
 import { homeChat, isTyping, useApp, useServerState } from '../lib/store';
 import { plainText } from '../lib/text';
 import { FIXED } from '../lib/theme';
@@ -29,21 +27,21 @@ import type { DraftFile, InboxItem, Message, ReplyRef, Server, Upload } from '..
 import { AgentFace, useAvatarColor } from './AgentFace';
 import { UserAvatar } from './BotAvatar';
 import { Composer, focusComposer } from './Composer';
+import { ChatMenu } from './ChatMenu';
 import { ConnectionBanner } from './ConnectionBanner';
 import { FilesSheet } from './FilesSheet';
 import { GoalSheet, GoalStrip, useChatGoal } from './Goal';
 import { PausedBanner } from './PausedBanner';
 import { Glass } from './Glass';
 import {
-  Activity, ArrowDown, Bell, BellOff, CalendarClock, ChevronDown, ChevronLeft, Clock, Copy, Download, FileText, Images, MoreHorizontal, Pencil, Reply,
-  RotateCcw, Share, Target, Trash2,
+  ArrowDown, CalendarClock, ChevronDown, ChevronLeft, Clock, Copy, FileText, MoreHorizontal, Pencil, Reply, RotateCcw, Share,
 } from './icons';
 import { InboxCard } from './InboxCards';
 import { Markdown } from './Markdown';
 import { PickerCard } from './PickerCard';
 import { MessageAttachments } from './MessageAttachments';
 import { Sheet, SheetAction } from './Sheet';
-import { Badge, Button, Chip, Field, IconButton, Tap } from './ui';
+import { Badge, Button, Chip, IconButton, Tap } from './ui';
 
 const GROUP_WINDOW_S = 7 * 60;
 const SUGGESTIONS = ['What can you do?', "What's on my plate today?", 'Check disk space on this machine'];
@@ -177,7 +175,7 @@ export function ChatView({ server, chatId, showBack, embedded }: { server: Serve
         onHeight={setComposerH} placeholder={main || chat?.kind === 'home' ? `Message ${server.bot.title}` : `Message #${chat?.title ?? 'chat'}`} />
       <ChatMenu server={server} chatId={chatId} title={title} visible={menu} onClose={() => setMenu(false)}
         onGoal={goalsSupported && chat?.kind !== 'home' ? () => setGoalOpen(true) : undefined} hasGoal={!!goal && goal.status !== 'done'}
-        onFiles={runtime?.info?.features?.files ? () => setFilesOpen(true) : undefined} />
+        onFiles={runtime?.info?.features?.files ? () => setFilesOpen(true) : undefined} onDeleted={() => router.replace('/chats')} />
       <GoalSheet server={server} chatId={chatId} goal={goal} visible={goalOpen} onClose={() => setGoalOpen(false)} onChanged={refreshGoal} />
       <FilesSheet server={server} chatId={chatId} visible={filesOpen} onClose={() => setFilesOpen(false)}
         onJump={(id) => requestFocus(server.id, chatId, id)} />
@@ -843,95 +841,6 @@ function EmptyChat({ server, chatId, top, bottom }: { server: Server; chatId: st
   );
 }
 
-const MUTE_OPTIONS: { label: string; seconds: number }[] = [
-  { label: 'For 1 hour', seconds: 3600 },
-  { label: 'For 8 hours', seconds: 8 * 3600 },
-  { label: 'For a day', seconds: 24 * 3600 },
-  { label: 'Until I turn it back on', seconds: 0 },
-];
-
-function ChatMenu({ server, chatId, title, visible, onClose, onGoal, hasGoal, onFiles }: {
-  server: Server; chatId: string; title: string; visible: boolean; onClose: () => void;
-  onGoal?: () => void; hasGoal?: boolean; onFiles?: () => void;
-}) {
-  const t = useTheme();
-  const s = useStyles();
-  const chat = useApp((st) => st.runtime[server.id]?.chats[chatId]);
-  const renameChat = useApp((st) => st.renameChat);
-  const deleteChat = useApp((st) => st.deleteChat);
-  const features = useApp((st) => st.runtime[server.id]?.info?.features);
-  const prefs = usePushPrefs((st) => st.byServer[server.id]);
-  const [mode, setMode] = useState<'menu' | 'rename' | 'delete' | 'mute'>('menu');
-  const [name, setName] = useState('');
-  const [busy, setBusy] = useState(false);
-  const side = chat?.kind === 'chat' && chatId !== homeChat(useApp.getState().runtime[server.id]);
-  const until = mutedUntil(prefs, chatId);
-  const close = () => { setMode('menu'); onClose(); };
-
-  useEffect(() => {
-    if (visible && features?.mute) usePushPrefs.getState().load(server);
-  }, [visible, features?.mute, server]);
-
-  const fail = (title: string) => (e: unknown) => useApp.getState().toast({ serverId: server.id, title, body: (e as Error).message });
-  const mute = (seconds: number | null) => {
-    close();
-    usePushPrefs.getState().save(server, (p) => {
-      const muted = { ...p.muted };
-      if (seconds === null) delete muted[chatId];
-      else muted[chatId] = seconds === 0 ? 0 : Date.now() / 1000 + seconds;
-      return { ...p, muted };
-    }).catch(fail("Couldn't change notifications"));
-  };
-
-  return (
-    <Sheet visible={visible} onClose={close} title={mode === 'mute' ? 'Mute notifications' : title}>
-      {mode === 'menu' ? (
-        <>
-          {onGoal ? <SheetAction icon={<Target size={20} color={t.colors.text} />} label={hasGoal ? 'Goal' : 'Set a goal'} onPress={() => { close(); onGoal(); }} /> : null}
-          {onFiles ? <SheetAction icon={<Images size={20} color={t.colors.text} />} label="Files and photos" onPress={() => { close(); onFiles(); }} /> : null}
-          {side ? <SheetAction icon={<Pencil size={20} color={t.colors.text} />} label="Rename" onPress={() => { setName(chat?.title ?? ''); setMode('rename'); }} /> : null}
-          {features?.mute ? (until !== undefined ? (
-            <SheetAction icon={<Bell size={20} color={t.colors.text} />} label={`Unmute${until ? ` (muted until ${timeOf(until)})` : ''}`} onPress={() => mute(null)} />
-          ) : (
-            <SheetAction icon={<BellOff size={20} color={t.colors.text} />} label="Mute notifications" onPress={() => setMode('mute')} />
-          )) : null}
-          {features?.export ? (
-            <SheetAction icon={<Download size={20} color={t.colors.text} />} label={busy ? 'Exporting…' : 'Export chat'} onPress={async () => {
-              setBusy(true);
-              try {
-                await exportChat(server, chatId, title.replace(/^#/, ''));
-                close();
-              } catch (e) {
-                fail("Couldn't export")(e);
-              } finally {
-                setBusy(false);
-              }
-            }} />
-          ) : null}
-          <SheetAction icon={<Activity size={20} color={t.colors.text} />} label="Connection details" onPress={() => { close(); router.push(`/connection/${server.id}`); }} />
-          {side ? <SheetAction icon={<Trash2 size={20} color={t.colors.danger} />} label="Delete chat" destructive onPress={() => setMode('delete')} /> : null}
-        </>
-      ) : mode === 'mute' ? (
-        <>
-          <Text style={s.menuNote}>Approvals and questions still come through: {server.bot.title} is waiting on those.</Text>
-          {MUTE_OPTIONS.map((o) => <SheetAction key={o.label} label={o.label} onPress={() => mute(o.seconds)} />)}
-        </>
-      ) : mode === 'rename' ? (
-        <View style={{ gap: 14, paddingHorizontal: 4 }}>
-          <Field value={name} onChangeText={setName} placeholder="Chat name" autoFocus />
-          <Button title="Save" onPress={async () => { await renameChat(server.id, chatId, name); close(); }} />
-        </View>
-      ) : (
-        <View style={{ gap: 14, paddingHorizontal: 4 }}>
-          <Text style={s.menuNote}>This removes the chat from Winglet on every device. Hermes keeps its own session history.</Text>
-          <Button title="Delete chat" variant="danger" onPress={async () => { await deleteChat(server.id, chatId); close(); router.replace('/chats'); }} />
-          <Button title="Cancel" variant="secondary" onPress={() => setMode('menu')} />
-        </View>
-      )}
-    </Sheet>
-  );
-}
-
 const useStyles = makeStyles((t) => ({
   root: { flex: 1, backgroundColor: t.colors.bg },
   /** Messages keep a readable width on tablets and desktops, lined up with the composer. */
@@ -1013,6 +922,5 @@ const useStyles = makeStyles((t) => ({
   olderRow: { alignItems: 'center', paddingVertical: 14 },
   olderText: { ...t.type.caption, color: t.colors.textTertiary },
   menuPreview: { ...t.type.callout, color: t.colors.textSecondary, paddingHorizontal: 12, marginBottom: 6 },
-  menuNote: { ...t.type.callout, color: t.colors.textSecondary, textAlign: 'center', paddingHorizontal: 12, marginBottom: 6 },
   selectText: { ...t.type.body, color: t.colors.text },
 }));

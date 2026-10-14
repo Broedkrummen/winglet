@@ -285,7 +285,8 @@ function MessageList({ server, chatId, messages, loaded, typing, top, bottom, on
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
   const jump = useCallback((id: string) => {
-    const index = rowsRef.current.findIndex((r) => r.kind === 'msg' && r.m.id === id);
+    // A message folded into a run of activity is found in its "…" row, which opens to show it.
+    const index = rowsRef.current.findIndex((r) => (r.kind === 'msg' && r.m.id === id) || (r.kind === 'activity' && r.items.some((m) => m.id === id)));
     if (index < 0) {
       // Not loaded yet (an older message): page history in until it's here, then show it.
       requestFocus(server.id, chatId, id);
@@ -404,7 +405,7 @@ function MessageList({ server, chatId, messages, loaded, typing, top, bottom, on
         data={rows}
         keyExtractor={(r) => r.key}
         renderItem={({ item }) => item.kind === 'day' ? <DayChip label={item.label} /> : item.kind === 'activity' ? (
-          <ActivityRow items={item.items} working={item.working} />
+          <ActivityRow items={item.items} working={item.working} flash={flash !== null && item.items.some((m) => m.id === flash)} />
         ) : (
           <MessageRow server={server} message={item.m} first={item.first} last={item.last} live={item.live} fresh={item.fresh}
             layout={layout} flash={flash === item.m.id} actions={actions}
@@ -761,10 +762,12 @@ function Cursor({ onAccent }: { onAccent: boolean }) {
  * Everything Hermes does that isn't a reply (reading a skill, searching, running a tool) folded into one "…".
  * Tap it to see the steps; by default only the replies show.
  */
-const ActivityRow = memo(function ActivityRow({ items, working }: { items: Message[]; working: boolean }) {
+const ActivityRow = memo(function ActivityRow({ items, working, flash }: { items: Message[]; working: boolean; flash: boolean }) {
   const t = useTheme();
   const s = useStyles();
   const [open, setOpen] = useState(false);
+  // Jumped to a step in here (from search or a reply): show it.
+  useEffect(() => { if (flash) setOpen(true); }, [flash]);
   const n = items.length;
   return (
     <View style={[s.lane, s.activity]}>

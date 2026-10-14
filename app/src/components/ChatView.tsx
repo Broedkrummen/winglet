@@ -16,7 +16,7 @@ import { exportChat } from '../lib/exportChat';
 import { clearFocus, requestFocus, useFocusRequest } from '../lib/focus';
 import { haptic } from '../lib/haptics';
 import { afterOlderPage, atStart, canLoadOlder, newPaging } from '../lib/history';
-import { groupActivity, inSheet, isActivity, type Entry } from '../lib/messages';
+import { chatMessages, groupActivity, isActivity, type Entry } from '../lib/messages';
 import { useModelSheet } from '../lib/modelSheet';
 import { easeOut, spring, useReducedMotion } from '../lib/motion';
 import { usePrefs } from '../lib/prefs';
@@ -121,7 +121,7 @@ export function ChatView({ server, chatId, showBack, embedded }: { server: Serve
   // Commands the app sent for a control (/model, /reasoning) stay out of the conversation, and so do the cards
   // Hermes answers them with: those are in the model sheet beside the message box.
   const sheetSlot = useModelSheet((st) => st.slots[`${server.id}:${chatId}`]);
-  const shown = useMemo(() => (messages ?? []).filter((m) => !m.meta?.hidden && !inSheet(m, sheetSlot)), [messages, sheetSlot]);
+  const shown = useMemo(() => chatMessages(messages ?? [], sheetSlot), [messages, sheetSlot]);
 
   const reply = useCallback((m: Message) => {
     haptic.selection();

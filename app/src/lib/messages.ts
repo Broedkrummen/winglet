@@ -76,14 +76,30 @@ export function groupActivity(messages: readonly Message[]): Entry[] {
   return out;
 }
 
+type SheetSlot = { before: readonly string[]; claimed?: string; until: number };
+
 /**
- * Pickers the model sheet asks for, which belong in the sheet and not the chat: every model picker, and the
+ * Pickers the model sheet asks for, which belong in the sheet and not the chat: a model or reasoning card that
+ * answers a command the sheet sent (`answersHidden`: the latest user message before it is a hidden one), and the
  * reasoning choice that arrives while the sheet is waiting for it (a card not already in the chat when it asked).
+ * A /model or /reasoning typed in the chat by hand gets its card in the chat, as before.
  */
-export function inSheet(m: Message, slot: { before: readonly string[]; claimed?: string; until: number } | undefined, now = Date.now()): boolean {
+export function inSheet(m: Message, slot: SheetSlot | undefined, now = Date.now(), answersHidden = false): boolean {
   const picker = m.meta?.picker;
-  if (!picker) return false;
-  if (picker.kind === 'model') return true;
+  if (!picker || (picker.kind !== 'model' && picker.kind !== 'choice')) return false;
+  if (answersHidden) return true;
   if (!slot || picker.kind !== 'choice') return false;
   return m.id === slot.claimed || (!slot.claimed && now < slot.until && !slot.before.includes(m.id));
+}
+
+/** The conversation as the chat shows it: without the commands the app sent for a control, or the cards that went to the sheet. */
+export function chatMessages(messages: readonly Message[], slot: SheetSlot | undefined, now = Date.now()): Message[] {
+  const out: Message[] = [];
+  let hiddenAsk = false;
+  for (const m of messages) {
+    if (m.role === 'user') hiddenAsk = !!m.meta?.hidden;
+    if (m.meta?.hidden || inSheet(m, slot, now, hiddenAsk)) continue;
+    out.push(m);
+  }
+  return out;
 }

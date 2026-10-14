@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { groupActivity, inSheet, isActivity, markFailed, mergeMessages } from '../src/lib/messages.ts';
+import { chatMessages, groupActivity, inSheet, isActivity, markFailed, mergeMessages } from '../src/lib/messages.ts';
 import type { Message } from '../src/lib/types.ts';
 
 const msg = (id: string, over: Partial<Message> = {}): Message => ({
@@ -104,8 +104,10 @@ test('runs of activity fold into one entry between the replies', () => {
 
 test("the model sheet's pickers stay out of the chat, and only the reasoning card it asked for", () => {
   const picker = (id: string, kind: 'model' | 'choice') => msg(id, { meta: { picker: { id, kind, status: 'open', expires_at: 9 } } });
-  assert.ok(inSheet(picker('m', 'model'), undefined));
-  assert.ok(!inSheet(picker('c', 'choice'), undefined)); // typed by hand: stays in the chat
+  assert.ok(!inSheet(picker('m', 'model'), undefined)); // typed by hand: stays in the chat
+  assert.ok(!inSheet(picker('c', 'choice'), undefined));
+  assert.ok(inSheet(picker('m', 'model'), undefined, 0, true)); // answers the sheet's own /model
+  assert.ok(inSheet(picker('c', 'choice'), undefined, 0, true));
   const waiting = { before: ['old'], until: 1000 };
   assert.ok(inSheet(picker('new', 'choice'), waiting, 500));
   assert.ok(!inSheet(picker('old', 'choice'), waiting, 500)); // was already there
@@ -113,4 +115,16 @@ test("the model sheet's pickers stay out of the chat, and only the reasoning car
   assert.ok(inSheet(picker('new', 'choice'), { ...waiting, claimed: 'new', until: 0 }, 2000)); // claimed stays claimed
   assert.ok(!inSheet(picker('other', 'choice'), { ...waiting, claimed: 'new' }, 500));
   assert.ok(!inSheet(say('t', 'hi'), waiting, 500));
+});
+
+test('the chat keeps a picker typed by hand and drops the ones the sheet asked for', () => {
+  const picker = (id: string, kind: 'model' | 'choice' | 'confirm') => msg(id, { meta: { picker: { id, kind, status: 'open', expires_at: 9 } } });
+  const list = [
+    msg('ask1', { role: 'user', text: '/model', meta: { hidden: true } }), picker('m1', 'model'),
+    msg('ask2', { role: 'user', text: '/model' }), picker('m2', 'model'),
+    msg('ask3', { role: 'user', text: '/reasoning', meta: { hidden: true } }), picker('r1', 'choice'), picker('x', 'confirm'),
+    msg('hi', { role: 'user', text: 'hi' }), say('reply', 'Hello'),
+  ];
+  assert.deepEqual(chatMessages(list, undefined).map((m) => m.id), ['ask2', 'm2', 'x', 'hi', 'reply']);
+  assert.deepEqual(chatMessages([], undefined), []);
 });

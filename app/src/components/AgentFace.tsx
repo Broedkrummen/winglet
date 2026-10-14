@@ -37,13 +37,29 @@ export function useAvatarColor(server: Server): string {
 /**
  * The bot's face, everywhere one appears: its pet when it has one, its orb otherwise. Both show what it's
  * doing, and a pet sits on a gradient of its own colour, not the colour the bot was made with.
+ *
+ * `still` is for avatars in lists (a face on every message): they follow only the pet and whether the bot is
+ * online, so a reply streaming in doesn't make each of them look at what the bot is doing.
  */
-export function AgentFace({ server, size, glow, animated = false, still, mood, status, shape = 'circle', style }: Props) {
+export function AgentFace(props: Props) {
+  return props.still && !props.mood ? <StillFace {...props} /> : <LiveFace {...props} />;
+}
+
+function StillFace(props: Props) {
+  const online = useApp((st) => st.runtime[props.server.id]?.status === 'online');
+  return <Face {...props} online={online} live={online ? 'idle' : 'offline'} />;
+}
+
+function LiveFace(props: Props) {
+  const online = useApp((st) => st.runtime[props.server.id]?.status === 'online');
+  const live = useApp((st) => moodOf(st.runtime[props.server.id]));
+  return <Face {...props} online={online} live={live} />;
+}
+
+function Face({ server, size, glow, animated = false, still, mood, status, shape = 'circle', style, online, live }: Props & { online: boolean; live: Mood }) {
   const t = useTheme();
   const pet = useApp((st) => st.runtime[server.id]?.pet);
-  const online = useApp((st) => st.runtime[server.id]?.status === 'online');
-  const live = useApp((st) => moodOf(st.runtime[server.id]));
-  const lastReply = useApp((st) => st.runtime[server.id]?.lastReplyAt ?? 0);
+  const lastReply = useApp((st) => (still ? 0 : st.runtime[server.id]?.lastReplyAt ?? 0));
   const replied = Date.now() - lastReply < WAVE_MS;
   const [, wake] = useState(0);
   // Back to idle when the wave is over, even if nothing else changes.
@@ -68,6 +84,8 @@ export function AgentFace({ server, size, glow, animated = false, still, mood, s
     <View style={{ position: 'absolute', right: -1, bottom: -1, width: dotSize, height: dotSize, borderRadius: dotSize,
       backgroundColor: dot, borderWidth: Math.max(2, size * 0.07), borderColor: t.colors.bg }} />
   ) : null;
+  // Next to a name, the picture adds nothing for a screen reader; only the big one on its own does.
+  const hidden = glow ? {} : { accessibilityElementsHidden: true, importantForAccessibility: 'no-hide-descendants' as const };
 
   if (glow) {
     return (
@@ -82,7 +100,7 @@ export function AgentFace({ server, size, glow, animated = false, still, mood, s
     );
   }
   return (
-    <View style={[{ width: size, height: size }, style]}>
+    <View style={[{ width: size, height: size }, style]} {...hidden}>
       <LinearGradient
         colors={[shade(color, 0.32), color, shade(color, -0.18)]}
         locations={[0, 0.55, 1]}

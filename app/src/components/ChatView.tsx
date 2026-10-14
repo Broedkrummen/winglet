@@ -15,6 +15,7 @@ import { connectionView } from '../lib/connection';
 import { exportChat } from '../lib/exportChat';
 import { clearFocus, requestFocus, useFocusRequest } from '../lib/focus';
 import { haptic } from '../lib/haptics';
+import { afterOlderPage, atStart, canLoadOlder, newPaging } from '../lib/history';
 import { easeOut, spring, useReducedMotion } from '../lib/motion';
 import { usePrefs } from '../lib/prefs';
 import { mutedUntil, usePushPrefs } from '../lib/pushPrefs';
@@ -285,27 +286,30 @@ function MessageList({ server, chatId, messages, loaded, typing, top, bottom, on
   }, [server.id, chatId]);
   const actions = useMemo<Actions>(() => ({ open: onOpen, reply: onReply, jump }), [onOpen, onReply, jump]);
 
-  // Older history, a page at a time as you scroll up: one request at a time, and none once the start is here.
-  const older = useRef({ busy: false, done: false });
-  const [olderState, setOlderState] = useState<'idle' | 'busy' | 'done'>('idle');
+  // Older history, a page at a time as you scroll up: one request at a time, and none while the start of the
+  // chat is what's loaded. That's checked against the oldest message, so after a reconnect replaces what's
+  // loaded with a newer page, scrolling back loads again.
+  const older = useRef(newPaging());
+  const [olderBusy, setOlderBusy] = useState(false);
   useEffect(() => {
-    older.current = { busy: false, done: false };
-    setOlderState('idle');
+    older.current = newPaging();
+    setOlderBusy(false);
   }, [server.id, chatId]);
   const loadOlder = useCallback(() => {
     const o = older.current;
-    const count = () => useApp.getState().runtime[server.id]?.messages[chatId]?.length ?? 0;
-    const before = count();
-    if (o.busy || o.done || before < 60) return;
+    const current = () => useApp.getState().runtime[server.id]?.messages[chatId];
+    if (!canLoadOlder(o, current())) return;
+    const before = current()?.length ?? 0;
     o.busy = true;
-    setOlderState('busy');
+    setOlderBusy(true);
     loadMessages(server.id, chatId, true).catch(() => false).then((ok) => {
       if (older.current !== o) return;
-      o.busy = false;
-      if (ok && count() - before < 60) o.done = true; // a short page: that was the start of the chat
-      setOlderState(o.done ? 'done' : 'idle');
+      afterOlderPage(o, ok, (current()?.length ?? 0) - before, current());
+      setOlderBusy(false);
     });
   }, [server.id, chatId, loadMessages]);
+  const loadedMessages = useApp((st) => st.runtime[server.id]?.messages[chatId]);
+  const startShown = atStart(older.current, loadedMessages);
 
   // Sending from further up brings you back down to your message.
   const newest = messages[messages.length - 1];
@@ -405,9 +409,9 @@ function MessageList({ server, chatId, messages, loaded, typing, top, bottom, on
         onEndReached={loadOlder}
         onEndReachedThreshold={0.4}
         ListHeaderComponent={typing ? <TypingRow server={server} /> : null}
-        ListFooterComponent={olderState === 'busy' ? (
+        ListFooterComponent={olderBusy ? (
           <View style={s.olderRow}><ActivityIndicator color={t.colors.textSecondary} accessibilityLabel="Loading older messages" /></View>
-        ) : olderState === 'done' ? <View style={s.olderRow}><Text style={s.olderText}>Start of the conversation</Text></View> : null}
+        ) : startShown ? <View style={s.olderRow}><Text style={s.olderText}>Start of the conversation</Text></View> : null}
         keyboardShouldPersistTaps="handled"
         initialNumToRender={18}
         maxToRenderPerBatch={12}

@@ -49,6 +49,7 @@ function ApprovalCard({ serverId, item, compact }: { serverId: string; item: Inb
   const owner = useApp((st) => isOwner(st.runtime[serverId]));
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmAlways, setConfirmAlways] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const choices = [...(item.payload.choices ?? [])].sort((a, b) => CHOICE_ORDER.indexOf(a) - CHOICE_ORDER.indexOf(b));
   const pending = item.status === 'pending';
   const label = (c: string) => item.payload.labels?.[c] ?? (c === 'once' ? 'Allow once' : c === 'session' ? 'Allow this session' : c === 'always' ? 'Always allow' : 'Deny');
@@ -62,15 +63,16 @@ function ApprovalCard({ serverId, item, compact }: { serverId: string; item: Inb
   return (
     <View style={[s.card, pending && { borderColor: t.colors.warning }]} accessibilityLabel="Approval request">
       <View style={s.header}>
-        <View style={[s.iconWrap, { backgroundColor: t.colors.warningSoft }]}><ShieldAlert size={18} color={t.colors.warning} /></View>
-        <View style={{ flex: 1 }}>
+        <View style={[s.iconWrap, { backgroundColor: t.colors.warningSoft }]}><ShieldAlert size={15} color={t.colors.warning} /></View>
+        <View style={{ flex: 1, minWidth: 0 }}>
           <Text style={s.title}>Wants to run a command</Text>
-          <Text style={s.subtitle}>{item.payload.description ? `Flagged: ${item.payload.description} · ` : ''}{agoText(item.created_at)}</Text>
+          <Text style={s.subtitle} numberOfLines={1}>{item.payload.description ? `${item.payload.description} · ` : ''}{agoText(item.created_at)}</Text>
         </View>
       </View>
-      <View style={s.command}>
-        <Text selectable style={s.commandText} numberOfLines={compact ? 6 : undefined}>{item.payload.command || item.body}</Text>
-      </View>
+      <Pressable accessibilityRole="button" accessibilityLabel={expanded ? 'Show less of the command' : 'Show all of the command'}
+        onPress={() => setExpanded((e) => !e)} style={s.command}>
+        <Text selectable={expanded} style={s.commandText} numberOfLines={expanded ? (compact ? 12 : undefined) : 3}>{item.payload.command || item.body}</Text>
+      </Pressable>
       {pending && !owner ? (
         <View style={s.waiting} accessibilityLiveRegion="polite">
           <Clock size={14} color={t.colors.textSecondary} />
@@ -132,7 +134,7 @@ function QuestionCard({ serverId, item }: { serverId: string; item: InboxItem })
   return (
     <View style={[s.card, pending && { borderColor: t.colors.accent }]} accessibilityLabel="Question from the agent">
       <View style={s.header}>
-        <View style={[s.iconWrap, { backgroundColor: t.colors.accentSoft }]}><CircleHelp size={18} color={t.colors.onAccentSoft} /></View>
+        <View style={[s.iconWrap, { backgroundColor: t.colors.accentSoft }]}><CircleHelp size={15} color={t.colors.onAccentSoft} /></View>
         <Text style={[s.title, { flex: 1 }]}>{item.payload.question || item.body}</Text>
       </View>
       {pending ? (
@@ -197,24 +199,24 @@ function ResultCard({ item, compact }: { item: InboxItem; compact?: boolean }) {
 }
 
 const useStyles = makeStyles((t) => ({
-  waiting: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingTop: 4 },
+  waiting: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   waitingText: { ...t.type.callout, color: t.colors.textSecondary, flex: 1 },
-  card: { backgroundColor: t.colors.surface, borderRadius: t.radius.lg, padding: 16, gap: 14, borderWidth: 1, borderColor: t.colors.border, maxWidth: 680, width: '100%' },
-  header: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  iconWrap: { width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-  title: { ...t.type.bodyStrong, color: t.colors.text },
-  subtitle: { ...t.type.caption, color: t.colors.textSecondary, marginTop: 2 },
-  command: { backgroundColor: t.colors.codeBg, borderRadius: t.radius.md, padding: 12, borderWidth: 1, borderColor: t.colors.border },
-  commandText: { fontFamily: t.fonts.mono, fontSize: 13.5, lineHeight: 20, color: t.colors.codeText },
-  actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  card: { backgroundColor: t.colors.surface, borderRadius: t.radius.lg, padding: 12, gap: 10, borderWidth: 1, borderColor: t.colors.border, maxWidth: 560, width: '100%' },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  iconWrap: { width: 28, height: 28, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
+  title: { ...t.type.bodyStrong, fontSize: 15, color: t.colors.text },
+  subtitle: { ...t.type.caption, color: t.colors.textSecondary },
+  command: { backgroundColor: t.colors.codeBg, borderRadius: t.radius.sm, paddingHorizontal: 10, paddingVertical: 8, borderWidth: 1, borderColor: t.colors.border },
+  commandText: { fontFamily: t.fonts.mono, fontSize: 12.5, lineHeight: 17, color: t.colors.codeText },
+  actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   status: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   statusText: { fontFamily: t.fonts.semibold, fontSize: 14 },
   sheetText: { ...t.type.callout, color: t.colors.textSecondary, textAlign: 'center' },
   choice: {
-    flexDirection: 'row', alignItems: 'center', minHeight: 50, backgroundColor: t.colors.surfaceSunken,
-    borderRadius: t.radius.md, paddingHorizontal: 16, borderWidth: 1, borderColor: 'transparent',
+    flexDirection: 'row', alignItems: 'center', minHeight: 44, backgroundColor: t.colors.surfaceSunken,
+    borderRadius: t.radius.md, paddingHorizontal: 14, borderWidth: 1, borderColor: 'transparent',
   },
-  choiceText: { ...t.type.body, fontFamily: t.fonts.medium, color: t.colors.text },
+  choiceText: { ...t.type.callout, fontFamily: t.fonts.medium, color: t.colors.text },
   choiceOn: { borderColor: t.colors.accent, backgroundColor: t.colors.accentSoft },
   check: { width: 22, height: 22, borderRadius: 7, borderWidth: 2, borderColor: t.colors.textSecondary, marginRight: 12, alignItems: 'center', justifyContent: 'center' },
   checkOn: { backgroundColor: t.colors.accentFill, borderColor: t.colors.accentFill },

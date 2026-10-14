@@ -19,6 +19,7 @@ import { makeStyles, useTheme } from '../lib/themeContext';
 import { plainText } from '../lib/text';
 import type { DraftFile, Server } from '../lib/types';
 import { Glass } from './Glass';
+import { ModelButton } from './ModelSheet';
 import { ArrowUp, Camera, FileText, ImagePlus, Mic, Plus, RotateCcw, Square, X } from './icons';
 import { Sheet, SheetAction } from './Sheet';
 import { Chip, Tap, Toggle } from './ui';
@@ -225,6 +226,7 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
               <Plus size={22} color={t.colors.text} />
             </Tap>
           ) : <View style={{ width: 8 }} />}
+          <ModelButton server={server} chatId={chatId} />
           <TextInput
             ref={input}
             value={text}

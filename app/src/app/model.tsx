@@ -14,7 +14,7 @@ import { makeStyles, useTheme } from '../lib/themeContext';
 type Options = { model: string; provider: string; providers: { slug: string; name: string; models: string[] }[] };
 type Result = { ok: boolean; confirm_required?: boolean; confirm_message?: string; model?: string; provider?: string };
 
-/** The model new chats start with. A chat can still switch on its own from the model chip. */
+/** The model new chats start with. A chat can still switch on its own from the model button beside the message box. */
 export default function ModelScreen() {
   const t = useTheme();
   const s = useStyles();
@@ -60,7 +60,7 @@ export default function ModelScreen() {
   })).filter((p) => p.models.length), [options, q]);
 
   return (
-    <Screen title="Default model" subtitle="New chats start with this model. Each chat can switch on its own from the model button at the top."
+    <Screen title="Default model" subtitle="New chats start with this model. Each chat can switch on its own from the model button beside the message box."
       onRefresh={load}>
       {options ? (
         <Card style={s.current}>

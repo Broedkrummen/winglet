@@ -71,12 +71,14 @@ export type Message = {
     reply_to?: ReplyRef;
     /** Set on Hermes status lines (context pressure, fallback…) that update in place. */
     status_key?: string;
-    /** A command the app sent for a control (the model chip's /model); not shown in the chat. */
+    /** A command the app sent for a control (/model and /reasoning from the model sheet); not shown in the chat. */
     hidden?: boolean;
     /** A choice the agent offers: a model, a setting, or a command to confirm. */
     picker?: Picker;
     /** The routine (scheduled job) whose result this is. */
     routine?: string;
+    /** Set by the server on Hermes's own progress (a tool running), which the chat folds away. */
+    activity?: boolean;
   };
   created_at: number;
   updated_at: number;

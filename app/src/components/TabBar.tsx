@@ -8,6 +8,7 @@ import { haptic } from '../lib/haptics';
 import { spring, useReducedMotion } from '../lib/motion';
 import { homeChat, useApp } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
+import { useAddBot } from './AddBot';
 import { BotAvatar } from './BotAvatar';
 import { Glass } from './Glass';
 import { Bot, House, Inbox, MessagesSquare, Plus } from './icons';
@@ -113,6 +114,7 @@ export function SideRail() {
   const runtime = useApp((st) => st.runtime);
   const selected = useApp((st) => st.selection.serverId);
   const select = useApp((st) => st.select);
+  const addBot = useAddBot();
   const index = activeIndex(pathname);
   return (
     <View style={[s.rail, { paddingTop: insets.top + 14, paddingBottom: insets.bottom + 14 }]} accessibilityRole="tablist">
@@ -147,10 +149,11 @@ export function SideRail() {
             </Tap>
           );
         })}
-        <Tap accessibilityLabel="Add a bot" feedback="selection" onPress={() => router.push('/pair')} style={s.addBot}>
+        <Tap accessibilityLabel="Add a bot" feedback="selection" onPress={addBot.open} style={s.addBot}>
           <Plus size={22} color={t.colors.success} />
         </Tap>
       </ScrollView>
+      {addBot.sheet}
     </View>
   );
 }

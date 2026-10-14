@@ -5,6 +5,7 @@ import { moodOf } from '../lib/agent';
 import { connectionView } from '../lib/connection';
 import { homeChat, useApp } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
+import { useAddBot } from './AddBot';
 import { BotAvatar } from './BotAvatar';
 import { Check, ChevronDown, Plus, Settings } from './icons';
 import { Sheet, SheetAction } from './Sheet';
@@ -20,6 +21,7 @@ export function BotSwitcher() {
   const selection = useApp((st) => st.selection);
   const select = useApp((st) => st.select);
   const [open, setOpen] = useState(false);
+  const addBot = useAddBot();
   const server = servers.find((x) => x.id === selection.serverId) ?? servers[0];
   if (!server) return null;
   const others = servers.filter((x) => x.id !== server.id).reduce((n, x) => n + (runtime[x.id]?.pending ?? 0), 0);
@@ -53,9 +55,10 @@ export function BotSwitcher() {
           );
         })}
         <View style={s.divider} />
-        <SheetAction icon={<Plus size={20} color={t.colors.success} />} label="Add a bot" onPress={() => { setOpen(false); router.push('/pair'); }} />
+        <SheetAction icon={<Plus size={20} color={t.colors.success} />} label="Add a bot" onPress={() => { setOpen(false); addBot.open(); }} />
         <SheetAction icon={<Settings size={20} color={t.colors.textSecondary} />} label="Manage bots" onPress={() => { setOpen(false); router.push('/bots'); }} />
       </Sheet>
+      {addBot.sheet}
     </>
   );
 }

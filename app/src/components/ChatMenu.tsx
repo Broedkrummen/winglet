@@ -12,10 +12,6 @@ import { Button, Field } from './ui';
 
 const clockTime = (ts: number) => new Date(ts * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 
-/**
- * What you can do to a chat, the same from the chat itself and from the list: rename, mute, export, delete,
- * and where it's open its goal and files.
- */
 const MUTE_OPTIONS: { label: string; seconds: number }[] = [
   { label: 'For 1 hour', seconds: 3600 },
   { label: 'For 8 hours', seconds: 8 * 3600 },
@@ -23,6 +19,10 @@ const MUTE_OPTIONS: { label: string; seconds: number }[] = [
   { label: 'Until I turn it back on', seconds: 0 },
 ];
 
+/**
+ * What you can do to a chat, the same from the chat itself and from the list: rename, mute, export, delete,
+ * and where it's open its goal and files.
+ */
 export function ChatMenu({ server, chatId, title, visible, onClose, onGoal, hasGoal, onFiles, onDeleted }: {
   server: Server; chatId: string; title: string; visible: boolean; onClose: () => void;
   /** Only where the chat is open: its goal and its files live in that screen. */
@@ -43,6 +43,7 @@ export function ChatMenu({ server, chatId, title, visible, onClose, onGoal, hasG
   const side = chat?.kind === 'chat' && chatId !== homeChat(useApp.getState().runtime[server.id]);
   const until = mutedUntil(prefs, chatId);
   const close = () => { setMode('menu'); onClose(); };
+  const rename = async () => { await renameChat(server.id, chatId, name); close(); };
 
   useEffect(() => {
     if (visible && features?.mute) usePushPrefs.getState().load(server);
@@ -94,8 +95,8 @@ export function ChatMenu({ server, chatId, title, visible, onClose, onGoal, hasG
         </>
       ) : mode === 'rename' ? (
         <View style={{ gap: 14, paddingHorizontal: 4 }}>
-          <Field value={name} onChangeText={setName} placeholder="Chat name" autoFocus />
-          <Button title="Save" onPress={async () => { await renameChat(server.id, chatId, name); close(); }} />
+          <Field value={name} onChangeText={setName} placeholder="Chat name" autoFocus onSubmitEditing={rename} />
+          <Button title="Save" onPress={rename} />
         </View>
       ) : (
         <View style={{ gap: 14, paddingHorizontal: 4 }}>

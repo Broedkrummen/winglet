@@ -261,7 +261,7 @@ top of each tab. Tapping it shows your bots, each with its pending count, and "A
 
 | Tab | Contents |
 | --- | --- |
-| **Home** | In this order: a compact header with the pet, status line and model chip; **Needs you** (approvals and questions for this bot, plus a line like "2 waiting on other bots" that opens the global Inbox); **Working now** (running tasks, with Stop); **Continue** (the last few chats); **Coming up** (next scheduled tasks, active goal); **Recent updates**. A quick composer posts to the main chat. Sections with nothing in them collapse. |
+| **Home** | In this order: the main bot up front (its pet, name and one status line) with a message box, then a compact row of your other bots and an Add tile; **Needs you** (approvals and questions for this bot, plus a line like "2 waiting on other bots" that opens the global Inbox); **Working now** (running tasks, with Stop); **Continue** (the last chat you touched, one tap to resume); **Coming up** (next scheduled tasks, active goal); **Recent updates**. A quick composer posts to the main chat. Sections with nothing in them collapse. |
 | **Chats** | The main chat pinned at the top, then side chats (`#` channels) with previews, unread counts and times. Search. New chat. |
 | **Inbox** | **All bots** by default, with a bot filter. Approvals, questions and routine results. The tab badge counts pending items across every bot, so nothing on another bot goes unseen. |
 | **Agent** | **Brain**: model, reasoning, providers, usage. **Identity**: pet, name, persona, memory. **Automations**: goals, schedule. **Abilities**: skills, tools, MCP. **Server**: health, updates, logs, devices, connection, activity. **Settings**: appearance, notifications, security, about. |
@@ -273,7 +273,7 @@ and how to fix it. The app never ships a control that does nothing.
 ### 4.2 Tablet and desktop (wide layout)
 
 Keep the current three columns (bot rail, chat list, chat), restyled. Add an optional right panel with
-the agent card (pet, model chip, status, active goal) and the files shared in the current chat.
+the agent card (pet, status, active goal) and the files shared in the current chat.
 Keyboard shortcuts: `Ctrl/⌘+K` command palette, `Ctrl/⌘+N` new chat, `Ctrl/⌘+[`/`]` switch chats,
 `Esc` closes, `Enter` sends and `Shift+Enter` adds a line, `↑` in an empty composer edits the last
 message.

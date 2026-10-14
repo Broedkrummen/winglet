@@ -238,7 +238,9 @@ command or queue order, even when only one request appears to match. See
 Each Hermes profile is a bot, the same as Hermes Desktop's Bots: its own persona, memory, skills, chats
 and pet. Keep your main bot for everyday chat and add bots for separate jobs.
 
-**On the same server, from the phone.** Agent → Add a bot makes a new profile the way Hermes Desktop
+**Main bot.** The app opens on your main bot (the first one paired, until you pick another under Agent → Main bot). Home puts that bot up front with its pet and a message box, and keeps your other bots in a small row you tap to bring forward.
+
+**On the same server, from the phone.** "Add a bot" (in the bot switcher, on Home, or under Agent) offers to create a new bot or scan a code from another server. Creating one makes a new profile the way Hermes Desktop
 does (your provider keys and model, never your chat-platform tokens) and it's on the phone at once, with
 no new port and no pairing. Bots made in Hermes Desktop, with `hermes profile create`, or by the agent
 itself show up too. Hermes serves every profile from the one gateway once there are two of them; after

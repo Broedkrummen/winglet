@@ -41,6 +41,10 @@ CREATE TABLE IF NOT EXISTS messages (
     created_at REAL NOT NULL, updated_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS messages_chat ON messages (chat_id, created_at);
+-- Pages are read newest first by rowid; this index carries it, so a page never sorts the whole chat.
+CREATE INDEX IF NOT EXISTS messages_chat_rowid ON messages (chat_id);
+-- A phone's resend of a send it never heard back about, however long it was offline, finds the original here.
+CREATE INDEX IF NOT EXISTS messages_client_id ON messages (chat_id, json_extract(meta, '$.client_id')) WHERE role = 'user';
 CREATE TABLE IF NOT EXISTS message_deletions (
     id TEXT PRIMARY KEY, chat_id TEXT NOT NULL
 );
@@ -51,6 +55,7 @@ CREATE TABLE IF NOT EXISTS inbox (
     resolution TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL, updated_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS inbox_status ON inbox (status, created_at);
+CREATE INDEX IF NOT EXISTS inbox_created ON inbox (created_at);
 CREATE TABLE IF NOT EXISTS uploads (
     id TEXT PRIMARY KEY, device_id TEXT NOT NULL, chat_id TEXT NOT NULL, name TEXT NOT NULL, mime TEXT NOT NULL,
     kind TEXT NOT NULL, size INTEGER NOT NULL, created_at REAL NOT NULL, message_id TEXT
@@ -88,12 +93,20 @@ _MIGRATIONS = [
     ("chats", "owner_device", "TEXT"),
     # The Hermes profile (bot) a chat talks to; NULL is the main one this gateway runs as.
     ("chats", "bot", "TEXT"),
+    # When a message was deleted, so old tombstones can be dropped.
+    ("message_deletions", "deleted_at", "REAL NOT NULL DEFAULT 0"),
 ]
 ROLES = ("owner", "member")
 AUDIT_KEEP_SECONDS = 180 * 86400
 AUDIT_KEEP_ROWS = 5000
 JOB_STATES = ("running", "succeeded", "failed", "unknown")
 JOBS_KEEP = 50
+# Tombstones repair phones that were offline when a message was deleted; after this long they're dropped.
+DELETIONS_KEEP_SECONDS = 90 * 86400
+# Answered inbox items stay as history this long; pending ones stay until answered.
+INBOX_KEEP_SECONDS = 90 * 86400
+# A device's "last seen" is written at most this often (it's read to the minute).
+LAST_SEEN_EVERY_SECONDS = 60
 
 
 def _hash(secret: str) -> str:
@@ -121,11 +134,16 @@ class Store:
         self._db.row_factory = sqlite3.Row
         with self._lock:
             self._db.execute("PRAGMA journal_mode=WAL")
+            # Safe with WAL (a power cut can lose the last commits, never corrupt the file), and commits stop
+            # waiting on a disk flush each: a streamed reply commits many times a second.
+            self._db.execute("PRAGMA synchronous=NORMAL")
             self._db.executescript(_SCHEMA)
             for table, column, decl in _MIGRATIONS:
                 columns = {r["name"] for r in self._db.execute(f"PRAGMA table_info({table})")}
                 if column not in columns:
                     self._db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+            # Tombstones from before deleted_at count from now.
+            self._db.execute("UPDATE message_deletions SET deleted_at = ? WHERE deleted_at = 0", (_now(),))
             # Keys and tokens live here: keep the file private to this user.
             with contextlib.suppress(OSError):
                 os.chmod(self.path, 0o600)
@@ -253,7 +271,9 @@ class Store:
         row = self._one("SELECT * FROM devices WHERE token_hash = ?", (_hash(token),))
         if not row:
             return None
-        self._exec("UPDATE devices SET last_seen = ? WHERE id = ?", (_now(), row["id"]))
+        now = _now()
+        if now - row["last_seen"] >= LAST_SEEN_EVERY_SECONDS:  # not a write on every request
+            self._exec("UPDATE devices SET last_seen = ? WHERE id = ?", (now, row["id"]))
         return self._device(row)
 
     def get_device(self, device_id: str) -> Optional[Dict[str, Any]]:
@@ -318,8 +338,8 @@ class Store:
         with self._lock:
             self._db.execute("BEGIN IMMEDIATE")
             try:
-                self._exec("INSERT OR IGNORE INTO message_deletions (id, chat_id) "
-                           "SELECT id, chat_id FROM messages WHERE chat_id = ?", (chat_id,))
+                self._exec("INSERT OR IGNORE INTO message_deletions (id, chat_id, deleted_at) "
+                           "SELECT id, chat_id, ? FROM messages WHERE chat_id = ?", (_now(), chat_id))
                 self._exec("DELETE FROM messages WHERE chat_id = ?", (chat_id,))
                 removed = self._exec("DELETE FROM chats WHERE id = ?", (chat_id,)) == 1
                 self._db.commit()
@@ -350,11 +370,15 @@ class Store:
             current = self.get_message(message_id)
             if current is None:
                 return None
+            status = status or current["status"]
+            meta = meta if meta is not None else current["meta"]
+            now = _now()
             self._exec("UPDATE messages SET text = ?, status = ?, meta = ?, updated_at = ? WHERE id = ?",
-                       (text, status or current["status"], json.dumps(meta if meta is not None else current["meta"]),
-                        _now(), message_id))
-            self._touch_chat(current["chat_id"], text)
-            return self.get_message(message_id)
+                       (text, status, json.dumps(meta), now, message_id))
+            # The chat's preview and order follow a reply once it's done, not on each streamed edit.
+            if status != "streaming":
+                self._touch_chat(current["chat_id"], text)
+            return {**current, "text": text, "status": status, "meta": json.loads(json.dumps(meta)), "updated_at": now}
 
     def delete_message(self, message_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
@@ -362,8 +386,8 @@ class Store:
             if current is not None:
                 self._db.execute("BEGIN IMMEDIATE")
                 try:
-                    self._exec("INSERT OR IGNORE INTO message_deletions (id, chat_id) VALUES (?, ?)",
-                               (message_id, current["chat_id"]))
+                    self._exec("INSERT OR IGNORE INTO message_deletions (id, chat_id, deleted_at) VALUES (?, ?, ?)",
+                               (message_id, current["chat_id"], _now()))
                     self._exec("DELETE FROM messages WHERE id = ?", (message_id,))
                     self._db.commit()
                 except Exception:
@@ -377,8 +401,9 @@ class Store:
 
     def find_user_message(self, chat_id: str, client_id: str) -> Optional[Dict[str, Any]]:
         """A message this chat already received with the app's ``client_id`` (retry detection)."""
-        row = self._one("SELECT rowid AS position, * FROM messages WHERE chat_id = ? AND role = 'user' "
-                        "AND json_extract(meta, '$.client_id') = ?", (chat_id, client_id))
+        # Matches the messages_client_id index (same expression, same role), so it's a lookup, not a scan.
+        row = self._one("SELECT rowid AS position, * FROM messages WHERE chat_id = ? "
+                        "AND json_extract(meta, '$.client_id') = ? AND role = 'user'", (chat_id, client_id))
         return self._message(row) if row else None
 
     def streaming_messages(self, chat_id: str) -> List[Dict[str, Any]]:
@@ -466,6 +491,25 @@ class Store:
     def pending_count(self) -> int:
         row = self._one("SELECT COUNT(*) AS n FROM inbox WHERE status = 'pending'")
         return int(row["n"]) if row else 0
+
+    def pending_count_for(self, bot: Optional[str], owner_device: Optional[str] = None) -> int:
+        """Pending items in one bot's chats (None: the main bot's); with ``owner_device``, only in the chats
+        that device started (what a member sees)."""
+        sql = ("SELECT COUNT(*) AS n FROM inbox JOIN chats ON chats.id = inbox.chat_id "
+               "WHERE inbox.status = 'pending' AND COALESCE(chats.bot, '') = ?")
+        args: tuple = (bot or "",)
+        if owner_device is not None:
+            sql += " AND chats.owner_device = ?"
+            args += (owner_device,)
+        row = self._one(sql, args)
+        return int(row["n"]) if row else 0
+
+    def prune(self, now: Optional[float] = None) -> int:
+        """Drop old tombstones and old answered inbox items. Returns how many rows went."""
+        now = now or _now()
+        return (self._exec("DELETE FROM message_deletions WHERE deleted_at < ?", (now - DELETIONS_KEEP_SECONDS,))
+                + self._exec("DELETE FROM inbox WHERE status != 'pending' AND updated_at < ?",
+                             (now - INBOX_KEEP_SECONDS,)))
 
     @staticmethod
     def _inbox(row: sqlite3.Row) -> Dict[str, Any]:

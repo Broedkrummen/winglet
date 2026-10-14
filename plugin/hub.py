@@ -412,11 +412,21 @@ class Hub:
     async def _janitor_loop(self) -> None:
         while True:
             try:
-                self.sweep_uploads()
+                await asyncio.to_thread(self.sweep_uploads)
                 self.expire_jobs()
+                self.store.prune()
+                self._prune_memory()
             except Exception:
                 logger.warning("[winglet] cleanup failed", exc_info=True)
             await asyncio.sleep(JANITOR_SECONDS)
+
+    def _prune_memory(self) -> None:
+        """Forget picker cards nobody answered and pairing failures older than the throttle's minute."""
+        now = time.monotonic()
+        for picker_id in [k for k, v in self._pickers.items() if now > v["expires"]]:
+            self._pickers.pop(picker_id, None)
+        for key in [k for k, v in self._pair_failures.items() if not v or now - v[-1] >= 60]:
+            self._pair_failures.pop(key, None)
 
     def _spawn(self, coro) -> asyncio.Task:
         """A background task the hub keeps a reference to, so it isn't collected mid-run."""
@@ -448,9 +458,10 @@ class Hub:
         self._push_tasks.clear()
         if self._janitor is not None:
             self._janitor.cancel()
+        self._janitor = None
         if self._bots_watch is not None:
             self._bots_watch.cancel()
-            self._janitor = None
+            self._bots_watch = None
         for task in list(self._tasks):
             task.cancel()
 
@@ -565,8 +576,7 @@ class Hub:
         return chat is not None and (chat.get("bot") or None) == _BOT.get()
 
     def pending_for(self, device: Dict[str, Any]) -> int:
-        return sum(1 for i in self.store.pending_items()
-                   if self._in_bot(i["chat_id"]) and self.can_see(device, self.store.get_chat(i["chat_id"])))
+        return self.store.pending_count_for(_BOT.get(), None if device.get("role") == "owner" else device["id"])
 
     def home_chat(self, device: Dict[str, Any]) -> str:
         """Owners share the main chat; each other bot has one too. Each member gets one of their own, made on
@@ -716,6 +726,8 @@ class Hub:
         return len(recent) >= PAIR_FAILURES_PER_MINUTE
 
     def _pair_failed(self, key: str) -> None:
+        if len(self._pair_failures) > 1000:  # many peers guessing at once: drop the ones whose minute is up
+            self._prune_memory()
         self._pair_failures.setdefault(key, []).append(time.monotonic())
 
     async def h_pair(self, request: web.Request) -> web.Response:
@@ -839,7 +851,10 @@ class Hub:
     async def _recovery_loop(self) -> None:
         while True:
             self._recovery_wake.clear()
-            await self.publish_addresses()
+            try:
+                await self.publish_addresses()
+            except Exception:  # never stop recovering addresses over one bad subscription
+                logger.warning("[winglet] publishing the address failed", exc_info=True)
             try:
                 await asyncio.wait_for(self._recovery_wake.wait(), timeout=300)
             except asyncio.TimeoutError:
@@ -926,8 +941,7 @@ class Hub:
         files = self.store.chat_uploads(chat_id)
         if not self.store.delete_chat(chat_id):
             return _error(404, "no such chat")
-        for row in files:
-            self._remove_upload(row)
+        await asyncio.to_thread(lambda: [self._remove_upload(row) for row in files])
         await self.broadcast({"type": "chat.delete", "chat_id": chat_id, "owner_device": chat.get("owner_device"),
                               "bot": chat.get("bot")})
         return _json({"ok": True})
@@ -944,10 +958,12 @@ class Hub:
                 raise ValueError
         except ValueError:
             return _error(400, "before and limit must be numbers; before_position must be a positive integer")
-        messages = self.store.list_messages(chat_id, before_position=before_position,
-                                            before_id=request.query.get("before_id") or None,
+        before_id = request.query.get("before_id") or None
+        messages = self.store.list_messages(chat_id, before_position=before_position, before_id=before_id,
                                             before=before, limit=limit)
-        return _json({"messages": messages, "deleted_ids": self.store.deleted_message_ids(chat_id)})
+        # Tombstones repair what a reconnect missed: the newest page carries them, older pages needn't.
+        first_page = before is None and before_position is None and before_id is None
+        return _json({"messages": messages, "deleted_ids": self.store.deleted_message_ids(chat_id) if first_page else []})
 
     async def h_message_send(self, request: web.Request) -> web.Response:
         device = self._require(request)
@@ -1234,7 +1250,8 @@ class Hub:
             pending = self.store.pending_items()
             seen = {i["id"] for i in pending}
             items = pending + [i for i in self.store.list_inbox() if i["id"] not in seen]
-        items = [i for i in items if self._in_bot(i["chat_id"]) and self.can_see(device, self.store.get_chat(i["chat_id"]))]
+        chats = {c["id"]: c for c in self.store.list_chats(bot=_BOT.get())}
+        items = [i for i in items if self.can_see(device, chats.get(i["chat_id"]))]
         return _json({"items": items, "pending": self.pending_for(device)})
 
     async def h_inbox_respond(self, request: web.Request) -> web.Response:
@@ -1479,7 +1496,8 @@ class Hub:
         """Sockets whose app is in the foreground (a backgrounded PWA may keep its socket briefly)."""
         return sum(1 for ws, meta in self._sockets.items() if not ws.closed and meta.get("visible", True))
 
-    def _event_visible(self, device: Dict[str, Any], event: Dict[str, Any]) -> bool:
+    def _event_visible(self, device: Dict[str, Any], event: Dict[str, Any],
+                       chats: Optional[Dict[str, Optional[Dict[str, Any]]]] = None) -> bool:
         """Members only hear about their own chats; owners hear everything."""
         if device.get("role") == "owner":
             return True
@@ -1496,9 +1514,15 @@ class Hub:
                 if isinstance(value, dict):
                     chat_id = value.get("id") if key == "chat" else value.get("chat_id")
                     break
-        return chat_id is None or self.can_see(device, self.store.get_chat(chat_id))
+        if chat_id is None:
+            return True
+        if chats is None:
+            return self.can_see(device, self.store.get_chat(chat_id))
+        if chat_id not in chats:
+            chats[chat_id] = self.store.get_chat(chat_id)
+        return self.can_see(device, chats[chat_id])
 
-    def _event_bot(self, event: Dict[str, Any]):
+    def _event_bot(self, event: Dict[str, Any], chats: Optional[Dict[str, Optional[Dict[str, Any]]]] = None):
         """The bot an event is about (None: the main bot), or _ANY_BOT for server-wide events."""
         if "bot" in event:
             return event["bot"] or None
@@ -1511,11 +1535,21 @@ class Hub:
                 chat_id = event[key].get("chat_id")
         if chat_id is None:
             return _ANY_BOT
-        row = self.store.get_chat(chat_id)
+        if chats is None:
+            chats = {}
+        if chat_id not in chats:
+            chats[chat_id] = self.store.get_chat(chat_id)
+        row = chats[chat_id]
         return (row.get("bot") or None) if row else _ANY_BOT
 
     async def broadcast(self, event: Dict[str, Any]) -> None:
+        """Send ``event`` to every socket that may see it. What's the same for every socket (the event's bot
+        and chat, its JSON, a pending count) is worked out once, not per socket: this runs on each streamed edit."""
         dead = []
+        chats: Dict[str, Optional[Dict[str, Any]]] = {}
+        event_bot = self._event_bot(event, chats) if self._sockets else _ANY_BOT
+        pending: Dict[tuple, int] = {}
+        encoded: Dict[int, str] = {}
         for ws, meta in list(self._sockets.items()):
             device = self.current_device(meta["device"]["id"])
             if device is None:
@@ -1523,19 +1557,26 @@ class Hub:
                 with contextlib.suppress(Exception):
                     await ws.close(code=4401, message=b"unpaired")
                 continue
-            if not self._event_visible(device, event):
+            if not self._event_visible(device, event, chats):
                 continue
-            event_bot = self._event_bot(event)
             if event_bot is not _ANY_BOT and event_bot != meta.get("bot"):
                 continue
             out = event
             if "pending" in event:
-                with self._bot_context(meta.get("bot")):
-                    out = {**event, "pending": self.pending_for(device)}
+                key = (meta.get("bot"), None if device.get("role") == "owner" else device["id"])
+                if key not in pending:
+                    with self._bot_context(meta.get("bot")):
+                        pending[key] = self.pending_for(device)
+                out = {**event, "pending": pending[key]}
             if event.get("type") == "system.paused" and device.get("role") != "owner":
                 out = {**event, "paused": self._member_pause(event.get("paused"))}
+            text = encoded.get(id(out)) if out is event else None
+            if text is None:
+                text = json.dumps(out)
+                if out is event:
+                    encoded[id(out)] = text
             try:
-                await ws.send_json(out)
+                await ws.send_str(text)
             except Exception:
                 dead.append(ws)
         for ws in dead:
@@ -2784,28 +2825,25 @@ class Hub:
         client = await self._client()
         # No approve buttons on notifications: approving needs the card, with the full command in view.
         note = {**note, "tag": tag, "server_id": self.server_id()}
-        devices: Dict[str, Optional[Dict[str, Any]]] = {}
         chat = self.store.get_chat(str(note.get("chat_id") or "")) if note.get("chat_id") else None
-        for sub in subs:
-            if sub["device_id"] not in devices:
-                devices[sub["device_id"]] = self.store.get_device(sub["device_id"])
-            if not _push_for(devices[sub["device_id"]], chat, note):
-                continue
-            if not _wants_push(self.store.get_push_prefs(sub["device_id"]), note):
-                continue
+        wanted: Dict[str, bool] = {}
+        for device_key in {sub["device_id"] for sub in subs}:
+            wanted[device_key] = (_push_for(self.store.get_device(device_key), chat, note)
+                                  and _wants_push(self.store.get_push_prefs(device_key), note))
+        subs = [sub for sub in subs if wanted[sub["device_id"]] and sub["kind"] in ("webpush", "ntfy")]
+        pem = self.vapid_private_key() if any(sub["kind"] == "webpush" for sub in subs) else ""
+
+        async def deliver(sub: Dict[str, Any]) -> None:
             try:
                 if sub["kind"] == "webpush":
-                    status = await webpush.send(client, sub["data"], note, self.vapid_private_key(), PUSH_SUBJECT,
-                                                urgency=urgency, topic=tag)
-                elif sub["kind"] == "ntfy":
-                    status = await self._send_ntfy(client, sub["data"], note)
+                    status = await webpush.send(client, sub["data"], note, pem, PUSH_SUBJECT, urgency=urgency, topic=tag)
                 else:
-                    continue
+                    status = await self._send_ntfy(client, sub["data"], note)
             except Exception as exc:
                 logger.warning("[winglet] push delivery failed: %s", exc)
                 result["failed"] += 1
                 self._delivered[sub["id"]] = {"at": time.time(), "ok": False}
-                continue
+                return
             self._delivered[sub["id"]] = {"at": time.time(), "ok": status < 300}
             if status in (404, 410) and sub["kind"] == "webpush":
                 self.store.remove_push_sub(endpoint=sub["endpoint"])
@@ -2815,6 +2853,9 @@ class Hub:
                 result["failed"] += 1
             else:
                 result["accepted"] += 1
+
+        # Every phone at once: one slow push service doesn't hold up the rest.
+        await asyncio.gather(*(deliver(sub) for sub in subs))
         return result
 
     async def _client(self):

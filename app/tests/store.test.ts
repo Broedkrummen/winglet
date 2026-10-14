@@ -446,3 +446,19 @@ test('a streamed edit replaces only its own row and keeps the others as they wer
   h.event({ type: 'message.update', chat_id: 'general', message: { ...before[1], text: 'stale' } });
   assert.equal(h.messages()[1].text, 'streaming…');
 });
+
+test("Hermes's progress bubbles don't end the turn; its reply does", async () => {
+  const h = harness();
+  await h.connect();
+  await h.hello();
+  const typing = () => !!h.store.getState().runtime.s.typing.general;
+  const bot = (id: string, text: string) => ({ ...msg(1), id, text });
+  h.event({ type: 'typing', chat_id: 'general', on: true });
+  // Both wordings of tool progress arrive as final messages while the bot is still at work.
+  h.event({ type: 'message.new', chat_id: 'general', message: bot('p1', '🔍 web_search: "cats"') });
+  assert.ok(typing());
+  h.event({ type: 'message.new', chat_id: 'general', message: bot('p2', '🔍 Searching the web for cats') });
+  assert.ok(typing());
+  h.event({ type: 'message.new', chat_id: 'general', message: bot('r', 'There are three breeds.') });
+  assert.ok(!typing());
+});

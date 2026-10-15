@@ -1,4 +1,5 @@
-import { createAudioPlayer, setAudioModeAsync, type AudioPlayer } from 'expo-audio';
+import { createAudioPlayer, type AudioPlayer } from 'expo-audio';
+import { chimeMode, defaultMode } from './audioMode';
 import { usePrefs } from './prefs';
 
 // One map so every screen sounds the same, like haptics. Quiet, short, and never in the way: they mix with
@@ -12,19 +13,22 @@ const SOURCES = {
 
 type Name = keyof typeof SOURCES;
 const players: Partial<Record<Name, AudioPlayer>> = {};
-let modeSet = false;
+/** Longer than the longest sound: then the app's own audio mode comes back. */
+const RESTORE_MS = 1200;
+let lastChime = 0;
 
-function play(name: Name) {
+async function play(name: Name) {
   if (!usePrefs.getState().prefs.sounds) return;
   try {
-    if (!modeSet) {
-      modeSet = true;
-      setAudioModeAsync({ playsInSilentMode: false, interruptionMode: 'mixWithOthers' }).catch(() => undefined);
-    }
+    const switched = await chimeMode();
     const player = players[name] ?? (players[name] = createAudioPlayer(SOURCES[name]));
     player.volume = 0.4;
-    player.seekTo(0).catch(() => undefined);
+    await player.seekTo(0);
     player.play();
+    if (switched) {
+      const at = (lastChime = Date.now());
+      setTimeout(() => { if (lastChime === at) defaultMode().catch(() => undefined); }, RESTORE_MS);
+    }
   } catch {
     // A missing audio device, or a browser that hasn't been tapped yet: stay quiet.
   }
@@ -32,11 +36,11 @@ function play(name: Name) {
 
 export const sound = {
   /** The pet was poked. */
-  tap: () => play('tap'),
+  tap: () => { play('tap'); },
   /** Your message or voice note went out. */
-  sent: () => play('sent'),
+  sent: () => { play('sent'); },
   /** A reply finished in the chat on screen. */
-  reply: () => play('reply'),
+  reply: () => { play('reply'); },
   /** An approval or question arrived while the app is open. */
-  needsYou: () => play('needsYou'),
+  needsYou: () => { play('needsYou'); },
 };

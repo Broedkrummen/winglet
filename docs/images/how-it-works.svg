@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="300" viewBox="0 0 880 300" role="img" aria-label="Your phone talks to the Winglet plugin inside Hermes on your server over HTTPS; Hermes uses your models; notifications come back to the phone">
+  <style>
+    .bg { fill: #ffffff; stroke: #e4e4ec; }
+    .card { fill: #f6f5fb; stroke: #dcd8f0; }
+    .inner { fill: #ffffff; stroke: #c9c0ff; }
+    .title { font: 600 17px -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; fill: #16131f; }
+    .text { font: 400 13.5px -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; fill: #4a4658; }
+    .small { font: 500 12.5px -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; fill: #6c5ce7; }
+    .line { stroke: #8b6cff; stroke-width: 2; fill: none; }
+    .dash { stroke: #3ba7ff; stroke-width: 2; fill: none; stroke-dasharray: 6 5; }
+    .icon { stroke: #6c5ce7; stroke-width: 2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #0d1117; stroke: #30363d; }
+      .card { fill: #161b22; stroke: #30363d; }
+      .inner { fill: #1c1830; stroke: #5b4bd6; }
+      .title { fill: #f0f0f5; }
+      .text { fill: #b4b0c4; }
+      .small { fill: #a99bff; }
+      .icon { stroke: #a99bff; }
+    }
+  </style>
+  <defs>
+    <linearGradient id="wg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8B6CFF"/>
+      <stop offset="0.55" stop-color="#6C5CE7"/>
+      <stop offset="1" stop-color="#3BA7FF"/>
+    </linearGradient>
+    <marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10z" fill="#8b6cff"/>
+    </marker>
+    <marker id="b" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10z" fill="#3ba7ff"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="1" y="1" width="878" height="298" rx="18"/>
+
+  <!-- Phone -->
+  <rect class="card" x="24" y="40" width="210" height="220" rx="16"/>
+  <rect class="icon" x="44" y="62" width="22" height="36" rx="5"/>
+  <path class="icon" d="M52 92h6"/>
+  <text class="title" x="78" y="86">Your phone</text>
+  <text class="text" x="44" y="134">Android app</text>
+  <text class="text" x="44" y="160">iPhone web app</text>
+  <text class="text" x="44" y="186">Desktop browser</text>
+  <text class="small" x="44" y="232">Winglet app</text>
+
+  <!-- Server -->
+  <rect class="card" x="330" y="40" width="300" height="220" rx="16"/>
+  <rect class="icon" x="350" y="64" width="30" height="13" rx="3"/>
+  <rect class="icon" x="350" y="83" width="30" height="13" rx="3"/>
+  <text class="title" x="394" y="86">Your server</text>
+  <text class="text" x="350" y="130">Hermes Agent</text>
+  <rect class="inner" x="350" y="146" width="260" height="94" rx="12"/>
+  <rect x="366" y="162" width="26" height="26" rx="8" fill="url(#wg)"/>
+  <path transform="translate(366 162) scale(0.40625)" d="M14 40c9-1 16-6 21-14 3-5 7-9 13-10-2 3-3 6-3 9 3-1 5-1 7 0-3 2-5 4-6 7 2 0 4 1 5 2-4 1-7 3-9 6-6 7-17 9-28 0z" fill="#fff"/>
+  <text class="title" x="402" y="181">Winglet plugin</text>
+  <text class="text" x="366" y="210">chats, approvals, goals,</text>
+  <text class="text" x="366" y="228">routines, pairing, web app</text>
+
+  <!-- Models -->
+  <rect class="card" x="726" y="40" width="130" height="220" rx="16"/>
+  <rect class="icon" x="746" y="70" width="20" height="20" rx="4"/>
+  <rect class="icon" x="752" y="76" width="8" height="8" rx="1"/>
+  <path class="icon" d="M751 66v4M761 66v4M751 90v4M761 90v4M742 75h4M742 85h4M766 75h4M766 85h4"/>
+  <text class="title" x="746" y="126">Models</text>
+  <text class="text" x="746" y="160">Local or any</text>
+  <text class="text" x="746" y="180">provider you</text>
+  <text class="text" x="746" y="200">choose</text>
+
+  <!-- Phone <-> server -->
+  <path class="line" d="M240 118H324" marker-start="url(#a)" marker-end="url(#a)"/>
+  <text class="small" x="282" y="106" text-anchor="middle">HTTPS</text>
+  <path class="dash" d="M324 196H240" marker-end="url(#b)"/>
+  <text class="small" x="282" y="186" text-anchor="middle">alerts</text>
+  <text class="text" x="282" y="218" text-anchor="middle" font-size="11">Web Push</text>
+  <text class="text" x="282" y="233" text-anchor="middle" font-size="11">or ntfy</text>
+
+  <!-- Server <-> models -->
+  <path class="line" d="M636 150H720" marker-start="url(#a)" marker-end="url(#a)"/>
+
+  <text class="text" x="440" y="285" text-anchor="middle" font-size="12">Remote access through a Cloudflare tunnel (set up for you), Tailscale, or your own domain</text>
+</svg>

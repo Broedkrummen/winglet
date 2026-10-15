@@ -6,14 +6,15 @@ import Animated, {
 } from 'react-native-reanimated';
 import { haptic } from '../lib/haptics';
 import { spring, useReducedMotion } from '../lib/motion';
-import { holdReaction, shownState, tapReaction, type Reaction } from '../lib/petPlay';
+import { holdCancelled, holdReaction, shownState, tapReaction, type Reaction } from '../lib/petPlay';
 import { sound } from '../lib/sounds';
 import { useApp } from '../lib/store';
 import type { Server } from '../lib/types';
 import { AgentFace, useAvatarColor, useRealPetState } from './AgentFace';
 
 const LEAN_MAX_DEG = 12;
-const CANCEL_PX = 80;
+/** Held this long, a press becomes a hold. */
+const HOLD_MS = 350;
 
 type LivePetProps = {
   server: Server;
@@ -42,7 +43,6 @@ export function LivePet({ server, size, glow, bare, status, onTap, onHoldStart, 
   const color = useAvatarColor(server);
   const [reaction, setReaction] = useState<Reaction>(null);
   const taps = useRef<number[]>([]);
-  const dragged = useRef(0);
 
   // End the reaction when it runs out, so the real state comes back without anything else changing.
   useEffect(() => {
@@ -73,7 +73,7 @@ export function LivePet({ server, size, glow, bare, status, onTap, onHoldStart, 
     halo.value = withRepeat(withSequence(withTiming(1, { duration: 900 }), withTiming(0.2, { duration: 900 })), -1);
   }, [reduced, real, halo]);
 
-  const tap = Gesture.Tap().runOnJS(true).onEnd(() => {
+  const poke = () => {
     const next = tapReaction(taps.current, Date.now(), loopMs);
     taps.current = next.recent;
     setReaction(next.reaction);
@@ -81,34 +81,41 @@ export function LivePet({ server, size, glow, bare, status, onTap, onHoldStart, 
     sound.tap();
     if (!reduced) squash.value = withSequence(withTiming(0.88, { duration: 90 }), withSpring(1, spring.snappy));
     onTap?.();
-  });
+  };
 
-  const hold = Gesture.LongPress().minDuration(350).runOnJS(true)
-    .onStart(() => {
-      haptic.selection();
-      dragged.current = 0;
-      if (onHoldStart) onHoldStart();
-      else setReaction(holdReaction());
-    })
-    .onEnd(() => {
-      if (onHoldEnd) onHoldEnd(dragged.current > CANCEL_PX);
-      else setReaction(null);
-    });
+  const leanTo = (dx: number, dy: number) => {
+    if (reduced) return;
+    const cap = size * 0.12;
+    leanX.value = Math.max(-cap, Math.min(cap, dx * 0.25));
+    leanY.value = Math.max(-cap, Math.min(cap, dy * 0.25));
+  };
+  const settle = () => {
+    leanX.value = withSpring(0, spring.soft);
+    leanY.value = withSpring(0, spring.soft);
+  };
 
-  const lean = Gesture.Pan().runOnJS(true).minDistance(6)
-    .onUpdate((e) => {
-      dragged.current = Math.hypot(e.translationX, e.translationY);
-      if (reduced) return;
-      const cap = size * 0.12;
-      leanX.value = Math.max(-cap, Math.min(cap, e.translationX * 0.25));
-      leanY.value = Math.max(-cap, Math.min(cap, e.translationY * 0.25));
-    })
-    .onFinalize(() => {
-      leanX.value = withSpring(0, spring.soft);
-      leanY.value = withSpring(0, spring.soft);
-    });
+  // A tap that wanders isn't a tap: a short drag never opens anything.
+  const tap = Gesture.Tap().maxDistance(10).runOnJS(true).onEnd((_e, success) => { if (success) poke(); });
 
-  const gesture = Gesture.Simultaneous(lean, Gesture.Exclusive(hold, tap));
+  let gesture;
+  if (onHoldStart) {
+    // Hold-to-talk follows the finger the whole time, so sliding away can cancel it (a long press would give up
+    // after a few pixels, and its end would look like a let-go).
+    const talk = Gesture.Pan().activateAfterLongPress(HOLD_MS).runOnJS(true)
+      .onStart(() => { haptic.selection(); onHoldStart(); })
+      .onUpdate((e) => leanTo(e.translationX, e.translationY))
+      .onEnd((e, success) => { onHoldEnd?.(holdCancelled(success, e.translationX, e.translationY)); })
+      .onFinalize(settle);
+    gesture = Gesture.Exclusive(talk, tap);
+  } else {
+    const hold = Gesture.LongPress().minDuration(HOLD_MS).runOnJS(true)
+      .onStart(() => { haptic.selection(); setReaction(holdReaction()); })
+      .onEnd(() => setReaction(null));
+    const lean = Gesture.Pan().runOnJS(true).minDistance(6)
+      .onUpdate((e) => leanTo(e.translationX, e.translationY))
+      .onFinalize(settle);
+    gesture = Gesture.Simultaneous(lean, Gesture.Exclusive(hold, tap));
+  }
 
   const body = useAnimatedStyle(() => ({
     transform: [
@@ -125,6 +132,8 @@ export function LivePet({ server, size, glow, bare, status, onTap, onHoldStart, 
   return (
     <GestureDetector gesture={gesture}>
       <View accessible accessibilityRole="button" accessibilityLabel={accessibilityLabel ?? `${server.bot.title}. Tap to poke`}
+        // Screen readers activate with a double tap, which never reaches the gesture handler.
+        accessibilityActions={[{ name: 'activate' }]} onAccessibilityAction={(e) => { if (e.nativeEvent.actionName === 'activate') poke(); }}
         style={{ alignItems: 'center', justifyContent: 'center' }}>
         <Animated.View pointerEvents="none" style={[{
           position: 'absolute', width: size * 0.9, height: size * 0.9, borderRadius: size, backgroundColor: color,

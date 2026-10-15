@@ -8,7 +8,7 @@ const exports: any = {};
 vm.runInNewContext(ts.transpileModule(readFileSync(new URL('../src/lib/petPlay.ts', import.meta.url), 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText, { exports, require: () => ({}) });
-const { tapReaction, holdReaction, shownState, TRIPLE_MS } = exports;
+const { tapReaction, holdReaction, shownState, holdCancelled, TRIPLE_MS } = exports;
 
 test('a tap waves for one loop, then the pet is back to what it was doing', () => {
   const { reaction } = tapReaction([], 1000, 1100);
@@ -44,4 +44,12 @@ test('holding shows it thinking until let go', () => {
   const held = holdReaction();
   assert.equal(shownState('idle', held, 1e12), 'review');
   assert.equal(shownState('run', null, 1e12), 'run');
+});
+
+test('a hold-to-talk is cancelled by sliding well away, or when the system interrupts it', () => {
+  assert.equal(holdCancelled(true, 0, 0), false);
+  assert.equal(holdCancelled(true, 30, -40), false); // a wobbly thumb still sends
+  assert.equal(holdCancelled(true, -90, 0), true);
+  assert.equal(holdCancelled(true, 60, 60), true); // 85 px diagonally
+  assert.equal(holdCancelled(false, 0, 0), true); // interrupted: never send what was half said
 });

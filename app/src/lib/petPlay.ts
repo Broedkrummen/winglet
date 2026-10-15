@@ -22,3 +22,11 @@ export function holdReaction(): Reaction {
 export function shownState(real: PetState, reaction: Reaction, now: number): PetState {
   return reaction && now < reaction.until ? reaction.state : real;
 }
+
+/** Slide this far from where the hold began to cancel a hold-to-talk. */
+export const CANCEL_PX = 80;
+
+/** Whether a hold-to-talk that just ended was cancelled: slid well away, or interrupted by the system. */
+export function holdCancelled(completed: boolean, dx: number, dy: number): boolean {
+  return !completed || Math.hypot(dx, dy) > CANCEL_PX;
+}

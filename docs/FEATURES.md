@@ -37,8 +37,11 @@ The [README](../README.md#what-it-does) has the overview. This page lists everyt
 - **A pet.** Give your agent an animated face from the [petdex](https://petdex.dev) gallery. It waves when
   a reply lands, runs while it works and waits when it needs you, on every phone paired with the bot.
   Its pet and color follow it through Home, chats, the bot switcher and the Inbox; small list avatars stay still.
+  Poke it and it waves (three quick pokes and it jumps), hold it and it thinks, drag it and it leans. It takes
+  its colors from its own sprite, and in a chat it sits on the message box too.
 - **Your main bot.** Choose one in Agent → Main bot. The app selects it on startup, and Home puts its pet,
-  status and message box first, with your other bots a tap away. See [more than one bot](BOTS.md).
+  status and message box first, with your other bots as its crew a tap away. It also sits in the middle of the
+  tab bar on every screen: tap it to ask something, hold it to talk. See [more than one bot](BOTS.md).
 - **Goals.** Give a chat an outcome and Hermes keeps working on it, turn after turn, until its judge says
   it's done. Add requirements, pause it, and follow its progress in the chat and on Home.
 - **Skills, tools and MCP servers.** Turn skills on and off, read them, and install Hermes's official ones.
@@ -62,5 +65,5 @@ The [README](../README.md#what-it-does) has the overview. This page lists everyt
 
 ## Looks good everywhere
 
-- Light and true-black dark themes with accent colors, smooth motion and haptics, a sidebar layout on
-  tablets and desktop, and more than one bot side by side.
+- Light and true-black dark themes with accent colors, smooth motion and haptics, soft sounds you can turn off,
+  a sidebar layout on tablets and desktop, and more than one bot side by side.

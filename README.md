@@ -71,7 +71,7 @@ Setup gives you a free HTTPS address through Cloudflare. You don't need an accou
 
 | 🤖 Android | 🍎 iPhone | 💻 Desktop |
 |---|---|---|
-| Install the `arm64-v8a` APK from the [latest release](https://github.com/VIKASRP24/winglet/releases/latest), then scan the QR in the app. | Scan with the Camera app, then **Share → Add to Home Screen** and enter the pairing code. | Open the link from `hermes winglet pair` in any browser. |
+| Install `winglet-<version>-arm64-v8a.apk` from the [latest release](https://github.com/VIKASRP24/winglet/releases/latest), then scan the QR in the app. | Scan with the Camera app, then **Share → Add to Home Screen**, open Winglet from your Home Screen and enter the pairing code. | Open the link from `hermes winglet pair` in any browser. |
 
 That's it. For Tailscale or your own domain, notifications, live typing and updates, see the **[setup guide](docs/SETUP.md)**.
 
@@ -122,6 +122,8 @@ That's it. For Tailscale or your own domain, notifications, live typing and upda
   </tr>
 </table>
 
+See **[all features](docs/FEATURES.md)** for the full list.
+
 ## 📸 Tour
 
 <table>
@@ -150,7 +152,7 @@ That's it. For Tailscale or your own domain, notifications, live typing and upda
 <img src="docs/images/how-it-works.svg" alt="Your phone talks to the Winglet plugin inside Hermes on your server over HTTPS. Hermes uses your models, and notifications come back to the phone." />
 
 - **The app** (`app/`) is one [Expo](https://expo.dev) / React Native codebase that builds the Android APK and the iPhone/desktop web app.
-- **The plugin** (`plugin/`) adds Winglet to Hermes as a messaging platform, the same way Telegram or Slack plug in. Each chat is a Hermes session. **No fork of Hermes.**
+- **The plugin** (`plugin/`) adds Winglet to Hermes as a messaging platform, the same way Telegram or Slack plug in. Each chat is a Hermes session, and approvals, questions, goals and routines use Hermes's own mechanisms. **No fork of Hermes.**
 
 <a id="faq"></a>
 
@@ -177,7 +179,8 @@ Only paired devices can talk to your agent. Pairing codes are single-use and exp
 phone gets its own revocable token (`hermes winglet devices` / `unpair`). The QR carries your server key's
 fingerprint, so the phone checks it's really your server. Owner actions are signed by a key that never leaves
 the phone, so a token copied from a log can chat but can't change anything. Every such action is listed in
-Agent → Devices → Activity, and risky commands still need your approval.
+Agent → Devices → Activity, and risky commands still need your approval. Prefer Tailscale or another private
+network over opening a port to the internet.
 </details>
 
 <details>
@@ -191,9 +194,16 @@ unless you limit them in Agent → Tools, its tools, so only add people you trus
 <details>
 <summary><b>What can I control from my phone?</b></summary>
 
-Owners get Agent → Server: machine health, **Pause new work**, **Restart**, and updates for Hermes and Winglet
-(in-app updates need Hermes installed from git and Winglet from `hermes plugins install`). Plus **Logs**,
-**Schedule**, and under Agent → Abilities: **Skills**, **Tools** and **MCP servers**.
+Owners get Agent → Server: the machine's processor, memory and disk, **Pause new work** (Hermes's `/pause`:
+new chats, routines and background tasks wait, anything already running finishes), **Restart**, and updates
+for Hermes and Winglet with progress that carries on across the restart. **Logs** shows Hermes's agent,
+gateway and error logs with keys and tokens hidden, and **Schedule** takes routines in plain words
+("weekdays at 9am", "every 2h", "in 30m") and posts their results to the Updates chat.
+
+In-app updates need Hermes installed from git and Winglet installed with `hermes plugins install`; otherwise
+the app shows the command to run on the server. Under Agent → Abilities you manage **Skills**, **Tools**
+(including approvals and what members can use) and **MCP servers**. Changes to tools apply from the next
+message; MCP changes apply when you tap Reconnect.
 </details>
 
 <details>
@@ -220,7 +230,7 @@ pytest
 
 # App (Expo)
 cd app && npm ci
-npx expo start            # press "w" for web
+npx expo start            # press "w" for web, or scan with a development build
 npx tsc --noEmit && npm test
 
 # Rebuild the web app bundled into the plugin

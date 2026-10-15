@@ -11,6 +11,8 @@ export type Prefs = {
   motion: 'system' | 'reduce' | 'full';
   transparency: 'system' | 'reduce' | 'full';
   haptics: boolean;
+  /** Soft interface sounds: poking the pet, sending, a reply landing, something needing you. */
+  sounds: boolean;
   /** What a message sent while the agent works does: guide it, wait for it, or interrupt it. */
   busyMode: 'steer' | 'queue' | 'interrupt';
   /** Ask for the phone's fingerprint, face or PIN when opening Winglet (Android app only). */
@@ -22,7 +24,7 @@ export type Prefs = {
 };
 
 export const DEFAULT_PREFS: Prefs = {
-  theme: 'system', accent: 'iris', layout: 'bubbles', motion: 'system', transparency: 'system', haptics: true, busyMode: 'steer', appLock: false, updateCheck: true, mainBot: '',
+  theme: 'system', accent: 'iris', layout: 'bubbles', motion: 'system', transparency: 'system', haptics: true, sounds: true, busyMode: 'steer', appLock: false, updateCheck: true, mainBot: '',
 };
 
 const KEY = 'winglet.prefs';

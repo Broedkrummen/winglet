@@ -17,6 +17,7 @@ function harness(os = 'web') {
   let socket: any;
   let recoveryRequest = async (_: any): Promise<any> => null;
   const timers: (() => void)[] = [];
+  const played: string[] = [];
   const sockets: string[] = [];
   const cache = new Map<string, any>();
   let persisted: any;
@@ -76,12 +77,13 @@ function harness(os = 'web') {
       cacheRemove: async (prefix: string) => { for (const k of [...cache.keys()]) if (k.startsWith(prefix)) cache.delete(k); },
     },
     './verify': { NEEDS_VERIFY: 'Verify this phone to do that.' },
+    './sounds': { sound: { reply: () => played.push('reply'), needsYou: () => played.push('needsYou'), tap: () => {}, sent: () => {} } },
     './storage': { getJSON: async (key: string, fallback: any) => (key === 'winglet.servers' && persisted) || fallback,
       setJSON: async (key: string, value: any) => { if (key === 'winglet.servers') persisted = value; } },
   });
   const tick = () => new Promise(resolve => setImmediate(resolve));
   return {
-    store, cache, setRequest: (fn: typeof request) => { request = fn; },
+    store, cache, played, setRequest: (fn: typeof request) => { request = fn; },
     setRecovery: (fn: typeof recoveryRequest) => { recoveryRequest = fn; },
     disconnect: () => { socket.readyState = 3; socket.onclose?.({ code: 1006 }); },
     retry: () => timers.shift()?.(), timers, sockets, persisted: () => persisted, socket: () => socket, tick,
@@ -461,4 +463,27 @@ test("Hermes's progress bubbles don't end the turn; its reply does", async () =>
   assert.ok(typing());
   h.event({ type: 'message.new', chat_id: 'general', message: bot('r', 'There are three breeds.') });
   assert.ok(!typing());
+});
+
+test('a reply chimes once, when its turn ends in the chat on screen', async () => {
+  const h = harness();
+  await h.connect();
+  await h.hello();
+  h.event({ type: 'typing', chat_id: 'general', on: true });
+  h.event({ type: 'message.new', chat_id: 'general', message: { ...msg(1), status: 'streaming' } });
+  h.event({ type: 'message.update', chat_id: 'general', message: msg(1) });
+  h.event({ type: 'message.update', chat_id: 'general', message: msg(1) }); // repeated final: no second chime
+  assert.deepEqual(h.played, ['reply']);
+  // A reply in a chat you aren't looking at toasts instead.
+  h.event({ type: 'typing', chat_id: 'other', on: true });
+  h.event({ type: 'message.new', chat_id: 'other', message: { ...msg(2), chat_id: 'other' } });
+  assert.deepEqual(h.played, ['reply']);
+});
+
+test('something needing you chimes while the app is open', async () => {
+  const h = harness();
+  await h.connect();
+  await h.hello();
+  h.event({ type: 'inbox.new', item: { id: 'q1', kind: 'question', title: 'Which one?', body: '', created_at: 1, chat_id: 'general' }, pending: 1 });
+  assert.deepEqual(h.played, ['needsYou']);
 });

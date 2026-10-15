@@ -72,6 +72,8 @@ export default function AppearanceScreen() {
       <ListGroup>
         <ListRow title="Haptics" subtitle={Platform.OS === 'web' ? 'Not available in the web app' : 'A light tap when you send, switch or confirm'}
           right={<Toggle label="Haptics" value={prefs.haptics} onValueChange={set('haptics')} />} />
+        <ListRow title="Sounds" subtitle="Soft sounds when you send, a reply lands, or something needs you"
+          right={<Toggle label="Sounds" value={prefs.sounds} onValueChange={set('sounds')} />} />
       </ListGroup>
     </Screen>
   );

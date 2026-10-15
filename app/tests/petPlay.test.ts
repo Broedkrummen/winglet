@@ -12,7 +12,7 @@ const { tapReaction, holdReaction, shownState, TRIPLE_MS } = exports;
 
 test('a tap waves for one loop, then the pet is back to what it was doing', () => {
   const { reaction } = tapReaction([], 1000, 1100);
-  assert.deepEqual(reaction, { state: 'wave', until: 2100 });
+  assert.deepEqual({ ...reaction }, { state: 'wave', until: 2100 });
   assert.equal(shownState('idle', reaction, 1500), 'wave');
   assert.equal(shownState('idle', reaction, 2100), 'idle');
 });
@@ -22,8 +22,8 @@ test('three quick taps make it jump, and start counting again', () => {
   r = tapReaction(r.recent, 300, 1100);
   assert.equal(r.reaction.state, 'wave');
   r = tapReaction(r.recent, 600, 1100);
-  assert.deepEqual(r.reaction, { state: 'jump', until: 1700 });
-  assert.deepEqual(r.recent, []);
+  assert.deepEqual({ ...r.reaction }, { state: 'jump', until: 1700 });
+  assert.equal(r.recent.length, 0);
 });
 
 test('taps further apart than the window never add up to a jump', () => {

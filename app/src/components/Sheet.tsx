@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { Modal, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Keyboard, Modal, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -22,6 +22,7 @@ export function Sheet({ visible, onClose, title, children }: { visible: boolean;
   const reduced = useReducedMotion();
   const locked = useLock((st) => st.locked);
   const [mounted, setMounted] = useState(visible);
+  const keyboard = useKeyboardHeight(visible);
   const y = useSharedValue(height);
   const fade = useSharedValue(0);
 
@@ -57,10 +58,10 @@ export function Sheet({ visible, onClose, title, children }: { visible: boolean;
         <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: t.colors.overlay }, backdrop]}>
           <Pressable style={StyleSheet.absoluteFill} accessibilityLabel="Close" onPress={onClose} />
         </Animated.View>
-        <View style={[s.host, wide && s.hostWide]} pointerEvents="box-none">
+        <View style={[s.host, wide && s.hostWide, !wide && keyboard ? { paddingBottom: keyboard } : null]} pointerEvents="box-none">
           <GestureDetector gesture={pan}>
             <Animated.View style={[s.panel, wide && s.panelWide, panel]} accessibilityViewIsModal>
-              <Glass style={[s.glass, wide && { borderRadius: t.radius.xl }, { paddingBottom: wide ? 20 : insets.bottom + 16 }]}>
+              <Glass style={[s.glass, wide && { borderRadius: t.radius.xl }, { paddingBottom: wide ? 20 : keyboard ? 12 : insets.bottom + 16 }]}>
                 {wide ? null : <View style={s.grabber} />}
                 {title ? <Text style={s.title} accessibilityRole="header">{title}</Text> : null}
                 {children}
@@ -71,6 +72,22 @@ export function Sheet({ visible, onClose, title, children }: { visible: boolean;
       </GestureHandlerRootView>
     </Modal>
   );
+}
+
+/**
+ * The keyboard's height while a sheet is open. A sheet is a native modal drawn edge to edge, so its window
+ * doesn't shrink for the keyboard: a text field in it would sit behind the keys without this.
+ */
+function useKeyboardHeight(active: boolean): number {
+  const [height, setHeight] = useState(0);
+  useEffect(() => {
+    if (!active || Platform.OS === 'web') return;
+    const ios = Platform.OS === 'ios';
+    const show = Keyboard.addListener(ios ? 'keyboardWillShow' : 'keyboardDidShow', (e) => setHeight(e.endCoordinates.height));
+    const hide = Keyboard.addListener(ios ? 'keyboardWillHide' : 'keyboardDidHide', () => setHeight(0));
+    return () => { show.remove(); hide.remove(); setHeight(0); };
+  }, [active]);
+  return height;
 }
 
 /** One action row inside a sheet. */

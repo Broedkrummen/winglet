@@ -74,10 +74,10 @@ export function FloatingTabBar({ target }: { target?: RefObject<View | null> }) 
   }, []);
 
   const pill = useAnimatedStyle(() => ({ transform: [{ translateX: x.value }] }));
-  if (keyboard) return null;
 
   return (
     <View pointerEvents="box-none" style={[s.wrap, { bottom: Math.max(insets.bottom, 12) }]}>
+      {keyboard ? null : (
       <Glass target={target} style={s.bar} intensity={60}>
         <View accessibilityRole="tablist" style={s.row} onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
           {each ? <Animated.View style={[s.pill, { width: each }, pill]} /> : null}
@@ -108,7 +108,9 @@ export function FloatingTabBar({ target }: { target?: RefObject<View | null> }) 
           })}
         </View>
       </Glass>
-      <MainBotSlot />
+      )}
+      {/* Stays mounted while the keyboard is up: quick-ask's own message box is what opened it. */}
+      <MainBotSlot hidden={keyboard} />
     </View>
   );
 }
@@ -117,7 +119,7 @@ export function FloatingTabBar({ target }: { target?: RefObject<View | null> }) 
  * The main bot, always in reach, raised over the middle of the bar (the glass clips, so it sits on top of it):
  * tap to ask it anything, hold to talk to it.
  */
-function MainBotSlot() {
+function MainBotSlot({ hidden }: { hidden: boolean }) {
   const s = useStyles();
   const t = useTheme();
   const main = useMainBot();
@@ -127,12 +129,14 @@ function MainBotSlot() {
   if (!main) return null;
   return (
     <View pointerEvents="box-none" style={s.mainWrap}>
-      {voice.recording ? <Text style={s.mainRec}>● {formatDuration(voice.durationMs)} · let go to send</Text> : null}
+      {voice.recording && !hidden ? <Text style={s.mainRec}>● {formatDuration(voice.durationMs)} · let go to send, slide away to cancel</Text> : null}
+      {hidden ? null : (
       <View style={[s.mainSlot, { backgroundColor: t.colors.surfaceRaised }]}>
         <LivePet server={main} size={46} accessibilityLabel={`${main.bot.title}. Tap to ask, hold to talk`}
           onTap={() => setOpen(true)} onHoldStart={() => voice.start()} onHoldEnd={(cancelled) => voice.finish(cancelled)} />
         <Badge count={pending} style={s.mainBadge} />
       </View>
+      )}
       <QuickAsk server={main} visible={open} onClose={() => setOpen(false)} />
     </View>
   );

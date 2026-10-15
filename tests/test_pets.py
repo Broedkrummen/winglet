@@ -294,6 +294,7 @@ def test_hermes_pets_install_show_and_remove(hermes_home, tmp_path, monkeypatch)
     pet = h.active_pet()
     assert pet["columns"] == 8 and pet["rows"] == 9 and pet["state_rows"][3] == "waving"
     assert pet["frames"]["idle"] == 6 and pet["mime"] == "image/webp" and pet["path"].endswith("spritesheet.webp")
+    assert pet["palette"]["base"] == "#c85028"  # make_sheet's (200, 80, 40)
     assert h.pet_thumbnail("boba").startswith(b"\x89PNG")
 
     assert h.show_pet(False) is None and h.active_pet() is None

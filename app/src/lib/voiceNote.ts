@@ -1,12 +1,12 @@
-import {
-  RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync, useAudioRecorder, useAudioRecorderState,
-} from 'expo-audio';
+import { RecordingPresets, requestRecordingPermissionsAsync, useAudioRecorder, useAudioRecorderState } from 'expo-audio';
 import { useRef, useState } from 'react';
 import { Platform } from 'react-native';
 import { attachFiles } from './attach';
+import { recordingMode } from './audioMode';
 import { haptic } from './haptics';
 import { sound } from './sounds';
 import { useApp } from './store';
+import { voiceSession } from './voiceSession';
 
 /**
  * Hold-to-talk: start records, finish sends it to the chat as a voice note (Hermes transcribes it with its
@@ -16,46 +16,47 @@ export function useVoiceNote(serverId: string, chatId: () => string, onSent?: ()
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const state = useAudioRecorderState(recorder, 200);
   const [recording, setRecording] = useState(false);
-  const startedAt = useRef(0);
+  // Read when used, so the session (made once) always sends to the current chat and calls the current onSent.
+  const latest = useRef({ serverId, chatId, onSent });
+  latest.current = { serverId, chatId, onSent };
+  const toast = (title: string, body: string) => useApp.getState().toast({ serverId: latest.current.serverId, title, body });
 
-  const start = async () => {
-    const permission = await requestRecordingPermissionsAsync();
-    if (!permission.granted) {
-      useApp.getState().toast({ serverId, title: 'Microphone not allowed', body: 'Allow microphone access for Winglet to send voice notes.' });
-      return;
-    }
-    await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
-    await recorder.prepareToRecordAsync();
-    recorder.record();
-    startedAt.current = Date.now();
-    setRecording(true);
-    haptic.light();
-  };
+  const session = useRef(voiceSession({
+    permission: async () => (await requestRecordingPermissionsAsync()).granted,
+    begin: async () => {
+      await recordingMode(true);
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+    },
+    stop: async () => {
+      setRecording(false);
+      try { await recorder.stop(); } catch { /* not started */ }
+      recordingMode(false).catch(() => undefined);
+      return recorder.uri;
+    },
+    now: () => Date.now(),
+    started: () => { setRecording(true); haptic.light(); },
+    denied: () => toast('Microphone not allowed', 'Allow microphone access for Winglet to send voice notes.'),
+    tooShort: () => toast('Hold to record', 'Keep holding while you talk, then let go to send.'),
+    failed: () => toast("Couldn't record", 'The microphone is busy or unavailable. Try again in a moment.'),
+    send: (uri) => { send(uri).catch(() => undefined); },
+  })).current;
 
-  const finish = async (cancel: boolean) => {
-    if (!startedAt.current) return;
-    const held = Date.now() - startedAt.current;
-    startedAt.current = 0;
-    setRecording(false);
-    try { await recorder.stop(); } catch { /* not started */ }
-    setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
-    if (cancel || held < 600 || !recorder.uri) {
-      if (!cancel && held < 600) useApp.getState().toast({ serverId, title: 'Hold to record', body: 'Keep holding while you talk, then let go to send.' });
-      return;
-    }
+  const send = async (uri: string) => {
+    const { serverId: id, chatId: chat, onSent: done } = latest.current;
     haptic.success();
     sound.sent();
     const name = `voice-note-${Date.now()}`;
     if (Platform.OS !== 'web') {
-      attachFiles(serverId, chatId(), [{ uri: recorder.uri, name: `${name}.m4a`, mime: 'audio/mp4' }], { voice: true });
+      attachFiles(id, chat(), [{ uri, name: `${name}.m4a`, mime: 'audio/mp4' }], { voice: true });
     } else {
       // Browsers record WebM, except Safari, which records MP4.
-      const blob = await (await fetch(recorder.uri)).blob();
+      const blob = await (await fetch(uri)).blob();
       const mime = blob.type.split(';')[0] || 'audio/webm';
-      attachFiles(serverId, chatId(), [{ uri: recorder.uri, name: `${name}.${mime.includes('mp4') ? 'm4a' : 'webm'}`, mime, file: blob }], { voice: true });
+      attachFiles(id, chat(), [{ uri, name: `${name}.${mime.includes('mp4') ? 'm4a' : 'webm'}`, mime, file: blob }], { voice: true });
     }
-    onSent?.();
+    done?.();
   };
 
-  return { recording, durationMs: state.durationMillis ?? 0, start, finish };
+  return { recording, durationMs: state.durationMillis ?? 0, start: session.start, finish: session.finish };
 }

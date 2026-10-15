@@ -350,7 +350,11 @@ export type PetSheet = {
   frames: Partial<Record<string, number>>;
   loop_ms: number;
   sheet_url: string; thumb_url: string;
+  /** The pet's own colours from its idle frame (newer servers): base for glows, soft/deep for the disc behind it. */
+  palette?: PetPalette;
 };
+
+export type PetPalette = { base: string; soft: string; deep: string };
 
 export type InstalledPet = { slug: string; name: string; description: string; generated: boolean; thumb_url: string };
 

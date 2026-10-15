@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { View, type StyleProp, type ViewStyle } from 'react-native';
 import { moodOf } from '../lib/agent';
 import { mediaUrl } from '../lib/api';
-import { avatarColor, petState, WAVE_MS, type PetState } from '../lib/pets';
+import { avatarColor, petState, petTones, WAVE_MS, type PetState } from '../lib/pets';
 import { useApp } from '../lib/store';
 import { BOT_COLORS } from '../lib/theme';
 import { useTheme } from '../lib/themeContext';
@@ -74,6 +74,7 @@ function Face({ server, size, glow, animated = false, still, mood, status, shape
   }
 
   const color = avatarColor(BOT_COLORS, server.bot.name, pet);
+  const tones = petTones(pet, t.scheme);
   const state = mood ? MOOD_STATE[mood] : petState({ replied, waiting: live === 'waiting', working: live === 'working' });
   const sprite = (height: number) => (
     <PetSprite sheet={pet} uri={mediaUrl(server, pet.sheet_url)} height={height} state={state} still={!online || still} />
@@ -102,7 +103,7 @@ function Face({ server, size, glow, animated = false, still, mood, status, shape
   return (
     <View style={[{ width: size, height: size }, style]} {...hidden}>
       <LinearGradient
-        colors={[shade(color, 0.32), color, shade(color, -0.18)]}
+        colors={tones ? tones.disc : [shade(color, 0.32), color, shade(color, -0.18)]}
         locations={[0, 0.55, 1]}
         start={{ x: 0.15, y: 0 }}
         end={{ x: 0.85, y: 1 }}

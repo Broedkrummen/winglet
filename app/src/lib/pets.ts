@@ -74,6 +74,31 @@ export function paletteColor(palette: readonly string[], key: string): string {
  * The colour behind a bot's avatar and Home's glow: its pet's when it has one, so choosing a pet re-tints the
  * bot everywhere, and the bot's own name's otherwise (the colour it was made with).
  */
-export function avatarColor(palette: readonly string[], bot: string, pet?: Pick<PetSheet, 'slug'> | null): string {
+export function avatarColor(palette: readonly string[], bot: string, pet?: Pick<PetSheet, 'slug' | 'palette'> | null): string {
+  if (pet?.palette) return pet.palette.base;
   return paletteColor(palette, pet ? `pet:${pet.slug}` : bot || 'hermes');
+}
+
+/**
+ * The gradient behind a pet: a pale tint of it in light mode, a deep one in dark mode, so the sprite stands out
+ * from its disc. Null when the server sent no palette (the caller keeps today's look).
+ */
+export function petTones(pet: Pick<PetSheet, 'palette'> | null | undefined, scheme: 'light' | 'dark'): { disc: [string, string, string] } | null {
+  const p = pet?.palette;
+  if (!p) return null;
+  return {
+    disc: scheme === 'light'
+      ? [p.soft, p.soft, mixHex(p.soft, p.base, 0.18)]
+      : [mixHex(p.deep, p.base, 0.2), p.deep, mixHex(p.deep, '#000000', 0.3)],
+  };
+}
+
+function mixHex(a: string, b: string, amount: number): string {
+  const pa = parseInt(a.slice(1), 16);
+  const pb = parseInt(b.slice(1), 16);
+  const ch = (shift: number) => {
+    const from = (pa >> shift) & 255;
+    return Math.round(from + (((pb >> shift) & 255) - from) * amount);
+  };
+  return `#${[16, 8, 0].map((shift) => ch(shift).toString(16).padStart(2, '0')).join('')}`;
 }

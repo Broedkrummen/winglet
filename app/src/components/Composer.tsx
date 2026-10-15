@@ -24,6 +24,8 @@ import { Sheet, SheetAction } from './Sheet';
 import { Chip, Tap, Toggle } from './ui';
 
 const MIN_INPUT = 41;
+/** How far a perched pet stands above the box: the chat keeps its last message clear of it. */
+const PERCH_RISE = 30;
 const BUSY_LABELS = { steer: 'Steer', queue: 'Queue next', interrupt: 'Interrupt' } as const;
 
 type Props = {
@@ -189,7 +191,7 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
   };
 
   return (
-    <View style={[s.wrap, { paddingBottom: Math.max(bottomInset, 10) }]} onLayout={(e) => onHeight(e.nativeEvent.layout.height)} pointerEvents="box-none">
+    <View style={[s.wrap, { paddingBottom: Math.max(bottomInset, 10) }]} onLayout={(e) => onHeight(e.nativeEvent.layout.height + (perch ? PERCH_RISE : 0))} pointerEvents="box-none">
       {matches.length ? (
         <Glass target={target} style={s.commands}>
           <ScrollView style={{ maxHeight: 316 }} keyboardShouldPersistTaps="handled" accessibilityLabel="Commands">
@@ -274,7 +276,7 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
         </View>
       </Glass>
       </View>
-      {perch ? <View pointerEvents="box-none" style={[s.perch, { top: boxY - 30 }]}>{perch}</View> : null}
+      {perch ? <View pointerEvents="box-none" style={[s.perch, { top: boxY - PERCH_RISE }]}>{perch}</View> : null}
       <Sheet visible={attachOpen} onClose={() => setAttachOpen(false)} title="Attach">
         {Platform.OS !== 'web' ? <SheetAction icon={<Camera size={20} color={t.colors.text} />} label="Take a photo" onPress={() => pick('camera')} /> : null}
         <SheetAction icon={<ImagePlus size={20} color={t.colors.text} />} label="Photos and videos" onPress={() => pick('photos')} />

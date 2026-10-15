@@ -408,7 +408,7 @@ const useStyles = makeStyles((t) => ({
   name: { ...t.type.display, color: t.colors.text, textAlign: 'center', marginTop: 14 },
   status: { ...t.type.callout, color: t.colors.textSecondary, textAlign: 'center' },
   back: {
-    flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'center', paddingLeft: 8, paddingRight: 12, minHeight: 32,
+    flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'center', paddingLeft: 8, paddingRight: 12, minHeight: 32, marginBottom: 22,
     borderRadius: t.radius.pill, backgroundColor: t.colors.accentSoft,
   },
   backText: { ...t.type.caption, fontFamily: t.fonts.semibold, color: t.colors.onAccentSoft },

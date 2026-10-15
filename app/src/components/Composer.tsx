@@ -24,8 +24,9 @@ import { Sheet, SheetAction } from './Sheet';
 import { Chip, Tap, Toggle } from './ui';
 
 const MIN_INPUT = 41;
-/** How far a perched pet stands above the box: the chat keeps its last message clear of it. */
-const PERCH_RISE = 30;
+/** How far a perched pet stands above the box: its feet stop where the buttons start (the row is padded 6),
+ * so poking it never takes a tap meant for them, and the chat keeps its last message clear of it. */
+const PERCH_RISE = 42;
 const BUSY_LABELS = { steer: 'Steer', queue: 'Queue next', interrupt: 'Interrupt' } as const;
 
 type Props = {

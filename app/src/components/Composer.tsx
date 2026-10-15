@@ -1,8 +1,5 @@
-import {
-  RecordingPresets, requestRecordingPermissionsAsync, setAudioModeAsync, useAudioRecorder, useAudioRecorderState,
-} from 'expo-audio';
 import { Image } from 'expo-image';
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { ActivityIndicator, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
@@ -14,10 +11,12 @@ import { haptic } from '../lib/haptics';
 import { formatDuration, pickFiles, pickMedia, takePhoto, type PickedFile } from '../lib/media';
 import { easeOut, useReducedMotion } from '../lib/motion';
 import { usePrefs } from '../lib/prefs';
+import { sound } from '../lib/sounds';
 import { draftKey, useApp } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
 import { plainText } from '../lib/text';
 import type { DraftFile, Server } from '../lib/types';
+import { useVoiceNote } from '../lib/voiceNote';
 import { Glass } from './Glass';
 import { ModelButton } from './ModelSheet';
 import { ArrowUp, Camera, FileText, ImagePlus, Mic, Plus, RotateCcw, Square, X } from './icons';
@@ -35,6 +34,10 @@ type Props = {
   target: RefObject<View | null>;
   onHeight: (h: number) => void;
   placeholder: string;
+  /** Drawn on the top edge of the box, at the left: the chat's pet perches here. */
+  perch?: ReactNode;
+  /** After anything is sent from this box: a message, a command or a voice note. */
+  onSent?: () => void;
 };
 
 /**
@@ -48,7 +51,7 @@ export function focusComposer(serverId: string, chatId: string) {
   setTimeout(() => focusers.get(draftKey(serverId, chatId))?.(), 320);
 }
 
-export function Composer({ server, chatId, busy, bottomInset, target, onHeight, placeholder }: Props) {
+export function Composer({ server, chatId, busy, bottomInset, target, onHeight, placeholder, perch, onSent }: Props) {
   const t = useTheme();
   const s = useStyles();
   const key = draftKey(server.id, chatId);
@@ -65,6 +68,7 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
   const [attachOpen, setAttachOpen] = useState(false);
   const [keepOriginal, setKeepOriginal] = useState(false);
   const [commands, setCommands] = useState<Command[]>([]);
+  const [boxY, setBoxY] = useState(0);
   const input = useRef<TextInput>(null);
   const setText = (value: string) => setDraft(server.id, chatId, value);
   const uploads = features?.uploads !== false;
@@ -148,6 +152,8 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
     if (value !== undefined) {
       haptic.light();
       useApp.getState().sendMessage(server.id, chatId, value);
+      sound.sent();
+      onSent?.();
       return;
     }
     if (!ready) return;
@@ -155,6 +161,8 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
     const prefix = showBusyModes && busyMode !== 'interrupt' ? `/${busyMode}` : '';
     sendDraft(server.id, chatId, text, prefix);
     setHeight(MIN_INPUT);
+    sound.sent();
+    onSent?.();
   };
 
   const pick = async (how: 'photos' | 'camera' | 'files') => {
@@ -205,6 +213,7 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
         </Animated.View>
       ) : null}
       {!online ? <Text style={s.offlineNote}>Offline. Messages you send are queued and go out when {server.bot.title} is back.</Text> : null}
+      <View onLayout={(e) => setBoxY(e.nativeEvent.layout.y)}>
       <Glass target={target} style={s.box} intensity={50}>
         {replyTo ? (
           <View style={s.reply}>
@@ -253,7 +262,7 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
               <Animated.View entering={ZoomIn.duration(160)}><Square size={14} color={t.colors.text} fill={t.colors.text} /></Animated.View>
             </Tap>
           ) : !text.trim() && !files.length && voice ? (
-            <VoiceButton server={server} chatId={chatId} />
+            <VoiceButton server={server} chatId={chatId} onSent={onSent} />
           ) : (
             <Tap key="send" feedback="none" accessibilityLabel={uploading ? 'Waiting for uploads' : 'Send'} accessibilityState={{ disabled: !ready }}
               disabled={!ready} onPress={() => send()} scaleTo={0.9} style={[s.sendBtn, { backgroundColor: ready ? t.colors.accentFill : t.colors.surfaceSunken }]}>
@@ -264,6 +273,8 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
           )}
         </View>
       </Glass>
+      </View>
+      {perch ? <View pointerEvents="box-none" style={[s.perch, { top: boxY - 30 }]}>{perch}</View> : null}
       <Sheet visible={attachOpen} onClose={() => setAttachOpen(false)} title="Attach">
         {Platform.OS !== 'web' ? <SheetAction icon={<Camera size={20} color={t.colors.text} />} label="Take a photo" onPress={() => pick('camera')} /> : null}
         <SheetAction icon={<ImagePlus size={20} color={t.colors.text} />} label="Photos and videos" onPress={() => pick('photos')} />
@@ -318,15 +329,13 @@ function Tray({ server, chatId, files }: { server: Server; chatId: string; files
  * Hold to record a voice note, release to send, slide left to cancel. Hermes transcribes it with
  * its own speech-to-text, the same as a voice note from Telegram.
  */
-function VoiceButton({ server, chatId }: { server: Server; chatId: string }) {
+function VoiceButton({ server, chatId, onSent }: { server: Server; chatId: string; onSent?: () => void }) {
   const t = useTheme();
   const s = useStyles();
   const reduced = useReducedMotion();
-  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
-  const state = useAudioRecorderState(recorder, 200);
-  const [recording, setRecording] = useState(false);
+  const voice = useVoiceNote(server.id, () => chatId, onSent);
+  const recording = voice.recording;
   const [cancelling, setCancelling] = useState(false);
-  const startedAt = useRef(0);
   const pulse = useSharedValue(1);
 
   useEffect(() => {
@@ -336,57 +345,22 @@ function VoiceButton({ server, chatId }: { server: Server; chatId: string }) {
   }, [recording, reduced, pulse]);
   const dot = useAnimatedStyle(() => ({ opacity: pulse.value }));
 
-  const start = async () => {
-    const permission = await requestRecordingPermissionsAsync();
-    if (!permission.granted) {
-      useApp.getState().toast({ serverId: server.id, title: 'Microphone not allowed', body: 'Allow microphone access for Winglet to send voice notes.' });
-      return;
-    }
-    await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
-    await recorder.prepareToRecordAsync();
-    recorder.record();
-    startedAt.current = Date.now();
-    setRecording(true);
-    haptic.light();
-  };
-
-  const finish = async (cancel: boolean) => {
-    if (!startedAt.current) return;
-    const held = Date.now() - startedAt.current;
-    startedAt.current = 0;
-    setRecording(false);
-    setCancelling(false);
-    try { await recorder.stop(); } catch { /* not started */ }
-    setAudioModeAsync({ allowsRecording: false }).catch(() => undefined);
-    if (cancel || held < 600 || !recorder.uri) {
-      if (!cancel && held < 600) useApp.getState().toast({ serverId: server.id, title: 'Hold to record', body: 'Keep holding the mic while you talk, then let go to send.' });
-      return;
-    }
-    haptic.success();
-    const name = `voice-note-${Date.now()}`;
-    if (Platform.OS !== 'web') {
-      attachFiles(server.id, chatId, [{ uri: recorder.uri, name: `${name}.m4a`, mime: 'audio/mp4' }], { voice: true });
-      return;
-    }
-    // Browsers record WebM, except Safari, which records MP4.
-    const blob = await (await fetch(recorder.uri)).blob();
-    const mime = blob.type.split(';')[0] || 'audio/webm';
-    attachFiles(server.id, chatId, [{ uri: recorder.uri, name: `${name}.${mime.includes('mp4') ? 'm4a' : 'webm'}`, mime, file: blob }], { voice: true });
-  };
-
   const gesture = Gesture.Pan()
     .runOnJS(true)
     .minDistance(0)
-    .onBegin(() => { start(); })
+    .onBegin(() => { voice.start(); })
     .onUpdate((e) => setCancelling(e.translationX < -80))
-    .onFinalize((e) => { finish(e.translationX < -80); });
+    .onFinalize((e) => {
+      setCancelling(false);
+      voice.finish(e.translationX < -80);
+    });
 
   return (
     <>
       {recording ? (
         <Animated.View entering={FadeIn.duration(120)} style={s.recording} pointerEvents="none">
           <Animated.View style={[s.recDot, dot]} />
-          <Text style={s.recTime}>{formatDuration(state.durationMillis ?? 0)}</Text>
+          <Text style={s.recTime}>{formatDuration(voice.durationMs)}</Text>
           <Text style={[s.recHint, cancelling && { color: t.colors.danger }]}>{cancelling ? 'Release to cancel' : '‹ Slide to cancel'}</Text>
         </Animated.View>
       ) : null}
@@ -402,6 +376,7 @@ function VoiceButton({ server, chatId }: { server: Server; chatId: string }) {
 
 const useStyles = makeStyles((t) => ({
   wrap: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: 10, paddingTop: 6 },
+  perch: { position: 'absolute', left: 26, zIndex: 3 },
   box: { borderRadius: t.radius.xl, maxWidth: 820, width: '100%', alignSelf: 'center', overflow: 'hidden' },
   row: { flexDirection: 'row', alignItems: 'flex-end', gap: 6, paddingLeft: 6, paddingRight: 6, paddingVertical: 6 },
   attach: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: t.colors.surfaceSunken },

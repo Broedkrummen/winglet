@@ -1,0 +1,139 @@
+import { useEffect, useRef, useState } from 'react';
+import { View } from 'react-native';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import Animated, {
+  cancelAnimation, Easing, useAnimatedStyle, useSharedValue, withRepeat, withSequence, withSpring, withTiming,
+} from 'react-native-reanimated';
+import { haptic } from '../lib/haptics';
+import { spring, useReducedMotion } from '../lib/motion';
+import { holdReaction, shownState, tapReaction, type Reaction } from '../lib/petPlay';
+import { sound } from '../lib/sounds';
+import { useApp } from '../lib/store';
+import type { Server } from '../lib/types';
+import { AgentFace, useAvatarColor, useRealPetState } from './AgentFace';
+
+const LEAN_MAX_DEG = 12;
+const CANCEL_PX = 80;
+
+type LivePetProps = {
+  server: Server;
+  size: number;
+  glow?: boolean;
+  bare?: boolean;
+  status?: 'online' | 'offline' | 'connecting' | 'busy';
+  /** Called after the tap reaction starts (the tab-bar pet opens quick-ask). */
+  onTap?: () => void;
+  /** Replace the long-press reaction: start/finish a hold (the tab-bar pet records a voice note). */
+  onHoldStart?: () => void;
+  onHoldEnd?: (cancelled: boolean) => void;
+  accessibilityLabel?: string;
+};
+
+/**
+ * The agent's face where it's alive: poke it and it waves (three quick pokes and it jumps), hold it and it
+ * thinks, drag it and it leans after your finger. Only Hermes's own animations; a reaction plays once and
+ * then the pet goes back to what the agent is really doing.
+ */
+export function LivePet({ server, size, glow, bare, status, onTap, onHoldStart, onHoldEnd, accessibilityLabel }: LivePetProps) {
+  const reduced = useReducedMotion();
+  const pet = useApp((st) => st.runtime[server.id]?.pet);
+  const loopMs = pet?.loop_ms ?? 1100;
+  const real = useRealPetState(server);
+  const color = useAvatarColor(server);
+  const [reaction, setReaction] = useState<Reaction>(null);
+  const taps = useRef<number[]>([]);
+  const dragged = useRef(0);
+
+  // End the reaction when it runs out, so the real state comes back without anything else changing.
+  useEffect(() => {
+    if (!reaction || reaction.until === Infinity) return;
+    const id = setTimeout(() => setReaction(null), Math.max(0, reaction.until - Date.now()));
+    return () => clearTimeout(id);
+  }, [reaction]);
+
+  const float = useSharedValue(0);
+  const squash = useSharedValue(1);
+  const leanX = useSharedValue(0);
+  const leanY = useSharedValue(0);
+  const halo = useSharedValue(0);
+
+  useEffect(() => {
+    cancelAnimation(float);
+    float.value = 0;
+    if (reduced || real !== 'idle') return;
+    const ease = Easing.inOut(Easing.sin);
+    float.value = withRepeat(withSequence(withTiming(-size * 0.03, { duration: 1500, easing: ease }), withTiming(0, { duration: 1500, easing: ease })), -1);
+  }, [reduced, real, size, float]);
+
+  // A steady glow while it works; a pulse while it needs you.
+  useEffect(() => {
+    cancelAnimation(halo);
+    halo.value = real === 'run' ? 0.35 : 0;
+    if (reduced || real !== 'waiting') return;
+    halo.value = withRepeat(withSequence(withTiming(1, { duration: 900 }), withTiming(0.2, { duration: 900 })), -1);
+  }, [reduced, real, halo]);
+
+  const tap = Gesture.Tap().runOnJS(true).onEnd(() => {
+    const next = tapReaction(taps.current, Date.now(), loopMs);
+    taps.current = next.recent;
+    setReaction(next.reaction);
+    haptic.light();
+    sound.tap();
+    if (!reduced) squash.value = withSequence(withTiming(0.88, { duration: 90 }), withSpring(1, spring.snappy));
+    onTap?.();
+  });
+
+  const hold = Gesture.LongPress().minDuration(350).runOnJS(true)
+    .onStart(() => {
+      haptic.selection();
+      dragged.current = 0;
+      if (onHoldStart) onHoldStart();
+      else setReaction(holdReaction());
+    })
+    .onEnd(() => {
+      if (onHoldEnd) onHoldEnd(dragged.current > CANCEL_PX);
+      else setReaction(null);
+    });
+
+  const lean = Gesture.Pan().runOnJS(true).minDistance(6)
+    .onUpdate((e) => {
+      dragged.current = Math.hypot(e.translationX, e.translationY);
+      if (reduced) return;
+      const cap = size * 0.12;
+      leanX.value = Math.max(-cap, Math.min(cap, e.translationX * 0.25));
+      leanY.value = Math.max(-cap, Math.min(cap, e.translationY * 0.25));
+    })
+    .onFinalize(() => {
+      leanX.value = withSpring(0, spring.soft);
+      leanY.value = withSpring(0, spring.soft);
+    });
+
+  const gesture = Gesture.Simultaneous(lean, Gesture.Exclusive(hold, tap));
+
+  const body = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: leanX.value },
+      { translateY: float.value + leanY.value },
+      { rotate: `${(leanX.value / Math.max(1, size * 0.12)) * LEAN_MAX_DEG}deg` },
+      { scaleX: 2 - squash.value },
+      { scaleY: squash.value },
+    ],
+  }));
+  const haloStyle = useAnimatedStyle(() => ({ opacity: halo.value * 0.6, transform: [{ scale: 1 + halo.value * 0.15 }] }));
+
+  const shown = shownState(real, reaction, Date.now());
+  return (
+    <GestureDetector gesture={gesture}>
+      <View accessible accessibilityRole="button" accessibilityLabel={accessibilityLabel ?? `${server.bot.title}. Tap to poke`}
+        style={{ alignItems: 'center', justifyContent: 'center' }}>
+        <Animated.View pointerEvents="none" style={[{
+          position: 'absolute', width: size * 0.9, height: size * 0.9, borderRadius: size, backgroundColor: color,
+        }, haloStyle]} />
+        <Animated.View style={body}>
+          <AgentFace server={server} size={size} glow={glow} bare={bare} status={status} animated
+            petState={pet ? shown : undefined} mood={!pet && reaction ? 'happy' : undefined} />
+        </Animated.View>
+      </View>
+    </GestureDetector>
+  );
+}

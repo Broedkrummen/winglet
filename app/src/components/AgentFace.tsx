@@ -22,6 +22,10 @@ type Props = {
   still?: boolean;
   /** Show this instead of what the agent is doing (the typing row is always working). */
   mood?: Mood;
+  /** Play this pet animation instead of what the agent is doing (a reaction to touch). Orb bots ignore it. */
+  petState?: PetState;
+  /** Just the pet, no disc or glow (perched on the message box). Orb bots draw their orb as usual. */
+  bare?: boolean;
   status?: 'online' | 'offline' | 'connecting' | 'busy';
   shape?: 'circle' | 'squircle';
   style?: StyleProp<ViewStyle>;
@@ -56,18 +60,28 @@ function LiveFace(props: Props) {
   return <Face {...props} online={online} live={live} />;
 }
 
-function Face({ server, size, glow, animated = false, still, mood, status, shape = 'circle', style, online, live }: Props & { online: boolean; live: Mood }) {
-  const t = useTheme();
-  const pet = useApp((st) => st.runtime[server.id]?.pet);
-  const lastReply = useApp((st) => (still ? 0 : st.runtime[server.id]?.lastReplyAt ?? 0));
+/**
+ * What a pet shows on its own: a wave just after a reply, then waiting on you, working, or resting. Off (always
+ * idle, and no subscriptions) for still faces in lists.
+ */
+export function useRealPetState(server: Server, on = true): PetState {
+  const live = useApp((st) => (on ? moodOf(st.runtime[server.id]) : 'idle'));
+  const lastReply = useApp((st) => (on ? st.runtime[server.id]?.lastReplyAt ?? 0 : 0));
   const replied = Date.now() - lastReply < WAVE_MS;
   const [, wake] = useState(0);
   // Back to idle when the wave is over, even if nothing else changes.
   useEffect(() => {
-    if (!pet || !replied) return;
+    if (!replied) return;
     const id = setTimeout(() => wake((n) => n + 1), lastReply + WAVE_MS - Date.now() + 50);
     return () => clearTimeout(id);
-  }, [pet, replied, lastReply]);
+  }, [replied, lastReply]);
+  return petState({ replied, waiting: live === 'waiting', working: live === 'working' });
+}
+
+function Face({ server, size, glow, bare, animated = false, still, mood, petState: forced, status, shape = 'circle', style, online, live }: Props & { online: boolean; live: Mood }) {
+  const t = useTheme();
+  const pet = useApp((st) => st.runtime[server.id]?.pet);
+  const real = useRealPetState(server, !!pet && !still && !mood && !forced);
 
   if (!pet) {
     return <BotAvatar name={server.bot.name} size={size} mood={mood ?? live} animated={animated} glow={glow} status={status} shape={shape} style={style} />;
@@ -75,7 +89,7 @@ function Face({ server, size, glow, animated = false, still, mood, status, shape
 
   const color = avatarColor(BOT_COLORS, server.bot.name, pet);
   const tones = petTones(pet, t.scheme);
-  const state = mood ? MOOD_STATE[mood] : petState({ replied, waiting: live === 'waiting', working: live === 'working' });
+  const state = forced ?? (mood ? MOOD_STATE[mood] : still ? 'idle' : real);
   const sprite = (height: number) => (
     <PetSprite sheet={pet} uri={mediaUrl(server, pet.sheet_url)} height={height} state={state} still={!online || still} />
   );
@@ -88,6 +102,13 @@ function Face({ server, size, glow, animated = false, still, mood, status, shape
   // Next to a name, the picture adds nothing for a screen reader; only the big one on its own does.
   const hidden = glow ? {} : { accessibilityElementsHidden: true, importantForAccessibility: 'no-hide-descendants' as const };
 
+  if (bare) {
+    return (
+      <View style={[{ width: size * 1.2, height: size * 1.2, alignItems: 'center', justifyContent: 'flex-end', opacity: online ? 1 : 0.5 }, style]} {...hidden}>
+        {sprite(size * 1.2)}
+      </View>
+    );
+  }
   if (glow) {
     return (
       <View style={[{ width: size, height: size, alignItems: 'center', justifyContent: 'center', opacity: online ? 1 : 0.5 }, style]}>

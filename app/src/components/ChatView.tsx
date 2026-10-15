@@ -25,6 +25,7 @@ import { FIXED } from '../lib/theme';
 import { makeStyles, useTheme } from '../lib/themeContext';
 import type { DraftFile, InboxItem, Message, ReplyRef, Server, Upload } from '../lib/types';
 import { AgentFace, useAvatarColor } from './AgentFace';
+import { LivePet } from './LivePet';
 import { UserAvatar } from './BotAvatar';
 import { Composer, focusComposer } from './Composer';
 import { ChatMenu } from './ChatMenu';
@@ -156,7 +157,7 @@ export function ChatView({ server, chatId, showBack, embedded }: { server: Serve
               <ChevronLeft size={26} color={t.colors.text} />
             </IconButton>
           ) : <View style={{ width: 4 }} />}
-          <AgentFace server={server} size={38} animated={typing} />
+          <LivePet server={server} size={38} />
           <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={s.headerTitle} numberOfLines={1} accessibilityRole="header">{title}</Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
@@ -172,7 +173,7 @@ export function ChatView({ server, chatId, showBack, embedded }: { server: Serve
         {goal ? <GoalStrip goal={goal} onPress={() => setGoalOpen(true)} /> : null}
       </View>
       <Composer server={server} chatId={chatId} busy={typing} bottomInset={embedded ? 12 : insets.bottom} target={target}
-        onHeight={setComposerH} placeholder={main || chat?.kind === 'home' ? `Message ${server.bot.title}` : `Message #${chat?.title ?? 'chat'}`} />
+        onHeight={setComposerH} perch={<LivePet server={server} size={40} bare />} placeholder={main || chat?.kind === 'home' ? `Message ${server.bot.title}` : `Message #${chat?.title ?? 'chat'}`} />
       <ChatMenu server={server} chatId={chatId} title={title} visible={menu} onClose={() => setMenu(false)}
         onGoal={goalsSupported && chat?.kind !== 'home' ? () => setGoalOpen(true) : undefined} hasGoal={!!goal && goal.status !== 'done'}
         onFiles={runtime?.info?.features?.files ? () => setFilesOpen(true) : undefined} onDeleted={() => router.replace('/chats')} />

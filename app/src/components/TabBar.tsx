@@ -9,9 +9,14 @@ import { spring, useReducedMotion } from '../lib/motion';
 import { usePrefs } from '../lib/prefs';
 import { homeChat, useApp } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
+import { formatDuration } from '../lib/media';
+import { useMainBot } from '../lib/mainBot';
+import { useVoiceNote } from '../lib/voiceNote';
 import { useAddBot } from './AddBot';
 import { AgentFace } from './AgentFace';
 import { Glass } from './Glass';
+import { LivePet } from './LivePet';
+import { QuickAsk } from './QuickAsk';
 import { Bot, House, Inbox, MessagesSquare, Plus } from './icons';
 import { Logo } from './Logo';
 import { Badge, Tap } from './ui';
@@ -51,12 +56,14 @@ export function FloatingTabBar({ target }: { target?: RefObject<View | null> }) 
   const [width, setWidth] = useState(0);
   const [keyboard, setKeyboard] = useState(false);
   const index = activeIndex(pathname);
-  const each = width ? (width - 12) / TABS.length : 0;
+  // Five slots: two tabs, the main bot in the middle, two tabs.
+  const each = width ? (width - 12) / (TABS.length + 1) : 0;
+  const slot = index < 2 ? index : index + 1;
   const x = useSharedValue(0);
 
   useEffect(() => {
-    x.value = reduced || !each ? index * each : withSpring(index * each, spring.snappy);
-  }, [index, each, reduced, x]);
+    x.value = reduced || !each ? slot * each : withSpring(slot * each, spring.snappy);
+  }, [slot, each, reduced, x]);
 
   // The keyboard pushes the bar up over what you're typing; step aside while it's open.
   useEffect(() => {
@@ -74,10 +81,10 @@ export function FloatingTabBar({ target }: { target?: RefObject<View | null> }) 
       <Glass target={target} style={s.bar} intensity={60}>
         <View accessibilityRole="tablist" style={s.row} onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
           {each ? <Animated.View style={[s.pill, { width: each }, pill]} /> : null}
-          {TABS.map((tab, i) => {
+          {TABS.flatMap((tab, i) => {
             const on = i === index;
             const color = on ? t.colors.onAccentSoft : t.colors.textSecondary;
-            return (
+            const item = (
               <Pressable
                 key={tab.path}
                 accessibilityRole="tab"
@@ -97,9 +104,36 @@ export function FloatingTabBar({ target }: { target?: RefObject<View | null> }) 
                 <Text style={[s.label, { color }]} numberOfLines={1}>{tab.label}</Text>
               </Pressable>
             );
+            return i === 2 ? [<View key="main" style={s.item} />, item] : [item];
           })}
         </View>
       </Glass>
+      <MainBotSlot />
+    </View>
+  );
+}
+
+/**
+ * The main bot, always in reach, raised over the middle of the bar (the glass clips, so it sits on top of it):
+ * tap to ask it anything, hold to talk to it.
+ */
+function MainBotSlot() {
+  const s = useStyles();
+  const t = useTheme();
+  const main = useMainBot();
+  const pending = useApp((st) => (main ? st.runtime[main.id]?.pending ?? 0 : 0));
+  const [open, setOpen] = useState(false);
+  const voice = useVoiceNote(main?.id ?? '', () => homeChat(useApp.getState().runtime[main?.id ?? '']));
+  if (!main) return null;
+  return (
+    <View pointerEvents="box-none" style={s.mainWrap}>
+      {voice.recording ? <Text style={s.mainRec}>● {formatDuration(voice.durationMs)} · let go to send</Text> : null}
+      <View style={[s.mainSlot, { backgroundColor: t.colors.surfaceRaised }]}>
+        <LivePet server={main} size={46} accessibilityLabel={`${main.bot.title}. Tap to ask, hold to talk`}
+          onTap={() => setOpen(true)} onHoldStart={() => voice.start()} onHoldEnd={(cancelled) => voice.finish(cancelled)} />
+        <Badge count={pending} style={s.mainBadge} />
+      </View>
+      <QuickAsk server={main} visible={open} onClose={() => setOpen(false)} />
     </View>
   );
 }
@@ -172,6 +206,13 @@ const useStyles = makeStyles((t) => ({
   item: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 2 },
   label: { fontFamily: t.fonts.semibold, fontSize: 11.5 },
   badge: { position: 'absolute', top: -7, right: -12 },
+  mainWrap: { position: 'absolute', bottom: BAR_HEIGHT / 2 - 6, alignItems: 'center' },
+  mainSlot: {
+    width: 60, height: 60, borderRadius: 30, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: t.colors.border,
+    shadowColor: t.colors.shadow, shadowOpacity: t.scheme === 'light' ? 0.16 : 0.5, shadowRadius: 14, shadowOffset: { width: 0, height: 6 }, elevation: 14,
+  },
+  mainBadge: { position: 'absolute', top: -2, right: -2 },
+  mainRec: { marginBottom: 8, fontFamily: t.fonts.semibold, fontSize: 12.5, color: t.colors.danger },
   rail: { width: 88, alignItems: 'center', backgroundColor: t.colors.surface, borderRightWidth: 1, borderRightColor: t.colors.border },
   railItem: { width: 68, paddingVertical: 9, borderRadius: t.radius.md, alignItems: 'center', gap: 3 },
   railLabel: { fontFamily: t.fonts.semibold, fontSize: 11 },

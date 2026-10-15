@@ -8,8 +8,9 @@ import { AgentFace, useAvatarColor } from '../../components/AgentFace';
 import { BotSwitcher } from '../../components/BotSwitcher';
 import { ConnectionBanner } from '../../components/ConnectionBanner';
 import { GoalRing, goalStatus } from '../../components/Goal';
-import { ArrowUp, ChevronRight, Hash, MessageSquarePlus, Plus, Sparkles, Square } from '../../components/icons';
+import { ArrowUp, ChevronLeft, ChevronRight, Hash, MessageSquarePlus, Plus, Sparkles, Square } from '../../components/icons';
 import { InboxCard } from '../../components/InboxCards';
+import { LivePet } from '../../components/LivePet';
 import { useTabBarSpace } from '../../components/TabBar';
 import { Badge, IconButton, SectionHeader, Tap } from '../../components/ui';
 import { ago, chatName, headline, pendingItems, workingChats } from '../../lib/agent';
@@ -70,6 +71,7 @@ function HomeFor({ server }: { server: Server }) {
   const elsewhere = useApp((st) => st.servers.reduce((n, x) => n + (x.id === server.id ? 0 : st.runtime[x.id]?.pending ?? 0), 0));
   const main = useMainBot();
   const loadInbox = useApp((st) => st.loadInbox);
+  const select = useApp((st) => st.select);
   const retryNow = useApp((st) => st.retryNow);
   const [refreshing, setRefreshing] = useState(false);
   const [, tick] = useState(0);
@@ -108,9 +110,16 @@ function HomeFor({ server }: { server: Server }) {
               <MessageSquarePlus size={20} color={t.colors.text} />
             </IconButton>
           </View>
+          {main && main.id !== server.id ? (
+            <Tap feedback="selection" onPress={() => select(main.id, homeChat(useApp.getState().runtime[main.id]))}
+              accessibilityLabel={`Back to ${main.bot.title}, your main bot`} style={s.back}>
+              <ChevronLeft size={16} color={t.colors.onAccentSoft} />
+              <Text style={s.backText}>Back to {main.bot.title}</Text>
+            </Tap>
+          ) : null}
 
           <View style={s.presence}>
-            <AgentFace server={server} size={116} animated glow />
+            <LivePet server={server} size={116} glow />
             <Text style={s.name} accessibilityRole="header">{server.bot.title}</Text>
             <Text style={s.status} accessibilityLiveRegion="polite">{head.title}</Text>
             {main?.id === server.id ? null : (
@@ -318,6 +327,7 @@ function BotStrip({ current }: { current: Server }) {
   const others = ordered.filter((x) => x.id !== current.id);
   return (
     <>
+      {others.length ? <Text style={s.crew}>Crew</Text> : null}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.strip}>
         {others.map((x) => {
           const rt = runtime[x.id];
@@ -327,7 +337,7 @@ function BotStrip({ current }: { current: Server }) {
             <Tap key={x.id} feedback="selection" scaleTo={0.95} onPress={() => select(x.id, homeChat(useApp.getState().runtime[x.id]))}
               accessibilityLabel={`${x.bot.title}${x === ordered[0] ? ', main bot' : ''}${rt?.pending ? `, ${rt.pending} waiting` : ''}. Switch to it`} style={s.botTile}>
               <View>
-                <AgentFace server={x} size={48} status={status} still />
+                <AgentFace server={x} size={44} status={status} still />
                 {rt?.pending ? <Badge count={rt.pending} style={{ position: 'absolute', top: -4, right: -6 }} /> : null}
               </View>
               <Text style={s.botTileName} numberOfLines={1}>{x.bot.title}</Text>
@@ -397,6 +407,12 @@ const useStyles = makeStyles((t) => ({
   presence: { alignItems: 'center', paddingTop: 12, paddingBottom: 20, gap: 4 },
   name: { ...t.type.display, color: t.colors.text, textAlign: 'center', marginTop: 14 },
   status: { ...t.type.callout, color: t.colors.textSecondary, textAlign: 'center' },
+  back: {
+    flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'center', paddingLeft: 8, paddingRight: 12, minHeight: 32,
+    borderRadius: t.radius.pill, backgroundColor: t.colors.accentSoft,
+  },
+  backText: { ...t.type.caption, fontFamily: t.fonts.semibold, color: t.colors.onAccentSoft },
+  crew: { ...t.type.caption, fontFamily: t.fonts.semibold, color: t.colors.textTertiary, marginTop: 18 },
   makeMain: { ...t.type.caption, fontFamily: t.fonts.semibold, color: t.colors.accent, paddingVertical: 8 },
   ask: {
     flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 56, paddingLeft: 20, paddingRight: 7, borderRadius: t.radius.pill,

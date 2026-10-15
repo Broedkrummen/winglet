@@ -1,6 +1,8 @@
 <div align="center">
 
-# 🪽 Winglet
+<img src="docs/images/logo.svg" width="96" alt="Winglet logo" />
+
+# Winglet
 
 **The open-source Dots for Hermes Agent. Your agents, in your pocket.**
 
@@ -20,95 +22,109 @@ and tap you on the shoulder when they need you.
 <img src="docs/screenshots/goal.png" width="200" alt="A goal's progress and requirements" />&nbsp;
 <img src="docs/screenshots/server.png" width="200" alt="Server health and controls" />
 
+**[Get started](#get-started)** · **[Features](#what-it-does)** · **[How it works](#how-it-works)** · **[FAQ](#faq)**
+
 </div>
 
----
+> [!TIP]
+> **New in [v0.4.0](docs/releases/v0.4.0.md):** a Home built around your main bot, pets throughout the app,
+> one "Add a bot" flow, and quieter chats with tool activity you can expand.
 
-> **Latest: [v0.4.0](https://github.com/VIKASRP24/winglet/releases/tag/v0.4.0).** A Home built around your
-> main bot, pets throughout the app, one Add a bot flow, and quieter chats with expandable tool activity.
-> Every release builds signed Android APKs and the iPhone/desktop web app. See the
-> [release notes](docs/releases/v0.4.0.md) for changes and testing limits, and
-> [open an issue](https://github.com/VIKASRP24/winglet/issues) when you hit a rough edge.
+## 💡 Why Winglet?
 
-## What is this?
+OpenAI Dots, Meta Muse and Grok Bot showed what a personal agent on your phone should feel like.
+Winglet brings that to [Hermes Agent](https://github.com/NousResearch/hermes-agent), the open-source
+agent by Nous Research.
 
-OpenAI Dots, Meta Muse and Grok Bot showed what a personal agent on your
-phone should feel like. Each one has a face and a name, its own computer to
-work on, memory, and a way to ping you when it needs a decision.
+<table>
+  <tr>
+    <td width="33%" valign="top">
+      <h4>🏠 Your server, your models</h4>
+      Hermes runs on your own machine with any model provider, local models included.
+    </td>
+    <td width="33%" valign="top">
+      <h4>📲 No app store needed</h4>
+      An APK for Android, and an installable web app with notifications for iPhone and desktop.
+    </td>
+    <td width="33%" valign="top">
+      <h4>🐾 Not another chat window</h4>
+      Each bot has a name and an animated pet, and Home shows what it's doing and what it needs from you.
+    </td>
+  </tr>
+</table>
 
-Winglet brings that experience to [Hermes Agent](https://github.com/NousResearch/hermes-agent),
-the open-source agent by Nous Research, running on **your own machine or server**:
+<a id="get-started"></a>
 
-- **Your hardware and your models.** Hermes runs on your machine; automatic remote access uses Cloudflare.
-- **No app store needed.** Android gets an APK. iPhone gets an installable web app with push notifications.
-- **Not another chat window.** Winglet is built around your agents and what they're doing, not around a text box.
+## 🚀 Get started
 
-## What it does
+**1. On your Hermes machine**, with the Hermes messaging gateway installed:
 
-### Talk to it
+```bash
+hermes plugins install VIKASRP24/winglet/plugin
+hermes plugins enable winglet
+hermes winglet setup          # sets up HTTPS, starts the gateway, shows a QR code
+```
 
-- **A chat for every topic.** A main chat plus side chats, each its own Hermes session. Replies stream in
-  with Markdown, tables and highlighted code.
-- **Photos, files and voice notes**, both ways, with a full-screen viewer. Reply to a message, copy, retry
-  or stop a reply, and export a chat.
-- **Share from any app** on Android: a page, some text, photos or files go to the chat you pick, ready to
-  send with a note.
-- **Search every chat** and jump straight to the message. Each chat keeps its **files and photos** in one place.
-- **A quieter conversation.** Tool progress folds into expandable activity rows, with replies kept in view.
-  Long approval commands expand when you need the details. Rename, mute and export use the same menu
-  in the chat list and inside a chat.
-- **Works on a bad connection.** Chats open from the phone's cache, and what you send waits until the
-  server is back.
-- **One screen for the connection.** See how phones reach the server, whether the tunnel is up, and
-  whether this phone's notifications are getting through. Moved the server to Tailscale or a new domain?
-  Point the Android app at the new address; it only moves once your server has signed that address as
-  its own.
+Setup gives you a free HTTPS address through Cloudflare. You don't need an account, a domain or any open ports.
 
-### It asks, you answer
+**2. On your phone**, scan the QR code:
 
-- **Approvals.** Approve a risky command once, for the session, always, or deny it, from the app or the
-  notification.
-- **Questions** with one-tap answers, and an **Inbox** for everything waiting on you, across all your bots.
-- **Notifications** through Web Push on iPhone and desktop and ntfy on Android, with per-chat mute and
-  quiet hours.
+| 🤖 Android | 🍎 iPhone | 💻 Desktop |
+|---|---|---|
+| Install `winglet-<version>-arm64-v8a.apk` from the [latest release](https://github.com/VIKASRP24/winglet/releases/latest), then scan the QR in the app. | Scan with the Camera app, then **Share → Add to Home Screen**, open Winglet from your Home Screen and enter the pairing code. | Open the link from `hermes winglet pair` in any browser. |
 
-### Your agent
+That's it. For Tailscale or your own domain, notifications, live typing and updates, see the **[setup guide](docs/SETUP.md)**.
 
-- **Models.** Switch a chat's model and reasoning level from the button beside the message box, or set the default. Add providers and API keys
-  from the phone; keys are encrypted for your server before they leave the phone.
-- **Persona, memory and usage.** Edit who it is, see and fix what it remembers, and track tokens and cost.
-- **A pet.** Give your agent an animated face from the [petdex](https://petdex.dev) gallery. It waves when
-  a reply lands, runs while it works and waits when it needs you, on every phone paired with the bot.
-  Its pet and color follow it through Home, chats, the bot switcher and the Inbox; small list avatars stay still.
-- **Your main bot.** Choose one in Agent → Main bot. The app selects it on startup, and Home puts its pet,
-  status and message box first, with your other bots a tap away.
-- **Goals.** Give a chat an outcome and Hermes keeps working on it, turn after turn, until its judge says
-  it's done. Add requirements, pause it, and follow its progress in the chat and on Home.
-- **Skills, tools and MCP servers.** Turn skills on and off, read them, and install Hermes's official ones.
-  Pick the tools it can use and how risky commands get approved. Connect other apps from Hermes's list of
-  approved MCP servers and sign in to them from the phone.
+<a id="what-it-does"></a>
 
-### Your server
+## 🧭 What it does
 
-- **Control center.** Processor, memory and disk at a glance. Pause new work, restart, and update Hermes and
-  Winglet with progress that carries on across the restart.
-- **Schedule.** Routines in plain words ("weekdays at 9am", "every 2h"), with their results in the Updates chat.
-- **Logs** from Hermes, with keys and tokens hidden.
-- **Sessions:** every conversation your agent has had, in any app or routine. Search what was said and read
-  any of them back, with the tools it used.
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <h4>💬 Chats</h4>
+      A chat for every topic, with streaming replies, code, photos, files and voice notes. Search every chat, share from any Android app, and keep working on a bad connection.
+    </td>
+    <td width="50%" valign="top">
+      <h4>✅ Approvals and questions</h4>
+      Approve risky commands and answer questions with one tap, from the app or the notification. The Inbox collects everything waiting on you.
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <h4>🎯 Goals</h4>
+      Give a chat an outcome and Hermes keeps working on it, turn after turn, until it's done. Follow progress in the chat and on Home.
+    </td>
+    <td valign="top">
+      <h4>⏰ Routines</h4>
+      Schedule work in plain words, like "weekdays at 9am" or "every 2h". Results land in the Updates chat.
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <h4>🐾 Pets and many bots</h4>
+      Give each bot an animated face from <a href="https://petdex.dev">petdex</a>. Pick a main bot, add more for separate jobs, and let them ask each other. <a href="docs/BOTS.md">More on bots →</a>
+    </td>
+    <td valign="top">
+      <h4>🧠 Your agent</h4>
+      Switch model and reasoning level per chat. Edit persona and memory, track usage, and manage skills, tools and MCP servers.
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <h4>🖥️ Your server</h4>
+      Processor, memory and disk at a glance. Pause, restart and update Hermes and Winglet, read logs, and browse past sessions.
+    </td>
+    <td valign="top">
+      <h4>🔒 Safe by default</h4>
+      Verified QR pairing, signed owner actions, an activity log, members who can't see your chats, and an optional app lock.
+    </td>
+  </tr>
+</table>
 
-### Safe by default
+See **[all features](docs/FEATURES.md)** for the full list.
 
-- **Owners and members.** Share your agent with someone without sharing your chats or the controls.
-- **Verified pairing** from a QR code, **signed owner actions**, an **activity log** of who changed what,
-  and an optional **app lock** on Android.
-
-### Looks good everywhere
-
-- Light and true-black dark themes with accent colors, smooth motion and haptics, a sidebar layout on
-  tablets and desktop, and more than one bot side by side.
-
-## Tour
+## 📸 Tour
 
 <table>
   <tr>
@@ -127,215 +143,85 @@ the open-source agent by Nous Research, running on **your own machine or server*
 
 <img src="docs/screenshots/desktop.png" alt="Winglet in a desktop browser: chats on the left, a chat working toward a goal on the right" />
 
-The screenshots show the earlier interface. v0.4 updates Home, avatars and model controls while keeping these features.
+<sub>Screenshots show the interface before v0.4, which redesigned Home, avatars and model controls.</sub>
 
-## How it works
+<a id="how-it-works"></a>
 
-```
- ┌──────────────────────┐                ┌──────────────────────────────────────┐
- │  Winglet app         │   HTTPS / WS   │  Your server                         │
- │  • Android (APK)     │ ─────────────▶ │                                      │
- │  • iPhone (web app)  │                │  Hermes gateway                      │
- │  • Desktop browser   │                │   └─ Winglet plugin                  │
- └──────────▲───────────┘                │        • chats ⇄ Hermes sessions     │
-            │                            │        • approvals and questions     │
-            │   push notifications       │        • goals, schedule, server     │
-            └─────────────────────────── │        • pairing, roles, signing     │
-               (Web Push / ntfy)         │        • serves the web app          │
-                                         └──────────────────────────────────────┘
-```
+## ⚙️ How it works
 
-Winglet has two parts:
+<img src="docs/images/how-it-works.svg" alt="Your phone talks to the Winglet plugin inside Hermes on your server over HTTPS. Hermes uses your models, and notifications come back to the phone." />
 
-1. **The app** (`app/`): one [Expo](https://expo.dev) / React Native codebase that builds
-   the Android APK and the iPhone/desktop web app.
-2. **The plugin** (`plugin/`): a Hermes plugin that adds Winglet as a messaging platform, the same way
-   Telegram or Slack plug into Hermes. Each Winglet chat is a Hermes session, and approvals, questions,
-   model and setting pickers, goals and routines all go through Hermes's own mechanisms.
-   **No fork of Hermes.** Setup provides HTTPS through Cloudflare, or you can use your own connection.
+- **The app** (`app/`) is one [Expo](https://expo.dev) / React Native codebase that builds the Android APK and the iPhone/desktop web app.
+- **The plugin** (`plugin/`) adds Winglet to Hermes as a messaging platform, the same way Telegram or Slack plug in. Each chat is a Hermes session, and approvals, questions, goals and routines use Hermes's own mechanisms. **No fork of Hermes.**
 
-## Install
+<a id="faq"></a>
 
-You need a machine running [Hermes Agent](https://github.com/NousResearch/hermes-agent) with its
-messaging gateway (`hermes gateway`), the same one you'd use for Telegram or Slack.
+## ❓ FAQ
 
-### 1. On your Hermes machine
+<details>
+<summary><b>Do I need to pay for anything?</b></summary>
 
-```bash
-hermes plugins install VIKASRP24/winglet/plugin
-hermes plugins enable winglet
-hermes winglet setup          # prepares HTTPS, starts the gateway, then shows the QR
-```
+No. Winglet is MIT-licensed and needs no App Store or Play Store account. You need a machine that runs
+Hermes Agent and whatever model provider you choose (local models work).
+</details>
 
-For a new or previously unpaired install, `setup` installs the dependencies and a checksum-verified
-Cloudflare tunnel client in your Hermes profile, starts/restarts the gateway, and checks the public HTTPS address against your
-server's identity before showing a QR. No Cloudflare account, domain, administrator rights,
-inbound port opening, or phone VPN is needed. The server still needs outbound internet access.
+<details>
+<summary><b>Does my server need to be public on the internet?</b></summary>
 
-The free Quick Tunnel is an early-preview convenience: it has no uptime guarantee and changes
-address when recreated. The updated Android app recovers the new address when reconnecting;
-iPhone users need a new QR and home-screen installation after an address change. An existing
-explicit HTTPS configuration and any saved connection mode are preserved. Older installs with
-paired phones keep their direct address and listener, so re-running setup during an upgrade
-does not disconnect them or route their traffic through Cloudflare. To switch explicitly, run
-`hermes winglet setup --connection quick`, then re-pair those phones. See [remote access](docs/REMOTE_ACCESS.md) for
-limits, provider privacy, and permanent-address alternatives.
+No. Setup uses an outbound Cloudflare tunnel, or you can use a private network such as Tailscale or your own
+HTTPS proxy. See the [remote access guide](docs/REMOTE_ACCESS.md).
+</details>
 
-For live-typing replies, add this to `~/.hermes/config.yaml` and restart the gateway:
+<details>
+<summary><b>Is it safe?</b></summary>
 
-```yaml
-display:
-  platforms:
-    winglet:
-      streaming: true
-```
+Only paired devices can talk to your agent. Pairing codes are single-use and expire after 10 minutes, and each
+phone gets its own revocable token (`hermes winglet devices` / `unpair`). The QR carries your server key's
+fingerprint, so the phone checks it's really your server. Owner actions are signed by a key that never leaves
+the phone, so a token copied from a log can chat but can't change anything. Every such action is listed in
+Agent → Devices → Activity, and risky commands still need your approval. Prefer Tailscale or another private
+network over opening a port to the internet.
+</details>
 
-### 2. On your phone
+<details>
+<summary><b>Can someone else use my agent?</b></summary>
 
-- **Android:** download `winglet-<version>-arm64-v8a.apk` from the [latest release](https://github.com/VIKASRP24/winglet/releases/latest) (the
-  `armeabi-v7a` one is for older 32-bit phones), open it, and allow the install. Scan the QR code from step 1.
-  When a new version is out, the app offers to download it and open Android's installer if you tap **Update**.
-  You can choose Later, skip that version, or turn automatic checks off in About. Android may ask you
-  to allow installs from Winglet. You can also track releases with [Obtainium](https://github.com/ImranR98/Obtainium).
-- **iPhone:** scan the QR code with the Camera app. It opens Winglet in Safari: tap
-  **Share → Add to Home Screen**, open Winglet from your Home Screen, and enter the pairing code.
-  Notifications need iOS 16.4+ and an **https** address (see below).
-- **Desktop:** open the link from `hermes winglet pair` in any browser.
+Yes, as a member: Agent → Devices → Add a device → Member (or `hermes winglet pair --member`). Members have
+their own chats and can't see yours, approve commands or change settings. They share the agent's memory and,
+unless you limit them in Agent → Tools, its tools, so only add people you trust with it.
+</details>
 
-### Reaching your server from anywhere (and HTTPS for iPhone)
+<details>
+<summary><b>What can I control from my phone?</b></summary>
 
-The default automatic HTTPS address works over Wi-Fi or mobile data. Run `hermes winglet pair`
-for another phone or a fresh QR. Cloudflare carries HTTP and WebSocket traffic and terminates
-HTTPS; this connection is **not end-to-end encrypted against Cloudflare**. Android address
-announcements are separately encrypted before being published through ntfy.
+Owners get Agent → Server: the machine's processor, memory and disk, **Pause new work** (Hermes's `/pause`:
+new chats, routines and background tasks wait, anything already running finishes), **Restart**, and updates
+for Hermes and Winglet with progress that carries on across the restart. **Logs** shows Hermes's agent,
+gateway and error logs with keys and tokens hidden, and **Schedule** takes routines in plain words
+("weekdays at 9am", "every 2h", "in 30m") and posts their results to the Updates chat.
 
-For a permanent address or private access, use `--public-url`. For example, install and connect
-[Tailscale](https://tailscale.com) on both the Hermes server and phone, then on the server:
+In-app updates need Hermes installed from git and Winglet installed with `hermes plugins install`; otherwise
+the app shows the command to run on the server. Under Agent → Abilities you manage **Skills**, **Tools**
+(including approvals and what members can use) and **MCP servers**. Changes to tools apply from the next
+message; MCP changes apply when you tap Reconnect.
+</details>
 
-```bash
-hermes gateway restart
-tailscale serve --bg http://127.0.0.1:8787
-hermes winglet setup --public-url https://<your-machine>.<your-tailnet>.ts.net
-hermes gateway restart
-hermes winglet pair
-```
+<details>
+<summary><b>Why a web app on iPhone?</b></summary>
 
-Use the exact HTTPS URL printed by `tailscale serve`; keep Tailscale connected on the phone.
-Changing `--public-url` does not create HTTPS or update an already paired app connection. To move a
-paired Android phone instead of pairing again, set the new address with `--public-url`, restart, then
-open the bot's **Connection** screen and choose **Change address**.
-An HTTPS domain with a reverse proxy or a
-[Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
-works too. See the [remote access guide](docs/REMOTE_ACCESS.md) for setup and troubleshooting.
+It lets you use Winglet without a native iOS build or an App Store account. It supports notifications on
+iOS 16.4+ when added to the Home Screen over HTTPS.
+</details>
 
-### Notifications
-
-Upgrading from an installation that shared one Android notification topic between phones?
-Winglet retires that topic automatically to stop revoked phones from receiving notifications.
-Set up notifications again on **each phone**, subscribe to its new private topic in ntfy, and remove
-the old shared topic. Web Push registrations are unaffected.
-
-- **iPhone / desktop:** Settings → Notifications → *Turn on notifications*. Uses standard Web Push,
-  end-to-end encrypted with keys that live on your server.
-- **Android:** Settings → Notifications → *Set up notifications*, then subscribe in the free
-  [ntfy](https://ntfy.sh) app. ntfy only ever sees "Hermes needs you", never the details.
-
-### Approval compatibility
-
-Interactive approval cards bind to the exact Hermes request ID. Winglet accepts an ID forwarded
-with the prompt, or captures it from current Hermes' synchronous approval notifier before the
-prompt is scheduled. This compatibility path checks the notifier, adapter, chat, and session;
-if Hermes changes that call path or the request has expired, Winglet uses the normal text prompt
-with `/approve` and `/deny` instructions. Winglet never guesses an approval identity from the
-command or queue order, even when only one request appears to match. See
-[approval identity and compatibility](docs/APPROVALS.md) for the integration details and tests.
-
-### More than one bot
-
-Each Hermes profile is a bot, the same as Hermes Desktop's Bots: its own persona, memory, skills, chats
-and pet. Keep your main bot for everyday chat and add bots for separate jobs.
-
-**Main bot.** The app opens on your main bot (the first one paired, until you pick another under Agent → Main bot). Home puts that bot up front with its pet and a message box, and keeps your other bots in a small row you tap to bring forward.
-
-**On the same server, from the phone.** "Add a bot" (in the bot switcher, on Home, or under Agent) offers to create a new bot, scan a QR, or pair with a code from another server. Creating one needs an owner phone and compatible Hermes support. It makes a new profile the way Hermes Desktop
-does (your provider keys and model, never your chat-platform tokens) and it's on the phone at once, with
-no new port and no pairing. Bots made in Hermes Desktop, with `hermes profile create`, or by the agent
-itself show up too. Hermes serves every profile from the one gateway once there are two of them; after
-the first new bot, restart the server once (the app offers to). If you used to run a gateway per
-profile, fold them into one first with `hermes gateway migrate --multiplex`.
-
-**Teamwork.** Your bots can call on each other. Say "ask Chef what's for dinner" in any chat and your
-bot asks Chef and brings back the answer, the way Hermes Desktop's Bot Mode does (the message lands in
-Chef's "Bot Chat"). Ask your bot to make a new one ("make me a bot that plans meals") and it does,
-after you approve it like a risky command. Both tools are in the "bots" toolset under Tools.
-
-**On another server.** Pair it as usual; it stacks up in the sidebar with the others. A profile can
-also keep its own gateway and port:
-
-```bash
-hermes -p researcher winglet setup --port 8788
-hermes -p researcher gateway run
-hermes -p researcher winglet pair
-```
-
-## Updating
-
-On the server, run `hermes plugins update winglet` and restart the gateway. Supported installs can also
-update from Winglet's Server screen. The updated plugin serves the new iPhone/desktop web app.
-
-Android releases use the same signing key and can update the installed app. Phones on v0.3.0 can use
-the update prompt for v0.4.0; phones on v0.2.0 use About and a browser download. The in-app download,
-installer hand-off and first-time install permission still need verification on a real phone.
-
-## What's next
+## 🗺️ What's next
 
 - [ ] Live screen: watch the agent's computer and take over when it needs you
 - [ ] Real-time voice
 - [ ] Widgets and backups
 
-The full plan, with priorities and the work behind each item, is in [docs/APP_PLAN.md](docs/APP_PLAN.md).
+The full plan is in [docs/APP_PLAN.md](docs/APP_PLAN.md).
 
-## FAQ
-
-**Do I need to pay for anything?**
-No. Winglet is MIT-licensed and needs no App Store or Play Store account. You need a
-machine that runs Hermes Agent and whatever model provider you choose (local models work).
-
-**Does my server need to be public on the internet?**
-No. Your phone needs to reach it, which can be through a private VPN such as Tailscale or through
-an HTTPS reverse proxy/tunnel. See the [remote access guide](docs/REMOTE_ACCESS.md).
-
-**Is it safe to expose my agent like this?**
-Only paired devices can talk to it: pairing codes are single-use and expire after 10 minutes, and each
-phone gets its own revocable token (`hermes winglet devices` / `unpair`). The pairing QR carries the
-server key's fingerprint, so the phone checks it's really talking to your server. Owner actions
-(managing devices, settings, restarts and updates) are signed by a key that never leaves the phone, so a
-token copied from a log can chat but can't change anything. Every such action is in Agent → Devices →
-Activity. Risky commands still need your approval. Prefer Tailscale or another private network over
-opening a port to the internet.
-
-**Can someone else use my agent?**
-Yes, as a member: on your phone, open Agent → Devices → Add a device and choose Member (or run
-`hermes winglet pair --member`). Members chat in their own chats and can't see yours, approve commands, or
-use owner commands like `/model`. They talk to the same agent with the same memory and, unless you limit
-them in Agent → Tools, the same tools, so only add people you'd trust with it.
-
-**What can I control from my phone?**
-Owners get Agent → Server: the machine's processor, memory and disk, **Pause new work** (Hermes's `/pause`:
-new chats, routines and background tasks wait, anything already running finishes), **Restart**, and updates
-for Hermes and Winglet with progress that carries on across the restart. **Logs** shows Hermes's agent,
-gateway and error logs with keys and tokens hidden, and **Schedule** takes routines in plain words
-("weekdays at 9am", "every 2h", "in 30m") and posts their results to the Updates chat. In-app updates need
-Hermes installed from git and Winglet installed with `hermes plugins install`; otherwise the app shows the
-command to run on the server. Under Agent → Abilities you manage **Skills**, **Tools** (including approvals and
-what members can use) and **MCP servers**. Changes to tools apply from the next message; MCP changes apply
-when you tap Reconnect.
-
-**Why a web app on iPhone instead of a real app?**
-The installable web app lets you use Winglet without a separate native iOS build or an App Store account.
-It supports notifications on iOS 16.4+ when added to the Home Screen over HTTPS.
-
-## Development
+## 🛠️ Development
 
 ```bash
 # Plugin tests
@@ -351,20 +237,15 @@ npx tsc --noEmit && npm test
 ./scripts/build-web.sh
 ```
 
-To try the plugin against your own Hermes without publishing it, copy `plugin/` to
-`~/.hermes/plugins/winglet/` and enable it.
+To try the plugin against your own Hermes, copy `plugin/` to `~/.hermes/plugins/winglet/` and enable it.
 
-## Contributing
+## 🤝 Contributing
 
-Early days, so everything is open: code, design, naming of things, ideas.
-See [CONTRIBUTING.md](CONTRIBUTING.md). Found a security issue? Please read [SECURITY.md](SECURITY.md) first.
+Early days, so everything is open: code, design, naming, ideas. See [CONTRIBUTING.md](CONTRIBUTING.md).
+Found a security issue? Please read [SECURITY.md](SECURITY.md) first.
 
-## Disclaimer
+---
 
-Winglet is an independent community project. It is **not affiliated with or endorsed by
-Nous Research, OpenAI, Meta or xAI**. "Hermes Agent" is a project of Nous Research;
-other product names are used only to describe what Winglet is similar to.
-
-## License
-
-[MIT](LICENSE)
+<sub>Winglet is an independent community project, **not affiliated with or endorsed by Nous Research, OpenAI,
+Meta or xAI**. "Hermes Agent" is a project of Nous Research; other product names only describe what Winglet
+is similar to. Licensed under [MIT](LICENSE).</sub>

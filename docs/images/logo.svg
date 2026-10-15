@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 64 64" role="img" aria-label="Winglet">
+  <defs>
+    <linearGradient id="wg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8B6CFF"/>
+      <stop offset="0.55" stop-color="#6C5CE7"/>
+      <stop offset="1" stop-color="#3BA7FF"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="18" fill="url(#wg)"/>
+  <path d="M14 40c9-1 16-6 21-14 3-5 7-9 13-10-2 3-3 6-3 9 3-1 5-1 7 0-3 2-5 4-6 7 2 0 4 1 5 2-4 1-7 3-9 6-6 7-17 9-28 0z" fill="#fff"/>
+  <path d="M20 43c7-1 13-4 18-9" stroke="rgba(91,75,214,0.55)" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+</svg>

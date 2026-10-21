@@ -86,3 +86,59 @@ test('no permission, or a recorder that fails to start, is reported and nothing 
   p = t.start(); g.allow(); await p;
   assert.deepEqual([...g.log], ['stop', 'failed']);
 });
+
+test('a second hold cannot overlap permission or resurrect a released recording', async () => {
+  const f = fake();
+  let prompts = 0;
+  const s = voiceSession({ ...f.d, permission: () => { prompts++; return f.d.permission(); } });
+  const first = s.start();
+  await s.finish(true);
+  const second = s.start();
+  assert.equal(prompts, 1);
+  f.allow(); await first; await second;
+  assert.deepEqual(f.log, []);
+  const next = s.start(); f.allow(); await f.flush(); f.ready(); await next;
+  f.at(2000); await s.finish(false);
+  assert.equal(f.log.at(-1), 'send file://note.m4a');
+});
+
+test('a hold while the last recorder is stopping cannot open another recorder', async () => {
+  const f = fake();
+  let stopped!: (uri: string) => void;
+  let prompts = 0;
+  const s = voiceSession({ ...f.d,
+    permission: () => { prompts++; return f.d.permission(); },
+    stop: () => new Promise<string>((resolve) => { stopped = resolve; }),
+  });
+  const started = s.start(); f.allow(); await f.flush(); f.ready(); await started;
+  f.at(2000);
+  const finishing = s.finish(false);
+  const extra = s.start();
+  assert.equal(prompts, 1);
+  stopped('file://note.m4a'); await finishing; await extra;
+  assert.equal(f.log.at(-1), 'send file://note.m4a');
+});
+
+test('cancelling while stop is pending prevents delivery', async () => {
+  const f = fake();
+  let stopped!: (uri: string) => void;
+  const s = voiceSession({ ...f.d, stop: () => new Promise<string>((resolve) => { stopped = resolve; }) });
+  const started = s.start(); f.allow(); await f.flush(); f.ready(); await started;
+  f.at(2000); const finishing = s.finish(false);
+  await s.finish(true); // backgrounded while the native stop was pending
+  stopped('file://note.m4a'); await finishing;
+  assert.ok(!f.log.some((event) => event.startsWith('send')));
+});
+
+test('a failed native stop is reported without delivery and the next hold can recover', async () => {
+  const f = fake();
+  let broken = true;
+  const s = voiceSession({ ...f.d, stop: async () => { if (broken) throw new Error('stop failed'); return f.d.stop(); } });
+  let p = s.start(); f.allow(); await f.flush(); f.ready(); await p;
+  f.at(2000); await s.finish(false);
+  assert.equal(f.log.at(-1), 'failed');
+  broken = false;
+  p = s.start(); f.allow(); await f.flush(); f.ready(); await p;
+  f.at(5000); await s.finish(false);
+  assert.equal(f.log.at(-1), 'send file://note.m4a');
+});

@@ -21,10 +21,15 @@ export type Prefs = {
   updateCheck: boolean;
   /** The bot Home puts first and opens to: its id, or empty to use the first one paired. */
   mainBot: string;
+  /** Drawer on phones by default; pinned uses a compact rail on narrow screens. */
+  sidebar: 'auto' | 'drawer' | 'pinned';
+  /** Chat organization is private to this device, keyed by bot and chat. */
+  pinnedChats: string[];
+  archivedChats: string[];
 };
 
 export const DEFAULT_PREFS: Prefs = {
-  theme: 'system', accent: 'iris', layout: 'bubbles', motion: 'system', transparency: 'system', haptics: true, sounds: true, busyMode: 'steer', appLock: false, updateCheck: true, mainBot: '',
+  theme: 'system', accent: 'iris', layout: 'bubbles', motion: 'system', transparency: 'system', haptics: true, sounds: true, busyMode: 'steer', appLock: false, updateCheck: true, mainBot: '', sidebar: 'auto', pinnedChats: [], archivedChats: [],
 };
 
 const KEY = 'winglet.prefs';

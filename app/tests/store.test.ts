@@ -487,3 +487,19 @@ test('something needing you chimes while the app is open', async () => {
   h.event({ type: 'inbox.new', item: { id: 'q1', kind: 'question', title: 'Which one?', body: '', created_at: 1, chat_id: 'general' }, pending: 1 });
   assert.deepEqual(h.played, ['needsYou']);
 });
+
+test('model and thinking controls do not end a working turn, chime or toast as replies', async () => {
+  const h = harness();
+  await h.connect(); await h.hello();
+  h.store.getState().setVisibleChat(undefined);
+  h.event({ type: 'typing', chat_id: 'general', on: true });
+  for (const kind of ['model', 'choice']) {
+    h.event({ type: 'message.new', chat_id: 'general', message: {
+      ...msg(1), id: kind, text: 'Choose a setting', meta: { picker: { kind, status: 'open' } },
+    } });
+  }
+  assert.ok(h.store.getState().runtime.s.typing.general);
+  assert.equal(h.store.getState().runtime.s.lastReplyAt ?? 0, 0);
+  assert.deepEqual(h.played, []);
+  assert.equal(h.store.getState().toasts.length, 0);
+});

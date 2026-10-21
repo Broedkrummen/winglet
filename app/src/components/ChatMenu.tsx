@@ -2,11 +2,13 @@ import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import { exportChat } from '../lib/exportChat';
+import { chatKey, changeChatOrganization } from '../lib/chatOrganization';
+import { usePrefs } from '../lib/prefs';
 import { mutedUntil, usePushPrefs } from '../lib/pushPrefs';
 import { homeChat, useApp } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
 import type { Server } from '../lib/types';
-import { Activity, Bell, BellOff, Download, Images, Pencil, Target, Trash2 } from './icons';
+import { Activity, Archive, ArchiveRestore, Bell, BellOff, Download, Images, Pencil, Pin, PinOff, Target, Trash2 } from './icons';
 import { Sheet, SheetAction } from './Sheet';
 import { Button, Field } from './ui';
 
@@ -23,12 +25,13 @@ const MUTE_OPTIONS: { label: string; seconds: number }[] = [
  * What you can do to a chat, the same from the chat itself and from the list: rename, mute, export, delete,
  * and where it's open its goal and files.
  */
-export function ChatMenu({ server, chatId, title, visible, onClose, onGoal, hasGoal, onFiles, onDeleted }: {
+export function ChatMenu({ server, chatId, title, visible, onClose, onGoal, hasGoal, onFiles, onDeleted, onArchived }: {
   server: Server; chatId: string; title: string; visible: boolean; onClose: () => void;
   /** Only where the chat is open: its goal and its files live in that screen. */
   onGoal?: () => void; hasGoal?: boolean; onFiles?: () => void;
   /** Where to go once the chat is gone: the chat's own screen has nowhere left to show, a list does. */
   onDeleted?: () => void;
+  onArchived?: () => void;
 }) {
   const t = useTheme();
   const s = useStyles();
@@ -37,6 +40,10 @@ export function ChatMenu({ server, chatId, title, visible, onClose, onGoal, hasG
   const deleteChat = useApp((st) => st.deleteChat);
   const features = useApp((st) => st.runtime[server.id]?.info?.features);
   const prefs = usePushPrefs((st) => st.byServer[server.id]);
+  const organization = usePrefs((st) => st.prefs);
+  const key = chatKey(server.id, chatId);
+  const pinned = organization.pinnedChats.includes(key);
+  const archived = organization.archivedChats.includes(key);
   const [mode, setMode] = useState<'menu' | 'rename' | 'delete' | 'mute'>('menu');
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
@@ -44,6 +51,14 @@ export function ChatMenu({ server, chatId, title, visible, onClose, onGoal, hasG
   const until = mutedUntil(prefs, chatId);
   const close = () => { setMode('menu'); onClose(); };
   const rename = async () => { await renameChat(server.id, chatId, name); close(); };
+  const organize = (action: 'pin' | 'unpin' | 'archive' | 'restore' | 'remove') => {
+    usePrefs.getState().update(changeChatOrganization(usePrefs.getState().prefs, key, action));
+    close();
+    if (action === 'archive') {
+      useApp.getState().toast({ serverId: server.id, title: 'Chat archived', body: 'Find it in Chats → Archived on this device.' });
+      onArchived?.();
+    }
+  };
 
   useEffect(() => {
     if (visible && features?.mute) usePushPrefs.getState().load(server);
@@ -64,6 +79,9 @@ export function ChatMenu({ server, chatId, title, visible, onClose, onGoal, hasG
     <Sheet visible={visible} onClose={close} title={mode === 'mute' ? 'Mute notifications' : title}>
       {mode === 'menu' ? (
         <>
+          {side ? <SheetAction icon={archived ? <ArchiveRestore size={20} color={t.colors.text} /> : pinned ? <PinOff size={20} color={t.colors.text} /> : <Pin size={20} color={t.colors.text} />}
+            label={archived ? 'Restore chat' : pinned ? 'Unpin chat' : 'Pin chat'} onPress={() => organize(archived ? 'restore' : pinned ? 'unpin' : 'pin')} /> : null}
+          {side && !archived ? <SheetAction icon={<Archive size={20} color={t.colors.text} />} label="Archive chat" onPress={() => organize('archive')} /> : null}
           {onGoal ? <SheetAction icon={<Target size={20} color={t.colors.text} />} label={hasGoal ? 'Goal' : 'Set a goal'} onPress={() => { close(); onGoal(); }} /> : null}
           {onFiles ? <SheetAction icon={<Images size={20} color={t.colors.text} />} label="Files and photos" onPress={() => { close(); onFiles(); }} /> : null}
           {side ? <SheetAction icon={<Pencil size={20} color={t.colors.text} />} label="Rename" onPress={() => { setName(chat?.title ?? ''); setMode('rename'); }} /> : null}
@@ -101,7 +119,7 @@ export function ChatMenu({ server, chatId, title, visible, onClose, onGoal, hasG
       ) : (
         <View style={{ gap: 14, paddingHorizontal: 4 }}>
           <Text style={s.menuNote}>This removes the chat from Winglet on every device. Hermes keeps its own session history.</Text>
-          <Button title="Delete chat" variant="danger" onPress={async () => { await deleteChat(server.id, chatId); close(); onDeleted?.(); }} />
+          <Button title="Delete chat" variant="danger" onPress={async () => { await deleteChat(server.id, chatId); organize('remove'); onDeleted?.(); }} />
           <Button title="Cancel" variant="secondary" onPress={() => setMode('menu')} />
         </View>
       )}

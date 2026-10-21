@@ -10,6 +10,7 @@ import { WIDE_BREAKPOINT } from '../lib/theme';
 import { makeStyles, useTheme } from '../lib/themeContext';
 import type { InboxItem, Server } from '../lib/types';
 import { AgentFace } from './AgentFace';
+import { NavigationToggle } from './AppNavigation';
 import { CheckCheck } from './icons';
 import { InboxCard } from './InboxCards';
 import { useTabBarSpace } from './TabBar';
@@ -75,7 +76,7 @@ export function InboxView() {
         contentContainerStyle={[s.content, { paddingTop: insets.top + 8, paddingBottom: (width >= WIDE_BREAKPOINT ? 24 : tabSpace) + 8 }]}
         ListHeaderComponent={
           <View style={{ gap: 14, marginBottom: 6 }}>
-            <Text style={s.title} accessibilityRole="header">Inbox</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}><NavigationToggle /><Text style={s.title} accessibilityRole="header">Inbox</Text></View>
             <Segmented
               label="Show"
               value={view}
@@ -134,7 +135,7 @@ function EntryMeta({ server, item }: { server: Server; item: InboxItem }) {
 const useStyles = makeStyles((t) => ({
   root: { flex: 1, backgroundColor: t.colors.bg },
   content: { paddingHorizontal: 16, flexGrow: 1, maxWidth: 760, width: '100%', alignSelf: 'center' },
-  title: { ...t.type.display, color: t.colors.text, marginTop: 52 },
+  title: { ...t.type.display, color: t.colors.text },
   meta: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 2 },
   metaText: { flex: 1, ...t.type.caption, color: t.colors.textSecondary },
   metaBot: { color: t.colors.text, fontFamily: t.fonts.semibold },

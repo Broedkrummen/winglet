@@ -28,6 +28,10 @@ type LivePetProps = {
   onHoldStart?: () => void;
   onHoldEnd?: (cancelled: boolean) => void;
   accessibilityLabel?: string;
+  /** Let a surrounding horizontal pager own swipes instead of leaning the pet. */
+  draggable?: boolean;
+  /** Keep neighboring deck pets mounted, but pause their loops and touch reactions. */
+  active?: boolean;
 };
 
 /**
@@ -35,11 +39,12 @@ type LivePetProps = {
  * thinks, drag it and it leans after your finger. Only Hermes's own animations; a reaction plays once and
  * then the pet goes back to what the agent is really doing.
  */
-export function LivePet({ server, size, glow, bare, status, onTap, onHoldStart, onHoldEnd, accessibilityLabel }: LivePetProps) {
+export function LivePet({ server, size, glow, bare, status, onTap, onHoldStart, onHoldEnd, accessibilityLabel, draggable = true, active = true }: LivePetProps) {
   const reduced = useReducedMotion();
+  const foreground = useApp((st) => st.foreground);
   const pet = useApp((st) => st.runtime[server.id]?.pet);
   const loopMs = pet?.loop_ms ?? 1100;
-  const real = useRealPetState(server);
+  const real = useRealPetState(server, active);
   const color = useAvatarColor(server);
   const [reaction, setReaction] = useState<Reaction>(null);
   const taps = useRef<number[]>([]);
@@ -60,18 +65,18 @@ export function LivePet({ server, size, glow, bare, status, onTap, onHoldStart, 
   useEffect(() => {
     cancelAnimation(float);
     float.value = 0;
-    if (reduced || real !== 'idle') return;
+    if (reduced || !foreground || !active || real !== 'idle') return;
     const ease = Easing.inOut(Easing.sin);
     float.value = withRepeat(withSequence(withTiming(-size * 0.03, { duration: 1500, easing: ease }), withTiming(0, { duration: 1500, easing: ease })), -1);
-  }, [reduced, real, size, float]);
+  }, [reduced, foreground, active, real, size, float]);
 
   // A steady glow while it works; a pulse while it needs you.
   useEffect(() => {
     cancelAnimation(halo);
     halo.value = real === 'run' ? 0.35 : 0;
-    if (reduced || real !== 'waiting') return;
+    if (reduced || !foreground || !active || real !== 'waiting') return;
     halo.value = withRepeat(withSequence(withTiming(1, { duration: 900 }), withTiming(0.2, { duration: 900 })), -1);
-  }, [reduced, real, halo]);
+  }, [reduced, foreground, active, real, halo]);
 
   const poke = () => {
     const next = tapReaction(taps.current, Date.now(), loopMs);
@@ -95,23 +100,23 @@ export function LivePet({ server, size, glow, bare, status, onTap, onHoldStart, 
   };
 
   // A tap that wanders isn't a tap: a short drag never opens anything.
-  const tap = Gesture.Tap().maxDistance(10).runOnJS(true).onEnd((_e, success) => { if (success) poke(); });
+  const tap = Gesture.Tap().enabled(active).maxDistance(10).runOnJS(true).onEnd((_e, success) => { if (success) poke(); });
 
   let gesture;
   if (onHoldStart) {
     // Hold-to-talk follows the finger the whole time, so sliding away can cancel it (a long press would give up
     // after a few pixels, and its end would look like a let-go).
-    const talk = Gesture.Pan().activateAfterLongPress(HOLD_MS).runOnJS(true)
+    const talk = Gesture.Pan().enabled(active).activateAfterLongPress(HOLD_MS).runOnJS(true)
       .onStart(() => { haptic.selection(); onHoldStart(); })
       .onUpdate((e) => leanTo(e.translationX, e.translationY))
       .onEnd((e, success) => { onHoldEnd?.(holdCancelled(success, e.translationX, e.translationY)); })
       .onFinalize(settle);
     gesture = Gesture.Exclusive(talk, tap);
   } else {
-    const hold = Gesture.LongPress().minDuration(HOLD_MS).runOnJS(true)
+    const hold = Gesture.LongPress().enabled(active).minDuration(HOLD_MS).runOnJS(true)
       .onStart(() => { haptic.selection(); setReaction(holdReaction()); })
       .onEnd(() => setReaction(null));
-    const lean = Gesture.Pan().runOnJS(true).minDistance(6)
+    const lean = Gesture.Pan().enabled(active && draggable).runOnJS(true).minDistance(6)
       .onUpdate((e) => leanTo(e.translationX, e.translationY))
       .onFinalize(settle);
     gesture = Gesture.Simultaneous(lean, Gesture.Exclusive(hold, tap));
@@ -131,7 +136,7 @@ export function LivePet({ server, size, glow, bare, status, onTap, onHoldStart, 
   const shown = shownState(real, reaction, Date.now());
   return (
     <GestureDetector gesture={gesture}>
-      <View accessible accessibilityRole="button" accessibilityLabel={accessibilityLabel ?? `${server.bot.title}. Tap to poke`}
+      <View accessible={active} aria-hidden={!active} accessibilityRole={active ? 'button' : undefined} accessibilityLabel={active ? accessibilityLabel ?? `${server.bot.title}. Tap to poke` : undefined}
         // Screen readers activate with a double tap, which never reaches the gesture handler.
         accessibilityActions={[{ name: 'activate' }]} onAccessibilityAction={(e) => { if (e.nativeEvent.actionName === 'activate') poke(); }}
         style={{ alignItems: 'center', justifyContent: 'center' }}>
@@ -140,7 +145,7 @@ export function LivePet({ server, size, glow, bare, status, onTap, onHoldStart, 
         }, haloStyle]} />
         <Animated.View style={body}>
           <AgentFace server={server} size={size} glow={glow} bare={bare} status={status} animated
-            petState={pet ? shown : undefined} mood={!pet && reaction ? 'happy' : undefined} />
+            motionPaused={!active} petState={pet ? shown : undefined} mood={!pet && reaction ? 'happy' : undefined} />
         </Animated.View>
       </View>
     </GestureDetector>

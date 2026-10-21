@@ -2,7 +2,7 @@ import { router } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Text, View } from 'react-native';
 import { Check } from '../components/icons';
-import { shortModel } from '../components/PickerCard';
+import { modelName } from '../lib/modelOptions';
 import { Screen } from '../components/Screen';
 import { Sheet } from '../components/Sheet';
 import { Button, Card, ListGroup, ListRow, LoadError, SearchField, SectionHeader, Skeleton } from '../components/ui';
@@ -14,7 +14,7 @@ import { makeStyles, useTheme } from '../lib/themeContext';
 type Options = { model: string; provider: string; providers: { slug: string; name: string; models: string[] }[] };
 type Result = { ok: boolean; confirm_required?: boolean; confirm_message?: string; model?: string; provider?: string };
 
-/** The model new chats start with. A chat can still switch on its own from the model button beside the message box. */
+/** The model new chats start with. A chat can still switch on its own from its composer. */
 export default function ModelScreen() {
   const t = useTheme();
   const s = useStyles();
@@ -56,16 +56,16 @@ export default function ModelScreen() {
 
   const q = query.trim().toLowerCase();
   const providers = useMemo(() => (options?.providers ?? []).map((p) => ({
-    ...p, models: q ? p.models.filter((m) => m.toLowerCase().includes(q) || p.name.toLowerCase().includes(q)) : p.models,
+    ...p, models: q ? p.models.filter((m) => `${m} ${modelName(m)} ${p.name}`.toLowerCase().includes(q)) : p.models,
   })).filter((p) => p.models.length), [options, q]);
 
   return (
-    <Screen title="Default model" subtitle="New chats start with this model. Each chat can switch on its own from the model button beside the message box."
+    <Screen title="Default model" subtitle="New chats start with this model. To change one conversation, tap the model name in its message box."
       onRefresh={load}>
       {options ? (
         <Card style={s.current}>
           <Text style={s.label}>Now</Text>
-          <Text style={s.currentModel}>{shortModel(options.model) || 'Not set'}</Text>
+          <Text style={s.currentModel}>{modelName(options.model) || 'Not set'}</Text>
           <Text style={s.note}>{options.providers.find((p) => p.slug === options.provider)?.name ?? options.provider}</Text>
         </Card>
       ) : null}
@@ -86,7 +86,7 @@ export default function ModelScreen() {
               const current = m === options.model && p.slug === options.provider;
               const key = `${p.slug}/${m}`;
               return (
-                <ListRow key={key} title={shortModel(m)} subtitle={m !== shortModel(m) ? m : undefined} chevron={false}
+                <ListRow key={key} title={modelName(m)} subtitle={m} chevron={false}
                   right={busy === key ? <ActivityIndicator color={t.colors.accent} /> : current ? <Check size={18} color={t.colors.accent} /> : undefined}
                   onPress={current || busy ? undefined : () => set(p.slug, m)} />
               );
@@ -100,7 +100,7 @@ export default function ModelScreen() {
       <Sheet visible={!!confirm} onClose={() => setConfirm(null)} title="Use an expensive model?">
         <View style={{ gap: 14, paddingHorizontal: 4 }}>
           <Text style={s.sheetText}>{confirm?.message}</Text>
-          <Button title={`Use ${shortModel(confirm?.model ?? '')}`} variant="danger" loading={!!busy}
+          <Button title={`Use ${modelName(confirm?.model ?? '')}`} variant="danger" loading={!!busy}
             onPress={() => confirm && set(confirm.provider, confirm.model, true)} />
           <Button title="Cancel" variant="secondary" onPress={() => setConfirm(null)} />
         </View>

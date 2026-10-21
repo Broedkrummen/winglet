@@ -1,5 +1,7 @@
 // Per-icon imports keep the web bundle small (the package index pulls in every icon).
 export { default as Activity } from 'lucide-react-native/icons/activity';
+export { default as Archive } from 'lucide-react-native/icons/archive';
+export { default as ArchiveRestore } from 'lucide-react-native/icons/archive-restore';
 export { default as ArrowDown } from 'lucide-react-native/icons/arrow-down';
 export { default as ArrowRight } from 'lucide-react-native/icons/arrow-right';
 export { default as ArrowUp } from 'lucide-react-native/icons/arrow-up';
@@ -63,12 +65,14 @@ export { default as Moon } from 'lucide-react-native/icons/moon';
 export { default as MoreHorizontal } from 'lucide-react-native/icons/ellipsis';
 export { default as NotebookPen } from 'lucide-react-native/icons/notebook-pen';
 export { default as Palette } from 'lucide-react-native/icons/palette';
+export { default as PanelLeft } from 'lucide-react-native/icons/panel-left';
 export { default as Pause } from 'lucide-react-native/icons/pause';
 export { default as Pencil } from 'lucide-react-native/icons/pencil';
 export { default as Play } from 'lucide-react-native/icons/play';
 export { default as Plug } from 'lucide-react-native/icons/plug';
 export { default as PawPrint } from 'lucide-react-native/icons/paw-print';
 export { default as Pin } from 'lucide-react-native/icons/pin';
+export { default as PinOff } from 'lucide-react-native/icons/pin-off';
 export { default as Plus } from 'lucide-react-native/icons/plus';
 export { default as Power } from 'lucide-react-native/icons/power';
 export { default as QrCode } from 'lucide-react-native/icons/qr-code';

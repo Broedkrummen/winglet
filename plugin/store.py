@@ -378,7 +378,11 @@ class Store:
                 self._db.rollback()
                 raise
 
-    def _touch_chat(self, chat_id: str, preview: str) -> None:
+    def _touch_chat(self, chat_id: str, preview: str, meta: Optional[Dict[str, Any]] = None) -> None:
+        # Model/thinking controls are recorded for sync, but opening settings is not conversation activity.
+        meta = meta or {}
+        if meta.get("hidden") or (meta.get("picker") or {}).get("kind") in ("model", "choice"):
+            return
         self._exec("UPDATE chats SET updated_at = ?, preview = ? WHERE id = ?", (_now(), preview_of(preview), chat_id))
 
     # -- messages ----------------------------------------------------------------
@@ -390,7 +394,7 @@ class Store:
         self._exec("INSERT INTO messages (id, chat_id, role, text, status, meta, created_at, updated_at) "
                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                    (message_id, chat_id, role, text, status, json.dumps(meta or {}), now, now))
-        self._touch_chat(chat_id, text)
+        self._touch_chat(chat_id, text, meta)
         return self.get_message(message_id)
 
     def update_message(self, message_id: str, text: str, *, status: Optional[str] = None,
@@ -406,7 +410,7 @@ class Store:
                        (text, status, json.dumps(meta), now, message_id))
             # The chat's preview and order follow a reply once it's done, not on each streamed edit.
             if status != "streaming":
-                self._touch_chat(current["chat_id"], text)
+                self._touch_chat(current["chat_id"], text, meta)
             return {**current, "text": text, "status": status, "meta": json.loads(json.dumps(meta)), "updated_at": now}
 
     def delete_message(self, message_id: str) -> Optional[Dict[str, Any]]:

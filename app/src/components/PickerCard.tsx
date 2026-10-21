@@ -1,12 +1,14 @@
-import { useMemo, useState } from 'react';
-import { ActivityIndicator, Text, TextInput, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Pressable, Text, TextInput, View } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { api, ApiError } from '../lib/api';
 import { haptic } from '../lib/haptics';
+import { isCurrentModel, modelName, modelProviders, shortModel } from '../lib/modelOptions';
+import { useReducedMotion } from '../lib/motion';
 import { isOwner, useApp } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
 import type { Message, Picker, Server } from '../lib/types';
-import { Check, Clock, Cpu, Search, ShieldQuestion, SlidersHorizontal } from './icons';
+import { Check, ChevronDown, Clock, Cpu, Search, ShieldQuestion, SlidersHorizontal, X } from './icons';
 import { Markdown } from './Markdown';
 import { Button, Chip } from './ui';
 
@@ -14,36 +16,55 @@ const SHOWN_PER_PROVIDER = 8;
 
 /** The short name of a model id: "anthropic/claude-sonnet-4" → "claude-sonnet-4", and Bedrock's
  * "us.anthropic.claude-sonnet-4" → "claude-sonnet-4". */
-export const shortModel = (id: string) => (id.split('/').pop() || id)
-  .replace(/^(us|eu|apac|global)\./, '')
-  .replace(/^(anthropic|openai|meta|amazon|mistral|cohere|ai21|deepseek|qwen|writer)\./, '');
+export { shortModel } from '../lib/modelOptions';
 
 /**
  * Hermes asks a question with fixed answers (/model, /reasoning, /fast, a command to confirm): tap
  * one and Hermes applies it. The card then shows what was chosen and Hermes's reply.
  */
-export function PickerCard({ server, message }: { server: Server; message: Message }) {
+export function PickerCard({ server, message, presentation = 'card', onChosen }: {
+  server: Server; message: Message; presentation?: 'card' | 'sheet'; onChosen?: () => void;
+}) {
   const t = useTheme();
   const s = useStyles();
-  const picker = message.meta.picker as Picker;
+  const reduced = useReducedMotion();
+  const [answer, setAnswer] = useState<Message | null>(null);
+  const shown = answer?.id === message.id && answer.updated_at >= message.updated_at ? answer : message;
+  const picker = shown.meta.picker as Picker;
+  const sheet = presentation === 'sheet';
   const owner = useApp((st) => isOwner(st.runtime[server.id]));
   const [busy, setBusy] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [details, setDetails] = useState(false);
+  const pending = useRef(false);
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (picker.status !== 'open') return;
+    const id = setTimeout(() => tick((n) => n + 1), Math.max(0, picker.expires_at * 1000 - Date.now()) + 20);
+    return () => clearTimeout(id);
+  }, [picker.status, picker.expires_at]);
   const open = picker.status === 'open' && picker.expires_at * 1000 > Date.now();
 
   const choose = async (key: string, body: Record<string, string>) => {
+    if (pending.current || picker.status !== 'open' || picker.expires_at * 1000 <= Date.now() || !owner) return;
+    pending.current = true;
+    let accepted = false;
     setBusy(key);
     haptic.selection();
     try {
-      await api(server, `/api/pickers/${picker.id}/select`, { method: 'POST', body: JSON.stringify({ ...body, message_id: message.id }) });
+      const result = await api<{ message: Message }>(server, `/api/pickers/${picker.id}/select`, { method: 'POST', body: JSON.stringify({ ...body, message_id: message.id }) });
+      if (result.message) setAnswer(result.message);
+      accepted = true;
       haptic.success();
+      onChosen?.();
     } catch (e) {
       haptic.error();
       const expired = e instanceof ApiError && e.status === 410;
       useApp.getState().toast({ serverId: server.id, title: expired ? 'Too late' : "Couldn't choose",
         body: expired ? 'That choice expired. Run the command again.' : (e as Error).message });
     } finally {
+      pending.current = accepted; // a successful card can only be answered once, even before React commits
       setBusy(null);
     }
   };
@@ -52,14 +73,12 @@ export function PickerCard({ server, message }: { server: Server; message: Messa
     : picker.kind === 'confirm' ? <ShieldQuestion size={18} color={t.colors.warning} /> : <SlidersHorizontal size={18} color={t.colors.onAccentSoft} />;
 
   const q = query.trim().toLowerCase();
-  const providers = useMemo(() => (picker.providers ?? []).map((p) => ({
-    ...p, models: q ? p.models.filter((m) => m.toLowerCase().includes(q) || p.name.toLowerCase().includes(q)) : p.models,
-  })).filter((p) => p.models.length), [picker.providers, q]);
+  const providers = useMemo(() => modelProviders(picker, q), [picker.providers, picker.current_model, picker.current_provider, q]);
   const total = (picker.providers ?? []).reduce((n, p) => n + p.models.length, 0);
 
   return (
-    <Animated.View entering={FadeIn.duration(180)} style={[s.card, open && picker.kind === 'confirm' && { borderColor: t.colors.warning }]}>
-      <View style={s.head}>
+    <Animated.View entering={reduced ? undefined : FadeIn.duration(180)} style={[s.card, sheet && s.sheetCard, open && picker.kind === 'confirm' && { borderColor: t.colors.warning }]}>
+      {sheet ? null : <View style={s.head}>
         <View style={[s.icon, { backgroundColor: picker.kind === 'confirm' ? t.colors.warningSoft : t.colors.accentSoft }]}>{icon}</View>
         <View style={{ flex: 1, minWidth: 0 }}>
           <Text style={s.title}>{picker.kind === 'model' ? 'Model for this chat' : picker.kind === 'confirm' ? 'Confirm' : 'Choose a setting'}</Text>
@@ -67,9 +86,9 @@ export function PickerCard({ server, message }: { server: Server; message: Messa
             <Text style={s.sub}>Now: {shortModel(picker.current_model)}{picker.current_label ? ` · ${picker.current_label}` : ''}</Text>
           ) : null}
         </View>
-      </View>
+      </View>}
       {/* Hermes's own wording (it uses Markdown) for settings and confirmations, while they're open. */}
-      {open && picker.kind !== 'model' ? <Markdown text={message.text} /> : null}
+      {open && picker.kind !== 'model' && (!sheet || picker.kind === 'confirm' || details) ? <Markdown text={shown.text} /> : null}
 
       {picker.status === 'done' ? (
         <View style={{ gap: 8 }}>
@@ -77,42 +96,59 @@ export function PickerCard({ server, message }: { server: Server; message: Messa
             <Check size={14} color={t.colors.success} />
             <Text style={s.chosenText}>{picker.selected}{picker.by ? ` · ${picker.by}` : ''}</Text>
           </View>
-          <Markdown text={message.text} />
+          <Markdown text={shown.text} />
         </View>
       ) : !open ? (
         <View style={s.chosen}>
           <Clock size={14} color={t.colors.textSecondary} />
-          <Text style={[s.chosenText, { color: t.colors.textSecondary }]}>This expired. Run the command again for a new one.</Text>
+          <Text style={[s.chosenText, { color: t.colors.textSecondary }]}>This choice expired. {sheet ? 'Close and reopen to refresh the options.' : 'Run the command again for a new one.'}</Text>
         </View>
       ) : !owner ? (
         <Text style={s.sub}>Only an owner can choose here.</Text>
       ) : picker.kind === 'model' ? (
-        <View style={{ gap: 12 }}>
-          {total > 12 ? (
+        <View style={{ gap: sheet ? 8 : 12 }}>
+          {total > (sheet ? 6 : 12) ? (
             <View style={s.search}>
               <Search size={16} color={t.colors.textTertiary} />
               <TextInput value={query} onChangeText={setQuery} placeholder="Find a model" placeholderTextColor={t.colors.textTertiary}
-                style={s.searchInput} autoCapitalize="none" autoCorrect={false} accessibilityLabel="Find a model" />
+                style={s.searchInput} autoCapitalize="none" autoCorrect={false} accessibilityLabel="Find a model" returnKeyType="search" />
+              {query ? <Pressable onPress={() => setQuery('')} accessibilityRole="button" accessibilityLabel="Clear model search" hitSlop={8} style={s.clear}><X size={16} color={t.colors.textSecondary} /></Pressable> : null}
             </View>
           ) : null}
           {providers.map((p) => {
             const all = expanded[p.slug] || !!q;
-            const models = all ? p.models : p.models.slice(0, SHOWN_PER_PROVIDER);
+            const limit = sheet ? 4 : SHOWN_PER_PROVIDER;
+            const models = all ? p.models : p.models.slice(0, limit);
+            const names = new Map<string, number>();
+            for (const id of p.models) { const name = modelName(id); names.set(name, (names.get(name) ?? 0) + 1); }
             return (
-              <View key={p.slug} style={{ gap: 8 }}>
+              <View key={p.slug} style={{ gap: sheet ? 4 : 8 }}>
                 <Text style={s.provider}>{p.name}</Text>
-                <View style={s.chips}>
+                <View style={sheet ? s.modelRows : s.chips} accessibilityRole={sheet ? 'radiogroup' : undefined}>
                   {models.map((m) => {
-                    const current = m === picker.current_model && p.slug === picker.current_provider;
+                    const current = isCurrentModel(picker, p.slug, m);
                     const key = `${p.slug}/${m}`;
+                    const name = modelName(m);
+                    const showId = !!q || (names.get(name) ?? 0) > 1;
                     return (
-                      <Chip key={key} label={shortModel(m)} selected={current} accessibilityLabel={`${m} from ${p.name}${current ? ', current' : ''}`}
+                      sheet ? <Pressable key={key} accessibilityRole="radio" accessibilityState={{ checked: current, disabled: !!busy, busy: busy === key }}
+                        accessibilityLabel={`${name}, ${m}, ${p.name}${current ? ', current model' : ''}`} disabled={!!busy}
+                        onPress={() => choose(key, { provider: p.slug, model: m })}
+                        style={({ pressed }) => [s.modelRow, current && s.currentRow, pressed && { backgroundColor: t.colors.pressed }, !!busy && busy !== key && { opacity: 0.5 }]}>
+                        <View style={s.modelText}>
+                          <Text style={s.modelName}>{name}</Text>
+                          {showId ? <Text style={s.modelId} numberOfLines={1}>{m}</Text> : null}
+                        </View>
+                        {busy === key ? <ActivityIndicator color={t.colors.accent} /> : <View style={[s.radio, current && s.radioOn]}>{current ? <Check size={13} color={t.colors.onAccent} strokeWidth={3} /> : null}</View>}
+                      </Pressable> : <Chip key={key} label={shortModel(m)} selected={current} accessibilityLabel={`${m} from ${p.name}${current ? ', current' : ''}`}
                         icon={busy === key ? <ActivityIndicator size="small" color={t.colors.accent} /> : current ? <Check size={14} color={t.colors.onAccentSoft} /> : undefined}
                         onPress={() => !busy && choose(key, { provider: p.slug, model: m })} />
                     );
                   })}
-                  {!all && p.models.length > SHOWN_PER_PROVIDER ? (
-                    <Chip label={`+${p.models.length - SHOWN_PER_PROVIDER} more`} onPress={() => setExpanded((e) => ({ ...e, [p.slug]: true }))} />
+                  {!all && p.models.length > limit ? (
+                    sheet ? <Pressable accessibilityRole="button" accessibilityLabel={`Show all ${p.models.length} models from ${p.name}`} onPress={() => setExpanded((e) => ({ ...e, [p.slug]: true }))} style={s.more}>
+                      <Text style={s.moreText}>Show {p.models.length - limit} more models</Text><ChevronDown size={16} color={t.colors.accent} />
+                    </Pressable> : <Chip label={`+${p.models.length - limit} more`} onPress={() => setExpanded((e) => ({ ...e, [p.slug]: true }))} />
                   ) : null}
                 </View>
               </View>
@@ -131,12 +167,20 @@ export function PickerCard({ server, message }: { server: Server; message: Messa
           </View>
         </View>
       ) : (
-        <View style={s.chips}>
+        <View style={sheet ? s.modelRows : s.chips}>
           {(picker.choices ?? []).map((c) => (
-            <Chip key={c.value} label={c.label} selected={c.current}
+            sheet ? <Pressable key={c.value} accessibilityRole="button" accessibilityState={{ selected: !!c.current, disabled: !!busy, busy: busy === c.value }}
+              disabled={!!busy} accessibilityLabel={`${c.label}${c.current ? ', current' : ''}`} onPress={() => choose(c.value, { value: c.value })}
+              style={({ pressed }) => [s.settingRow, c.current && s.currentRow, pressed && { backgroundColor: t.colors.pressed }]}>
+              <Text style={[s.modelName, { flex: 1 }]}>{c.label}</Text>
+              {busy === c.value ? <ActivityIndicator color={t.colors.accent} /> : c.current ? <Check size={20} color={t.colors.accent} /> : null}
+            </Pressable> : <Chip key={c.value} label={c.label} selected={c.current}
               icon={busy === c.value ? <ActivityIndicator size="small" color={t.colors.accent} /> : c.current ? <Check size={14} color={t.colors.onAccentSoft} /> : undefined}
               onPress={() => !busy && choose(c.value, { value: c.value })} />
           ))}
+          {sheet ? <Pressable accessibilityRole="button" accessibilityState={{ expanded: details }} onPress={() => setDetails((value) => !value)} style={s.more}>
+            <Text style={s.moreText}>{details ? 'Hide server details' : 'Details from your agent'}</Text><ChevronDown size={16} color={t.colors.accent} />
+          </Pressable> : null}
         </View>
       )}
     </Animated.View>
@@ -144,6 +188,19 @@ export function PickerCard({ server, message }: { server: Server; message: Messa
 }
 
 const useStyles = makeStyles((t) => ({
+  sheetCard: { padding: 0, borderWidth: 0, backgroundColor: 'transparent', maxWidth: undefined, marginTop: 0 },
+  modelRows: { gap: 2 },
+  settingRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, paddingVertical: 8, minHeight: 44, borderRadius: t.radius.sm },
+  modelRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, paddingVertical: 8, minHeight: 44, borderRadius: t.radius.sm },
+  currentRow: { backgroundColor: t.colors.accentSoft },
+  modelText: { flex: 1, minWidth: 0, gap: 1 },
+  modelName: { ...t.type.callout, fontFamily: t.fonts.medium, color: t.colors.text },
+  modelId: { ...t.type.caption, fontSize: 11.5, color: t.colors.textSecondary },
+  radio: { width: 22, height: 22, borderRadius: 11, borderWidth: 1.5, borderColor: t.colors.borderStrong, alignItems: 'center', justifyContent: 'center' },
+  radioOn: { backgroundColor: t.colors.accentFill, borderColor: t.colors.accentFill },
+  more: { minHeight: 44, paddingHorizontal: 12, flexDirection: 'row', gap: 6, alignItems: 'center' },
+  moreText: { ...t.type.callout, fontFamily: t.fonts.medium, color: t.colors.accent },
+  clear: { width: 28, height: 32, alignItems: 'center', justifyContent: 'center' },
   card: {
     gap: 12, padding: 14, borderRadius: t.radius.lg, backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border,
     marginTop: 4, maxWidth: 560,

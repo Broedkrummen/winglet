@@ -9,11 +9,12 @@ import { AgentFace } from '../../components/AgentFace';
 import { ManageBot } from '../../components/ManageBot';
 import { VerifyNotice } from '../../components/VerifyPhone';
 import { BotSwitcher } from '../../components/BotSwitcher';
+import { NavigationToggle } from '../../components/AppNavigation';
 import {
   Activity, BarChart, Bell, Brain, CalendarClock, Cpu, Fingerprint, HeartPulse, Info, Key, MessageCircle, MessageSquareText, Palette, PawPrint, Plug, Plus, ScrollText,
   ShieldCheck, Smartphone, Sparkles, SquareTerminal, Star, UserRoundPen,
 } from '../../components/icons';
-import { shortModel } from '../../components/PickerCard';
+import { modelName } from '../../lib/modelOptions';
 import { api } from '../../lib/api';
 import { useTabBarSpace } from '../../components/TabBar';
 import { ListGroup, ListRow, SectionHeader, Toggle } from '../../components/ui';
@@ -54,7 +55,7 @@ export default function AgentTab() {
   return (
     <View style={s.root}>
       <ScrollView contentContainerStyle={[s.content, { paddingTop: insets.top + 8, paddingBottom: (wide ? 24 : tabSpace) + 8 }]}>
-        <View style={s.topRow}>{wide ? null : <BotSwitcher />}</View>
+        <View style={s.topRow}><NavigationToggle /><View style={{ flex: 1 }} /><BotSwitcher /></View>
         <View style={s.profile}>
           <AgentFace server={server} size={88} animated glow />
           <Text style={s.name} accessibilityRole="header">{server.bot.title}</Text>
@@ -176,7 +177,7 @@ function BrainRows({ server, rt }: { server: Server; rt?: ServerState }) {
   return (
     <ListGroup>
       <ListRow icon={<Cpu size={18} color={t.colors.onAccentSoft} />} title="Default model"
-        value={info?.configured.model ? shortModel(info.configured.model) : undefined} onPress={() => router.push('/model')} />
+        value={info?.configured.model ? modelName(info.configured.model) : undefined} onPress={() => router.push('/model')} />
       <ListRow icon={<Key size={18} color={t.colors.onAccentSoft} />} title="Providers" onPress={() => router.push('/providers')} />
       <ListRow icon={<UserRoundPen size={18} color={t.colors.onAccentSoft} />} title="Persona" subtitle="Who it is and how it talks" onPress={() => router.push('/persona')} />
       {rt?.info?.features?.pets ? (

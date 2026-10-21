@@ -10,6 +10,7 @@ import { AppState, Platform, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { UpdatePrompt } from '../components/AppUpdate';
+import { AppNavigation } from '../components/AppNavigation';
 import { LockScreen } from '../components/LockScreen';
 import { ShareListener } from '../components/ShareListener';
 import { Toasts } from '../components/Toasts';
@@ -100,6 +101,7 @@ function Navigator() {
   const t = useTheme();
   return (
     <SafeAreaProvider style={{ backgroundColor: t.colors.bg }}>
+      <AppNavigation>
       <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: t.colors.bg }, animation: 'slide_from_right' }}>
         {/* Under an open chat or screen, the tabs don't re-render; they catch up when you come back. */}
         <Stack.Screen name="(tabs)" options={{ animation: 'fade', freezeOnBlur: true }} />
@@ -110,6 +112,7 @@ function Navigator() {
       <Toasts />
       <UpdatePrompt />
       <VerifySheet />
+      </AppNavigation>
       <LockScreen />
     </SafeAreaProvider>
   );

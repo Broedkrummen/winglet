@@ -18,6 +18,8 @@ type Props = {
   glow?: boolean;
   /** Whether the orb moves. A pet moves too, unless `still` (or motion is reduced). */
   animated?: boolean;
+  /** Pause a mounted hero without switching between live and still component trees. */
+  motionPaused?: boolean;
   /** Hold a pet on its first frame: for avatars in lists, where dozens of moving pets would only distract. */
   still?: boolean;
   /** Show this instead of what the agent is doing (the typing row is always working). */
@@ -78,20 +80,20 @@ export function useRealPetState(server: Server, on = true): PetState {
   return petState({ replied, waiting: live === 'waiting', working: live === 'working' });
 }
 
-function Face({ server, size, glow, bare, animated = false, still, mood, petState: forced, status, shape = 'circle', style, online, live }: Props & { online: boolean; live: Mood }) {
+function Face({ server, size, glow, bare, animated = false, motionPaused, still, mood, petState: forced, status, shape = 'circle', style, online, live }: Props & { online: boolean; live: Mood }) {
   const t = useTheme();
   const pet = useApp((st) => st.runtime[server.id]?.pet);
   const real = useRealPetState(server, !!pet && !still && !mood && !forced);
 
   if (!pet) {
-    return <BotAvatar name={server.bot.name} size={size} mood={mood ?? live} animated={animated} glow={glow} status={status} shape={shape} style={style} />;
+    return <BotAvatar name={server.bot.name} size={size} mood={mood ?? live} animated={animated && !motionPaused} glow={glow} status={status} shape={shape} style={style} />;
   }
 
   const color = avatarColor(BOT_COLORS, server.bot.name, pet);
   const tones = petTones(pet, t.scheme);
   const state = forced ?? (mood ? MOOD_STATE[mood] : still ? 'idle' : real);
   const sprite = (height: number) => (
-    <PetSprite sheet={pet} uri={mediaUrl(server, pet.sheet_url)} height={height} state={state} still={!online || still} />
+    <PetSprite sheet={pet} uri={mediaUrl(server, pet.sheet_url)} height={height} state={state} still={!online || still || motionPaused} />
   );
   const dot = status ? { online: t.colors.success, busy: t.colors.warning, connecting: t.colors.warning, offline: t.colors.textTertiary }[status] : null;
   const dotSize = Math.max(10, size * 0.3);

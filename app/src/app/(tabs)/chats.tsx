@@ -1,22 +1,24 @@
 import { Redirect, router } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
-import { Platform, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import { Platform, ScrollView, Text, TextInput, View } from 'react-native';
 import Animated, { FadeIn, LinearTransition } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AgentFace } from '../../components/AgentFace';
-import { BotSwitcher } from '../../components/BotSwitcher';
+import { NavigationToggle, useContentWidth } from '../../components/AppNavigation';
 import { ChatView } from '../../components/ChatView';
 import { ChatMenu } from '../../components/ChatMenu';
 import { ConnectionBanner } from '../../components/ConnectionBanner';
-import { Hash, MessageSquarePlus, Search, Sparkles, X } from '../../components/icons';
+import { Archive, Hash, MessageSquarePlus, MoreHorizontal, Pin, Search, Sparkles, X } from '../../components/icons';
 import { useTabBarSpace } from '../../components/TabBar';
 import { Button, IconButton, SectionHeader, Skeleton, Tap } from '../../components/ui';
 import { ago } from '../../lib/agent';
 import { api } from '../../lib/api';
 import { startNewChat } from '../../lib/actions';
 import { requestFocus } from '../../lib/focus';
+import { organizeChats } from '../../lib/chatOrganization';
+import { usePrefs } from '../../lib/prefs';
 import { plainText } from '../../lib/text';
-import { homeChat, isTyping, useApp } from '../../lib/store';
+import { homeChat, isTyping, useApp, useServerState } from '../../lib/store';
 import { WIDE_BREAKPOINT } from '../../lib/theme';
 import { makeStyles, useTheme } from '../../lib/themeContext';
 import type { Chat, SearchResult, Server } from '../../lib/types';
@@ -26,7 +28,7 @@ import { easeOut } from '../../lib/motion';
 export default function ChatsTab() {
   const servers = useApp((s) => s.servers);
   const selection = useApp((s) => s.selection);
-  const { width } = useWindowDimensions();
+  const width = useContentWidth();
   const s = useStyles();
   if (!servers.length) return <Redirect href="/pair" />;
   const server = servers.find((x) => x.id === selection.serverId) ?? servers[0];
@@ -45,44 +47,73 @@ function ChatList({ server, activeChatId }: { server: Server; activeChatId?: str
   const s = useStyles();
   const insets = useSafeAreaInsets();
   const tabSpace = useTabBarSpace();
-  const { width } = useWindowDimensions();
+  const width = useContentWidth();
   const wide = width >= WIDE_BREAKPOINT;
-  const rt = useApp((st) => st.runtime[server.id]);
+  const rt = useServerState(server.id);
   const select = useApp((st) => st.select);
   const [query, setQuery] = useState('');
   const [menu, setMenu] = useState<Chat | null>(null);
+  const [archived, setArchived] = useState(false);
+  const pinnedChats = usePrefs((st) => st.prefs.pinnedChats);
+  const archivedChats = usePrefs((st) => st.prefs.archivedChats);
 
   const q = query.trim().toLowerCase();
   const match = (c: Chat) => !q || c.title.toLowerCase().includes(q) || c.preview.toLowerCase().includes(q);
-  const side = useMemo(() => Object.values(rt?.chats ?? {})
-    .filter((c) => c.kind === 'chat' && c.id !== homeChat(rt)).sort((a, b) => b.updated_at - a.updated_at), [rt]);
   const mainId = homeChat(rt);
+  const groups = useMemo(() => organizeChats(Object.values(rt?.chats ?? {}), server.id, mainId, pinnedChats, archivedChats), [rt?.chats, server.id, mainId, pinnedChats, archivedChats]);
+  const side = archived ? groups.archived : [...groups.pinned, ...groups.recent];
   const general = rt?.chats[mainId];
+  const recents = useMemo(() => [...groups.recent, ...(general ? [general] : [])].sort((a, b) => b.updated_at - a.updated_at), [groups.recent, general]);
+  const resume = recents[0];
   const updates = rt?.chats.home;
   const loading = !rt || (rt.status !== 'online' && !Object.keys(rt.chats).length);
   const found = useMessageSearch(server, rt?.info?.features?.search ? query : '');
+  const scopedIds = new Set(side.map((c) => c.id));
+  const results = found.results.filter((r) => scopedIds.has(r.chat.id) || (!archived && (r.chat.id === mainId || r.chat.id === 'home')));
+  useEffect(() => { setMenu(null); setQuery(''); setArchived(false); }, [server.id]);
 
   const open = (id: string) => {
     if (wide) select(server.id, id);
     else router.push(`/chat/${server.id}/${id}`);
   };
   const newChat = () => startNewChat(server.id, open);
+  const row = (c: Chat, pinned = false) => (
+    <Animated.View key={c.id} entering={FadeIn.duration(200)} layout={LinearTransition.duration(220).easing(easeOut)}>
+      <ChatRow icon={c.id === mainId ? <AgentFace server={server} size={32} still /> : pinned ? <Pin size={17} color={t.colors.onAccentSoft} /> : archived ? <Archive size={17} color={t.colors.textSecondary} /> : <Hash size={17} color={t.colors.onAccentSoft} />}
+        tint={c.id === mainId ? 'transparent' : archived ? t.colors.surfaceSunken : t.colors.accentSoft} title={c.id === mainId ? 'Main chat' : c.title}
+        subtitle={isTyping(rt, c.id) ? 'Working…' : plainText(c.preview)} time={c.updated_at} working={isTyping(rt, c.id)}
+        active={activeChatId === c.id} onPress={() => open(c.id)} onMenu={() => setMenu(c)} />
+    </Animated.View>
+  );
 
   return (
     <View style={s.root}>
       <ScrollView contentContainerStyle={{ paddingTop: insets.top + 8, paddingBottom: wide ? 24 : tabSpace + 8, paddingHorizontal: 16 }} keyboardShouldPersistTaps="handled">
         <View style={s.topRow}>
-          {wide ? <View /> : <BotSwitcher />}
+          <NavigationToggle />
           <IconButton label="New chat" variant="filled" onPress={newChat}><MessageSquarePlus size={20} color={t.colors.text} /></IconButton>
         </View>
         <Text style={s.title} accessibilityRole="header">Chats</Text>
         <View style={s.search}>
           <Search size={18} color={t.colors.textTertiary} />
-          <TextInput value={query} onChangeText={setQuery} placeholder={rt?.info?.features?.search ? 'Search chats and messages' : 'Search chats'} placeholderTextColor={t.colors.textTertiary}
+          <TextInput value={query} onChangeText={setQuery} placeholder="Search" placeholderTextColor={t.colors.textTertiary}
             style={s.searchInput} accessibilityLabel="Search chats" returnKeyType="search" />
           {query ? <IconButton label="Clear search" size={32} onPress={() => setQuery('')}><X size={16} color={t.colors.textSecondary} /></IconButton> : null}
         </View>
         <ConnectionBanner server={server} compact />
+        <View style={s.filters} accessibilityRole="tablist">
+          {([{ value: false, label: 'All chats' }, { value: true, label: `Archived${groups.archived.length ? ` · ${groups.archived.length}` : ''}` }]).map((filter) => (
+            <Tap key={filter.label} feedback="selection" accessibilityRole="tab" accessibilityState={{ selected: archived === filter.value }}
+              onPress={() => setArchived(filter.value)} style={[s.filter, archived === filter.value && s.filterOn]}>
+              <Text style={[s.filterText, archived === filter.value && { color: t.colors.onAccentSoft }]}>{filter.label}</Text>
+            </Tap>
+          ))}
+          <View style={{ flex: 1 }} />
+          {updates ? <Tap accessibilityLabel="Open updates" onPress={() => open('home')} feedback="selection" style={s.updates}>
+            <Sparkles size={16} color={t.colors.textSecondary} /><Text style={s.updateLabel} numberOfLines={1}>Updates</Text>
+          </Tap> : null}
+        </View>
+        {archived ? <Text style={[s.emptyText, { textAlign: 'left', marginBottom: 8 }]}>On this device</Text> : null}
 
         {loading ? (
           <View style={{ gap: 12, marginTop: 16 }}>
@@ -90,48 +121,27 @@ function ChatList({ server, activeChatId }: { server: Server; activeChatId?: str
           </View>
         ) : (
           <>
-            {general && match(general) ? (
-              <Tap feedback="selection" scaleTo={0.98} accessibilityLabel={`Main chat. ${plainText(general.preview)}`} onPress={() => open(mainId)}
-                style={({ hovered }) => [s.main, activeChatId === mainId && s.active, hovered && { borderColor: t.colors.borderStrong }]}>
-                <AgentFace server={server} size={52} animated={isTyping(rt, mainId)} still={!isTyping(rt, mainId)} />
-                <View style={{ flex: 1, minWidth: 0 }}>
-                  <View style={s.rowHead}>
-                    <Text style={s.mainTitle} numberOfLines={1}>{server.bot.title}</Text>
-                    <Text style={s.time}>{ago(general.updated_at)}</Text>
-                  </View>
-                  <Text style={s.preview} numberOfLines={2}>{isTyping(rt, mainId) ? 'Working…' : plainText(general.preview) || 'Your main conversation'}</Text>
-                </View>
-              </Tap>
-            ) : null}
-            {updates && match(updates) ? (
-              <ChatRow icon={<Sparkles size={17} color={t.colors.success} />} tint={t.colors.successSoft} title="Updates"
-                subtitle={plainText(updates.preview) || 'Results from your routines land here'} time={updates.updated_at}
-                active={activeChatId === 'home'} onPress={() => open('home')} />
-            ) : null}
-            {!q || side.some(match) ? <SectionHeader title="Side chats" /> : null}
-            {side.filter(match).map((c) => (
-              <Animated.View key={c.id} entering={FadeIn.duration(200)} layout={LinearTransition.duration(220).easing(easeOut)}>
-                <ChatRow icon={<Hash size={17} color={t.colors.onAccentSoft} />} tint={t.colors.accentSoft} title={c.title}
-                  subtitle={isTyping(rt, c.id) ? 'Working…' : plainText(c.preview) || 'No messages yet'} time={c.updated_at} working={isTyping(rt, c.id)}
-                  active={activeChatId === c.id} onPress={() => open(c.id)} onMenu={() => setMenu(c)} />
-              </Animated.View>
-            ))}
-            {!side.length && !q ? (
+            {!archived && groups.pinned.some(match) ? <><SectionHeader title="Pinned" style={s.section} />{groups.pinned.filter(match).map((c) => row(c, true))}</> : null}
+            {!archived && resume && match(resume) ? <><SectionHeader title="Continue" style={s.section} />{row(resume)}</> : null}
+            {(archived ? groups.archived : recents.slice(1)).some(match) ? <SectionHeader title={archived ? 'Archived chats' : 'Recent'} style={s.section} /> : null}
+            {(archived ? groups.archived : recents.slice(1)).filter(match).map((c) => row(c))}
+            {q && !archived && updates && match(updates) ? <ChatRow icon={<Sparkles size={17} color={t.colors.textSecondary} />} tint={t.colors.surfaceSunken} title="Updates" subtitle={plainText(updates.preview)} time={updates.updated_at} onPress={() => open('home')} /> : null}
+            {!(archived ? side.length : recents.length || groups.pinned.length) && !q ? (
               <View style={s.empty}>
-                <Text style={s.emptyText}>Side chats keep separate topics apart, each with its own memory of the conversation.</Text>
-                <Button title="Start a side chat" variant="tonal" icon={<Hash size={16} color={t.colors.onAccentSoft} />} onPress={newChat} />
+                <Text style={s.emptyText}>{archived ? 'No archived chats' : 'No chats yet'}</Text>
+                {!archived ? <Button title="New chat" variant="tonal" icon={<Hash size={16} color={t.colors.onAccentSoft} />} onPress={newChat} /> : null}
               </View>
             ) : null}
-            {found.results.length ? (
+            {results.length ? (
               <>
-                <SectionHeader title="In messages" />
-                {found.results.map((r) => (
+                <SectionHeader title="In messages" style={s.section} />
+                {results.map((r) => (
                   <ResultRow key={r.message.id} server={server} result={r} query={query.trim()}
                     onPress={() => { requestFocus(server.id, r.chat.id, r.message.id); open(r.chat.id); }} />
                 ))}
               </>
             ) : null}
-            {q && !side.some(match) && !(general && match(general)) && !found.results.length && !found.busy
+            {q && !side.some(match) && !(!archived && ((general && match(general)) || (updates && match(updates)))) && !results.length && !found.busy
               ? <Text style={s.emptyText}>Nothing matches “{query}”.</Text> : null}
           </>
         )}
@@ -157,8 +167,9 @@ function ChatRow({ icon, tint, title, subtitle, time, working, active, onPress, 
           <Text style={s.rowTitle} numberOfLines={1}>{title}</Text>
           <Text style={s.time}>{ago(time)}</Text>
         </View>
-        <Text style={[s.preview, working && { color: t.colors.warning }]} numberOfLines={1}>{subtitle}</Text>
+        {subtitle ? <Text style={[s.preview, working && { color: t.colors.warning }]} numberOfLines={1}>{subtitle}</Text> : null}
       </View>
+      {onMenu ? <IconButton label={`Options for ${title}`} size={40} onPress={(e) => { e.stopPropagation(); onMenu(); }}><MoreHorizontal size={18} color={t.colors.textSecondary} /></IconButton> : null}
     </Tap>
   );
 }
@@ -235,20 +246,22 @@ const useStyles = makeStyles((t) => ({
   listPane: { width: 360, borderRightWidth: 1, borderRightColor: t.colors.border },
   root: { flex: 1, backgroundColor: t.colors.bg },
   topRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 48 },
-  title: { ...t.type.display, color: t.colors.text, marginTop: 10, marginBottom: 14 },
+  title: { ...t.type.display, color: t.colors.text, marginTop: 6, marginBottom: 10 },
+  section: { paddingTop: 12, paddingBottom: 4 },
+  filters: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 4, borderBottomWidth: 1, borderBottomColor: t.colors.border },
+  filter: { minHeight: 44, alignItems: 'flex-start', justifyContent: 'center', borderBottomWidth: 2, borderBottomColor: 'transparent' },
+  filterOn: { borderBottomColor: t.colors.accent },
+  filterText: { ...t.type.callout, fontFamily: t.fonts.medium, color: t.colors.textSecondary },
+  updates: { flexDirection: 'row', gap: 5, alignItems: 'center', minHeight: 44, flexShrink: 1 },
+  updateLabel: { ...t.type.caption, fontFamily: t.fonts.medium, color: t.colors.textSecondary, flexShrink: 1 },
   search: {
     flexDirection: 'row', alignItems: 'center', gap: 10, paddingLeft: 14, paddingRight: 6, minHeight: 46, borderRadius: t.radius.pill,
     backgroundColor: t.colors.surfaceSunken, marginBottom: 14,
   },
   searchInput: { flex: 1, ...t.type.body, color: t.colors.text, paddingVertical: 10, ...(Platform.OS === 'web' ? ({ outlineStyle: 'none' } as object) : {}) },
-  main: {
-    flexDirection: 'row', alignItems: 'center', gap: 14, padding: 16, borderRadius: t.radius.lg, marginTop: 8, marginBottom: 6,
-    backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border,
-  },
-  mainTitle: { ...t.type.heading, color: t.colors.text, flexShrink: 1 },
   active: { backgroundColor: t.colors.accentSoft, borderColor: 'transparent' },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 12, paddingVertical: 11, borderRadius: t.radius.md, minHeight: 64 },
-  rowIcon: { width: 42, height: 42, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 4, paddingVertical: 10, borderRadius: t.radius.md, minHeight: 64 },
+  rowIcon: { width: 32, height: 32, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   rowHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   rowTitle: { ...t.type.bodyStrong, color: t.colors.text, flex: 1 },
   preview: { ...t.type.callout, color: t.colors.textSecondary, marginTop: 1 },

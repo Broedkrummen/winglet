@@ -7,6 +7,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { attachFiles, canSend, removeFile, retryFile, sendDraft } from '../lib/attach';
 import { loadCommands, matchCommands, type Command } from '../lib/commands';
+import { focusRegisteredComposer, registerComposer } from '../lib/composerFocus';
 import { haptic } from '../lib/haptics';
 import { formatDuration, pickFiles, pickMedia, takePhoto, type PickedFile } from '../lib/media';
 import { easeOut, useReducedMotion } from '../lib/motion';
@@ -41,20 +42,19 @@ type Props = {
   perch?: ReactNode;
   /** After anything is sent from this box: a message, a command or a voice note. */
   onSent?: () => void;
+  /** Resolve a local New chat draft before any operation needing a server chat. */
+  prepareChat?: () => Promise<string | null>;
+  onBeforeSend?: (chatId: string) => void;
+  onFocusChange?: (focused: boolean) => void;
 };
-
-/**
- * The message box: text, attachments (uploaded as soon as they're picked), replies, voice notes
- * (hold the mic), the command palette, and what to do with a message sent while the agent works.
- */
-const focusers = new Map<string, () => void>();
 
 /** Put the cursor in a chat's message box, once a sheet that asked for it has closed. */
 export function focusComposer(serverId: string, chatId: string) {
-  setTimeout(() => focusers.get(draftKey(serverId, chatId))?.(), 320);
+  setTimeout(() => focusRegisteredComposer(draftKey(serverId, chatId)), 320);
 }
 
-export function Composer({ server, chatId, busy, bottomInset, target, onHeight, placeholder, perch, onSent }: Props) {
+/** Shared message box: text above attachment, model and voice/send controls. */
+export function Composer({ server, chatId, busy, bottomInset, target, onHeight, placeholder, perch, onSent, prepareChat, onBeforeSend, onFocusChange }: Props) {
   const t = useTheme();
   const s = useStyles();
   const key = draftKey(server.id, chatId);
@@ -72,6 +72,8 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
   const [keepOriginal, setKeepOriginal] = useState(false);
   const [commands, setCommands] = useState<Command[]>([]);
   const [boxY, setBoxY] = useState(0);
+  const [preparing, setPreparing] = useState(false);
+  const sending = useRef(false);
   const input = useRef<TextInput>(null);
   const setText = (value: string) => setDraft(server.id, chatId, value);
   const uploads = features?.uploads !== false;
@@ -88,11 +90,7 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
 
   // So "Edit" on a message can put the cursor here too.
   useEffect(() => {
-    const focus = () => input.current?.focus();
-    focusers.set(key, focus);
-    return () => {
-      if (focusers.get(key) === focus) focusers.delete(key);
-    };
+    return registerComposer(key, () => input.current?.focus());
   }, [key]);
 
   // Keyboard: "/" from anywhere starts a command, Esc drops the reply or the half-typed command.
@@ -126,14 +124,14 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
       const picked = fromList(e.clipboardData?.files);
       if (!picked.length) return;
       e.preventDefault();
-      attachFiles(server.id, chatId, picked);
+      void (async () => { const destination = prepareChat ? await prepareChat() : chatId; if (destination) attachFiles(server.id, destination, picked); })();
     };
     const onDragOver = (e: DragEvent) => { if (e.dataTransfer?.types.includes('Files')) e.preventDefault(); };
     const onDrop = (e: DragEvent) => {
       const picked = fromList(e.dataTransfer?.files);
       if (!picked.length) return;
       e.preventDefault();
-      attachFiles(server.id, chatId, picked);
+      void (async () => { const destination = prepareChat ? await prepareChat() : chatId; if (destination) attachFiles(server.id, destination, picked); })();
     };
     document.addEventListener('paste', onPaste);
     window.addEventListener('dragover', onDragOver);
@@ -143,7 +141,7 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
       window.removeEventListener('dragover', onDragOver);
       window.removeEventListener('drop', onDrop);
     };
-  }, [server.id, chatId, uploads]);
+  }, [server.id, chatId, uploads, prepareChat]);
 
   const ready = canSend(text, files);
   const uploading = files.some((f) => f.status === 'uploading' && !f.autoSend);
@@ -151,21 +149,29 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
   const matches = typedCommand ? matchCommands(commands, text) : [];
   const showBusyModes = busy && !!text.trim() && !text.startsWith('/');
 
-  const send = (value?: string) => {
-    if (value !== undefined) {
+  const send = async (value?: string) => {
+    if (sending.current || (value === undefined && !ready)) return;
+    sending.current = true;
+    setPreparing(!!prepareChat);
+    try {
+      const destination = prepareChat ? await prepareChat() : chatId;
+      if (!destination) return;
+      onBeforeSend?.(destination);
+      if (value !== undefined) {
+        haptic.light();
+        void useApp.getState().sendMessage(server.id, destination, value);
+        sound.sent();
+        onSent?.();
+        return;
+      }
       haptic.light();
-      useApp.getState().sendMessage(server.id, chatId, value);
+      const prefix = showBusyModes && busyMode !== 'interrupt' ? `/${busyMode}` : '';
+      const body = prepareChat ? useApp.getState().drafts[draftKey(server.id, destination)] ?? text : text;
+      void sendDraft(server.id, destination, body, prefix);
+      setHeight(MIN_INPUT);
       sound.sent();
       onSent?.();
-      return;
-    }
-    if (!ready) return;
-    haptic.light();
-    const prefix = showBusyModes && busyMode !== 'interrupt' ? `/${busyMode}` : '';
-    sendDraft(server.id, chatId, text, prefix);
-    setHeight(MIN_INPUT);
-    sound.sent();
-    onSent?.();
+    } finally { sending.current = false; setPreparing(false); }
   };
 
   const pick = async (how: 'photos' | 'camera' | 'files') => {
@@ -176,7 +182,10 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
         useApp.getState().toast({ serverId: server.id, title: 'Camera not allowed', body: 'Allow camera access for Winglet in your phone settings to take photos.' });
         return;
       }
-      if (picked.length) attachFiles(server.id, chatId, picked, { keepOriginal });
+      if (picked.length) {
+        const destination = prepareChat ? await prepareChat() : chatId;
+        if (destination) attachFiles(server.id, destination, picked, { keepOriginal });
+      }
     } catch (e) {
       useApp.getState().toast({ serverId: server.id, title: "Couldn't attach", body: (e as Error).message });
     }
@@ -233,15 +242,11 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
           <View style={s.voiceSending}><ActivityIndicator size="small" color={t.colors.accent} /><Text style={s.replyText}>Sending voice note…</Text></View>
         ) : null}
         <View style={s.row}>
-          {uploads ? (
-            <Tap feedback="selection" accessibilityLabel="Attach photos or files" onPress={() => setAttachOpen(true)} style={s.attach} scaleTo={0.9}>
-              <Plus size={22} color={t.colors.text} />
-            </Tap>
-          ) : <View style={{ width: 8 }} />}
-          <ModelButton server={server} chatId={chatId} />
           <TextInput
             ref={input}
             value={text}
+            onFocus={() => onFocusChange?.(true)}
+            onBlur={() => onFocusChange?.(false)}
             onChangeText={setText}
             placeholder={placeholder}
             placeholderTextColor={t.colors.textTertiary}
@@ -251,25 +256,29 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
             style={[s.input, Platform.OS === 'web' ? { height } : null]}
             onKeyPress={(e: any) => {
               if (Platform.OS !== 'web') return;
-              if (e.nativeEvent.key === 'Enter' && !e.nativeEvent.shiftKey) {
-                e.preventDefault?.();
-                send();
-              } else if (e.nativeEvent.key === 'ArrowUp' && !text) {
-                e.preventDefault?.();
-                editLast();
-              }
+              if (e.nativeEvent.key === 'Enter' && !e.nativeEvent.shiftKey) { e.preventDefault?.(); send(); }
+              else if (e.nativeEvent.key === 'ArrowUp' && !text) { e.preventDefault?.(); editLast(); }
             }}
           />
+        </View>
+        <View style={s.tools}>
+          {uploads ? (
+            <Tap feedback="selection" accessibilityLabel="Attach photos or files" onPress={() => setAttachOpen(true)} style={s.attach} scaleTo={0.9}>
+              <Plus size={22} color={t.colors.text} />
+            </Tap>
+          ) : <View style={{ width: 8 }} />}
+          <ModelButton server={server} chatId={chatId} variant="composer" prepareChat={prepareChat} />
+          <View style={{ flex: 1 }} />
           {busy && !text.trim() && !files.length ? (
             <Tap key="stop" feedback="light" accessibilityLabel="Stop the current task" onPress={() => send('/stop')} style={[s.sendBtn, s.stopBtn]}>
               <Animated.View entering={ZoomIn.duration(160)}><Square size={14} color={t.colors.text} fill={t.colors.text} /></Animated.View>
             </Tap>
           ) : !text.trim() && !files.length && voice ? (
-            <VoiceButton server={server} chatId={chatId} onSent={onSent} />
+            <VoiceButton server={server} chatId={chatId} onSent={onSent} prepareChat={prepareChat} onBeforeSend={onBeforeSend} />
           ) : (
-            <Tap key="send" feedback="none" accessibilityLabel={uploading ? 'Waiting for uploads' : 'Send'} accessibilityState={{ disabled: !ready }}
-              disabled={!ready} onPress={() => send()} scaleTo={0.9} style={[s.sendBtn, { backgroundColor: ready ? t.colors.accentFill : t.colors.surfaceSunken }]}>
-              {uploading ? <ActivityIndicator size="small" color={t.colors.textSecondary} /> : (
+            <Tap key="send" feedback="none" accessibilityLabel={preparing ? 'Starting chat' : uploading ? 'Waiting for uploads' : 'Send'} accessibilityState={{ disabled: !ready || preparing }}
+              disabled={!ready || preparing} onPress={() => send()} scaleTo={0.9} style={[s.sendBtn, { backgroundColor: ready ? t.colors.accentFill : t.colors.surfaceSunken }]}>
+              {uploading || preparing ? <ActivityIndicator size="small" color={t.colors.textSecondary} /> : (
                 <ArrowUp size={20} color={ready ? t.colors.onAccent : t.colors.textTertiary} strokeWidth={2.5} />
               )}
             </Tap>
@@ -332,11 +341,11 @@ function Tray({ server, chatId, files }: { server: Server; chatId: string; files
  * Hold to record a voice note, release to send, slide left to cancel. Hermes transcribes it with
  * its own speech-to-text, the same as a voice note from Telegram.
  */
-function VoiceButton({ server, chatId, onSent }: { server: Server; chatId: string; onSent?: () => void }) {
+function VoiceButton({ server, chatId, onSent, prepareChat, onBeforeSend }: { server: Server; chatId: string; onSent?: () => void; prepareChat?: () => Promise<string | null>; onBeforeSend?: (chatId: string) => void }) {
   const t = useTheme();
   const s = useStyles();
   const reduced = useReducedMotion();
-  const voice = useVoiceNote(server.id, () => chatId, onSent);
+  const voice = useVoiceNote(server.id, () => chatId, onSent, prepareChat, onBeforeSend);
   const recording = voice.recording;
   const [cancelling, setCancelling] = useState(false);
   const pulse = useSharedValue(1);
@@ -353,9 +362,9 @@ function VoiceButton({ server, chatId, onSent }: { server: Server; chatId: strin
     .minDistance(0)
     .onBegin(() => { voice.start(); })
     .onUpdate((e) => setCancelling(e.translationX < -80))
-    .onFinalize((e) => {
+    .onFinalize((e, success) => {
       setCancelling(false);
-      voice.finish(e.translationX < -80);
+      voice.finish(!success || e.translationX < -80);
     });
 
   return (
@@ -381,7 +390,8 @@ const useStyles = makeStyles((t) => ({
   wrap: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: 10, paddingTop: 6 },
   perch: { position: 'absolute', left: 26, zIndex: 3 },
   box: { borderRadius: t.radius.xl, maxWidth: 820, width: '100%', alignSelf: 'center', overflow: 'hidden' },
-  row: { flexDirection: 'row', alignItems: 'flex-end', gap: 6, paddingLeft: 6, paddingRight: 6, paddingVertical: 6 },
+  row: { flexDirection: 'row', paddingHorizontal: 14, paddingTop: 5 },
+  tools: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 6, paddingBottom: 6 },
   attach: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: t.colors.surfaceSunken },
   input: {
     flex: 1, ...t.type.body, color: t.colors.text, paddingTop: 9, paddingBottom: 9, paddingHorizontal: 6, maxHeight: 150,

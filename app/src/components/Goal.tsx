@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Text, View } from 'react-native';
 import Animated, { FadeInDown, FadeOutUp } from 'react-native-reanimated';
 import Svg, { Circle } from 'react-native-svg';
@@ -44,17 +44,22 @@ export function goalStatus(goal: Goal): string {
 }
 
 /** The goal a chat is working toward, refreshed whenever a reply lands. */
-export function useChatGoal(server: Server, chatId: string) {
+export function useChatGoal(server: Server, chatId: string, enabled = true) {
   const supported = useApp((st) => !!st.runtime[server.id]?.info?.features?.goals);
   const online = useApp((st) => st.runtime[server.id]?.status === 'online');
   const lastReply = useApp((st) => st.runtime[server.id]?.lastReplyAt);
-  const [goal, setGoal] = useState<Goal | null>(null);
+  const [snapshot, setGoal] = useState<{ key: string; goal: Goal | null } | null>(null);
+  const key = `${server.id}:${chatId}`;
+  const current = useRef<string | null>(null);
+  current.current = enabled ? key : null;
   const refresh = useCallback(() => {
-    if (!supported || !online) return;
-    api<{ goal: Goal | null }>(server, `/api/chats/${encodeURIComponent(chatId)}/goal`).then((d) => setGoal(d.goal)).catch(() => undefined);
-  }, [server, chatId, supported, online]);
+    if (!supported || !online || !enabled) return;
+    api<{ goal: Goal | null }>(server, `/api/chats/${encodeURIComponent(chatId)}/goal`).then((d) => {
+      if (current.current === key) setGoal({ key, goal: d.goal });
+    }).catch(() => undefined);
+  }, [server, chatId, supported, online, enabled, key]);
   useEffect(refresh, [refresh, lastReply]);
-  return { goal, refresh, supported };
+  return { goal: enabled && snapshot?.key === key ? snapshot.goal : null, refresh, supported };
 }
 
 /** Under the chat header while the chat has a goal. Tap for the details and controls. */

@@ -25,7 +25,7 @@ export default function BotsScreen() {
   const addBot = useAddBot();
   const chosenMain = usePrefs((st) => st.prefs.mainBot);
   return (
-    <Screen title="Your bots" subtitle="Each bot is a Hermes profile on one of your machines.">
+    <Screen title="Your bots">
       <SectionHeader title={`${servers.length} paired`} />
       <ListGroup>
         {mainFirst(servers, chosenMain).map((srv, i) => {

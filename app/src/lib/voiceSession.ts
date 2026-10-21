@@ -21,50 +21,59 @@ const MIN_MS = 600;
  * nothing is sent. Otherwise a recorder nobody is holding would keep listening.
  */
 export function voiceSession(d: VoiceDeps) {
-  let holding = false;
-  let cancelled = false;
-  let recording = false;
-  let startedAt = 0;
+  let active: { holding: boolean; cancelled: boolean; recording: boolean; startedAt: number } | null = null;
 
   return {
     async start() {
-      holding = true;
-      cancelled = false;
+      // Permission, preparation and stopping own the recorder too. A rapid second hold must never
+      // overwrite the release/cancellation belonging to the first one.
+      if (active) return;
+      const run = { holding: true, cancelled: false, recording: false, startedAt: 0 };
+      active = run;
       try {
         if (!(await d.permission())) {
-          holding = false;
-          d.denied();
+          if (run.holding) d.denied();
           return;
         }
-        if (!holding) return; // let go during the prompt
+        if (!run.holding) return; // let go during the prompt
         await d.begin();
-        if (!holding) {
+        if (!run.holding) {
           await d.stop();
-          if (!cancelled) d.tooShort();
+          if (!run.cancelled) d.tooShort();
           return;
         }
-        recording = true;
-        startedAt = d.now();
+        run.recording = true;
+        run.startedAt = d.now();
         d.started();
       } catch {
-        holding = false;
+        run.recording = false;
         await d.stop().catch(() => null);
         d.failed();
+      } finally {
+        if (!run.recording && active === run) active = null;
       }
     },
 
     async finish(cancel: boolean) {
-      holding = false;
-      cancelled = cancel;
-      if (!recording) return; // still getting ready: start() stops it
-      recording = false;
-      const held = d.now() - startedAt;
-      const uri = await d.stop();
-      if (cancel || held < MIN_MS || !uri) {
-        if (!cancel && held < MIN_MS) d.tooShort();
-        return;
+      const run = active;
+      if (!run) return;
+      run.holding = false;
+      run.cancelled ||= cancel;
+      if (!run.recording) return; // getting ready or already stopping
+      run.recording = false;
+      const held = d.now() - run.startedAt;
+      try {
+        const uri = await d.stop();
+        if (run.cancelled || held < MIN_MS || !uri) {
+          if (!run.cancelled && held < MIN_MS) d.tooShort();
+          return;
+        }
+        d.send(uri);
+      } catch {
+        d.failed();
+      } finally {
+        if (active === run) active = null;
       }
-      d.send(uri);
     },
   };
 }

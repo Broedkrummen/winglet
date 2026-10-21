@@ -68,7 +68,7 @@ export default function SessionsScreen() {
   // Pinned conversations first, as Hermes shows them; the rest stay most recent first.
   const list = searching ? results : rows && [...rows.filter((r) => r.pinned), ...rows.filter((r) => !r.pinned)];
   return (
-    <Screen title="Sessions" subtitle="Every conversation your agent has had, in any app or routine. Most recent first." onRefresh={searching ? undefined : load}>
+    <Screen title="Sessions" onRefresh={searching ? undefined : load}>
       <View style={{ marginTop: 16 }}>
         <SearchField value={query} onChangeText={setQuery} placeholder="Search what was said" />
       </View>

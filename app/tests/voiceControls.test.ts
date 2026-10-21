@@ -1,0 +1,40 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
+import { test } from 'node:test';
+import ts from 'typescript';
+
+const any: any = new Proxy(function () {}, { get: (_t, key) => key === 'then' ? undefined : key === Symbol.toPrimitive ? () => 0 : any, apply: () => any });
+
+function load(file: string, names: string[]) {
+  const finishes: boolean[] = [];
+  const callbacks: Record<string, (...args: any[]) => void> = {};
+  let recorderCalls = 0;
+  const chain: any = new Proxy({}, { get: (_t, key: string) => (...args: any[]) => { if (key.startsWith('on')) callbacks[key] = args[0]; return chain; } });
+  const jsx = (type: any, props: any) => ({ type, props });
+  const modules: Record<string, any> = {
+    react: { useState: (value: any) => [value, () => undefined], useRef: (value: any) => ({ current: value }), useEffect: () => undefined, useCallback: (fn: any) => fn },
+    'react/jsx-runtime': { jsx, jsxs: jsx },
+    'react-native-gesture-handler': { Gesture: { Pan: () => chain }, GestureDetector: 'GestureDetector' },
+    '../lib/voiceNote': { useVoiceNote: () => { recorderCalls++; return { recording: false, start: async () => undefined, finish: async (cancel: boolean) => { finishes.push(cancel); } }; } },
+    '../lib/themeContext': { makeStyles: () => () => any, useTheme: () => any },
+    '../lib/motion': { useReducedMotion: () => true },
+    '../lib/mainBot': { useMainBot: () => ({ id: 'bot', bot: { title: 'Bot' } }) },
+    '../lib/pets': { petTones: () => undefined },
+    '../lib/store': { useApp: (select: any) => select({ runtime: { bot: {} } }) },
+  };
+  const exports: any = {};
+  const source = readFileSync(new URL(`../src/components/${file}`, import.meta.url), 'utf8') + `\nexport { ${names.join(', ')} };`;
+  vm.runInNewContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true } }).outputText,
+    { exports, require: (id: string) => modules[id] ?? any });
+  return { exports, callbacks, finishes, recorderCalls: () => recorderCalls };
+}
+
+test('an interrupted microphone gesture cancels instead of delivering the recording', () => {
+  const h = load('Composer.tsx', ['VoiceButton']);
+  h.exports.VoiceButton({ server: { id: 'bot' }, chatId: 'chat' });
+  h.callbacks.onFinalize({ translationX: 0 }, false);
+  h.callbacks.onFinalize({ translationX: 0 }, true);
+  h.callbacks.onFinalize({ translationX: -100 }, true);
+  assert.deepEqual(h.finishes, [true, false, true]);
+});

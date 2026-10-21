@@ -106,7 +106,7 @@ export function Button({ title, onPress, variant = 'primary', size = 'md', icon,
 }
 
 export function IconButton({ children, onPress, label, style, variant = 'plain', size = 40, badge }: {
-  children: ReactNode; onPress?: () => void; label: string; style?: StyleProp<ViewStyle>;
+  children: ReactNode; onPress?: PressableProps['onPress']; label: string; style?: StyleProp<ViewStyle>;
   variant?: 'plain' | 'filled' | 'tonal'; size?: number; badge?: number;
 }) {
   const t = useTheme();

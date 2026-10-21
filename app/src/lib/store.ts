@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import { Platform } from 'react-native';
 import { RecoveryCoordinator } from './recovery';
+import { sound } from './sounds';
 import { api, ApiError, wsUrl } from './api';
 import { cacheGet, cacheRemove, cacheSet } from './cache';
 import { activityKind, markFailed, mergeMessages } from './messages';
@@ -301,18 +302,22 @@ export const useApp = create<AppState>((set, get) => {
           // The server has it (the HTTP reply may have been lost): it's no longer ours to resend.
           updateOutbox(serverId, (o) => o.filter((x) => x.client_id !== clientId));
         }
+        const vis = get().visibleChat;
+        const seeing = get().foreground && vis?.serverId === serverId && vis.chatId === ev.chat_id;
         // A reply ends the bot's turn. Its tool-progress bubbles arrive as final messages too, but it's still
         // working: Hermes only re-sends "typing" a moment later, and the chat shouldn't flicker in between.
-        if (m.role === 'bot' && m.status === 'final' && !activityKind(m)) {
+        if (m.role === 'bot' && m.status === 'final' && !m.meta?.picker && !m.meta?.hidden && !activityKind(m)) {
+          const wasTyping = !!get().runtime[serverId]?.typing[ev.chat_id];
           patch(serverId, (s) => {
             const typing = { ...s.typing };
             delete typing[ev.chat_id];
             return { typing, lastReplyAt: Date.now() };
           });
+          // Once per turn, and only where you can see it land (elsewhere it toasts).
+          if (wasTyping && seeing) sound.reply();
         }
-        const vis = get().visibleChat;
-        const seeing = get().foreground && vis?.serverId === serverId && vis.chatId === ev.chat_id;
-        if (ev.type === 'message.new' && m.role === 'bot' && !seeing && server) {
+        const setting = m.meta?.picker?.kind === 'model' || m.meta?.picker?.kind === 'choice';
+        if (ev.type === 'message.new' && m.role === 'bot' && !m.meta?.hidden && !setting && !seeing && server) {
           const chat = get().runtime[serverId]?.chats[ev.chat_id];
           toast({ serverId, title: `${server.bot.title}${chat && chat.kind === 'chat' ? ` · ${chat.title}` : ''}`,
             body: m.text.slice(0, 140) || 'Sent an attachment', href: `/chat/${serverId}/${ev.chat_id}` });
@@ -358,6 +363,7 @@ export const useApp = create<AppState>((set, get) => {
         // A member can't answer approvals; the card in their chat already says it's waiting for an owner.
         const actionable = item.kind !== 'result' && (item.kind !== 'approval' || isOwner(get().runtime[serverId]));
         if (ev.type === 'inbox.new' && actionable && server) {
+          if (get().foreground) sound.needsYou();
           toast({ serverId, title: `${server.bot.title} · ${item.title}`, body: item.body.slice(0, 140),
             href: `/inbox?server=${encodeURIComponent(serverId)}&item=${encodeURIComponent(item.id)}` });
         }

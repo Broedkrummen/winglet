@@ -18,8 +18,14 @@ export default function AppearanceScreen() {
   const icon = (I: typeof Sun) => <I size={16} color={t.colors.textSecondary} />;
 
   return (
-    <Screen title="Appearance" subtitle="Changes apply straight away and stay on this device.">
+    <Screen title="Appearance">
       <Preview />
+
+      <SectionHeader title="Sidebar" />
+      <Segmented label="Sidebar" value={prefs.sidebar} onChange={set('sidebar')} options={[
+        { value: 'auto', label: 'Automatic' }, { value: 'drawer', label: 'Drawer' }, { value: 'pinned', label: 'Pinned' },
+      ]} />
+      <Text style={s.note}>Automatic keeps the sidebar open on large screens. Pinned adds a compact sidebar on phones.</Text>
 
       <SectionHeader title="Theme" />
       <Segmented label="Theme" value={prefs.theme} onChange={set('theme')} options={[
@@ -54,7 +60,7 @@ export default function AppearanceScreen() {
       ]} />
       <Text style={s.note}>
         {prefs.layout === 'bubbles' ? 'Your messages in bubbles on the right; replies full width, easy to read on a phone.'
-          : 'Everything left-aligned with names and times. Denser; good on a big screen.'}
+          : 'Smaller text, tighter spacing and left-aligned messages with names and times.'}
       </Text>
 
       <SectionHeader title="Motion and glass" />
@@ -72,6 +78,8 @@ export default function AppearanceScreen() {
       <ListGroup>
         <ListRow title="Haptics" subtitle={Platform.OS === 'web' ? 'Not available in the web app' : 'A light tap when you send, switch or confirm'}
           right={<Toggle label="Haptics" value={prefs.haptics} onValueChange={set('haptics')} />} />
+        <ListRow title="Sounds" subtitle="Soft sounds when you send, a reply lands, or something needs you"
+          right={<Toggle label="Sounds" value={prefs.sounds} onValueChange={set('sounds')} />} />
       </ListGroup>
     </Screen>
   );

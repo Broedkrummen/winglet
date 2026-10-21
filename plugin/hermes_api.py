@@ -1256,9 +1256,16 @@ def _pet_sheet(pet) -> dict:
     if key not in _pet_sheets:
         from PIL import Image
         from agent.pet import render
+        from .petcolor import pet_palette
         with Image.open(pet.spritesheet) as image:
             width, height = image.size
-        rows = max(1, height // constants.FRAME_H)
+            rows = max(1, height // constants.FRAME_H)
+            state_rows = list(constants.state_rows_for_grid(rows))
+            idle = state_rows.index("idle") if "idle" in state_rows else 0
+            try:
+                palette = pet_palette(image.crop((0, idle * constants.FRAME_H, constants.FRAME_W, (idle + 1) * constants.FRAME_H)))
+            except Exception:  # a palette is a nicety; the sheet must still load
+                palette = None
         try:
             frames = render.state_frame_counts(str(pet.spritesheet))
         except Exception:
@@ -1270,8 +1277,9 @@ def _pet_sheet(pet) -> dict:
             "mime": "image/png" if pet.spritesheet.suffix.lower() == ".png" else "image/webp",
             "frame_w": constants.FRAME_W, "frame_h": constants.FRAME_H,
             "columns": max(1, width // constants.FRAME_W), "rows": rows,
-            "state_rows": list(constants.state_rows_for_grid(rows)), "frames_per_state": constants.FRAMES_PER_STATE,
+            "state_rows": state_rows, "frames_per_state": constants.FRAMES_PER_STATE,
             "frames": {str(k): int(v) for k, v in frames.items()}, "loop_ms": constants.LOOP_MS,
+            **({"palette": palette} if palette else {}),
         }
     return {**_pet_sheets[key], "slug": pet.slug, "name": pet.display_name, "path": str(pet.spritesheet)}
 

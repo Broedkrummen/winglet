@@ -1,9 +1,10 @@
 import { Image } from 'expo-image';
 import { useEffect } from 'react';
 import { View, type StyleProp, type ViewStyle } from 'react-native';
-import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
+import Animated, { cancelAnimation, Easing, useAnimatedStyle, useSharedValue, withRepeat, withTiming } from 'react-native-reanimated';
 import { useReducedMotion } from '../lib/motion';
 import { petBox, petFrames, PET_STATES, type PetState } from '../lib/pets';
+import { useApp } from '../lib/store';
 import type { PetSheet } from '../lib/types';
 
 type Props = {
@@ -23,24 +24,21 @@ type Props = {
  */
 export function PetSprite({ sheet, uri, height, state, still, style }: Props) {
   const reduced = useReducedMotion();
+  const foreground = useApp((st) => st.foreground);
   const { row, count } = petFrames(sheet, state);
   const box = petBox(sheet, height);
   const frame = useSharedValue(0);
-  const animate = !still && !reduced && count > 1;
+  const animate = foreground && !still && !reduced && count > 1;
 
   useEffect(() => {
     frame.value = 0;
     if (!animate) return;
-    let i = 0;
-    const id = setInterval(() => {
-      i = (i + 1) % count;
-      frame.value = i;
-    }, sheet.loop_ms / count);
-    return () => clearInterval(id);
+    frame.value = withRepeat(withTiming(count, { duration: Math.max(1, sheet.loop_ms), easing: Easing.linear }), -1, false);
+    return () => cancelAnimation(frame);
   }, [animate, row, count, sheet.loop_ms, frame]);
 
   const { width: w, height: h } = box;
-  const move = useAnimatedStyle(() => ({ transform: [{ translateX: -frame.value * w }, { translateY: -row * h }] }));
+  const move = useAnimatedStyle(() => ({ transform: [{ translateX: -Math.min(count - 1, Math.floor(frame.value)) * w }, { translateY: -row * h }] }));
   const label = PET_STATES.find((x) => x.state === state)?.label.toLowerCase() ?? state;
 
   return (

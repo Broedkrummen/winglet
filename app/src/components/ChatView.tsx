@@ -2,8 +2,8 @@ import { BlurTargetView } from 'expo-blur';
 import * as Clipboard from 'expo-clipboard';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, KeyboardAvoidingView, Platform, Pressable, Share as SystemShare, StyleSheet, Text, View } from 'react-native';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { ActivityIndicator, FlatList, Keyboard, Platform, Pressable, Share as SystemShare, StyleSheet, Text, View } from 'react-native';
 import { Gesture, GestureDetector, ScrollView } from 'react-native-gesture-handler';
 import Animated, {
   cancelAnimation, FadeIn, FadeInDown, FadeOut, runOnJS, useAnimatedStyle, useSharedValue, withDelay, withRepeat, withSequence,
@@ -12,6 +12,7 @@ import Animated, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { mediaUrl } from '../lib/api';
 import { connectionView } from '../lib/connection';
+import { chatKey } from '../lib/chatOrganization';
 import { clearFocus, requestFocus, useFocusRequest } from '../lib/focus';
 import { haptic } from '../lib/haptics';
 import { afterOlderPage, atStart, canLoadOlder, newPaging } from '../lib/history';
@@ -25,26 +26,29 @@ import { FIXED } from '../lib/theme';
 import { makeStyles, useTheme } from '../lib/themeContext';
 import type { DraftFile, InboxItem, Message, ReplyRef, Server, Upload } from '../lib/types';
 import { AgentFace, useAvatarColor } from './AgentFace';
+import { InboxButton, NavigationToggle } from './AppNavigation';
 import { UserAvatar } from './BotAvatar';
 import { Composer, focusComposer } from './Composer';
 import { ChatMenu } from './ChatMenu';
+import { ChatPet } from './ChatPet';
+import type { DockPetFrame } from './BotCarousel';
 import { ConnectionBanner } from './ConnectionBanner';
 import { FilesSheet } from './FilesSheet';
 import { GoalSheet, GoalStrip, useChatGoal } from './Goal';
 import { PausedBanner } from './PausedBanner';
 import { Glass } from './Glass';
 import {
-  ArrowDown, CalendarClock, ChevronDown, ChevronLeft, Clock, Copy, FileText, MoreHorizontal, Pencil, Reply, RotateCcw, Share,
+  ArrowDown, CalendarClock, Check, ChevronDown, Clock, Copy, FileText, MoreHorizontal, Pencil, Reply, RotateCcw, Share,
 } from './icons';
 import { InboxCard } from './InboxCards';
 import { Markdown } from './Markdown';
 import { PickerCard } from './PickerCard';
 import { MessageAttachments } from './MessageAttachments';
+import { KeyboardViewport } from './KeyboardViewport';
 import { Sheet, SheetAction } from './Sheet';
-import { Badge, Button, Chip, IconButton, Tap } from './ui';
+import { Badge, Button, IconButton, Tap } from './ui';
 
 const GROUP_WINDOW_S = 7 * 60;
-const SUGGESTIONS = ['What can you do?', "What's on my plate today?", 'Check disk space on this machine'];
 /** Scrolled further up than this, the jump-to-latest button appears. */
 const AWAY_PX = 480;
 
@@ -66,10 +70,14 @@ type Actions = {
   jump: (id: string) => void;
 };
 
-export function ChatView({ server, chatId, showBack, embedded }: { server: Server; chatId: string; showBack?: boolean; embedded?: boolean }) {
+type Landing = { dock: (props: { focused: boolean; onPetLayout: (frame: DockPetFrame) => void }) => ReactNode;
+  title: string; prepareChat?: () => Promise<string | null>; action?: ReactNode };
+
+export function ChatView({ server, chatId, showBack, embedded, landing }: { server: Server; chatId: string; showBack?: boolean; embedded?: boolean; landing?: Landing }) {
   const t = useTheme();
   const s = useStyles();
   const insets = useSafeAreaInsets();
+  const reduced = useReducedMotion();
   // Not the messages of every chat: only this one's, below. Another chat streaming doesn't re-render this one.
   const runtime = useServerState(server.id);
   const network = useApp((st) => st.network);
@@ -90,22 +98,45 @@ export function ChatView({ server, chatId, showBack, embedded }: { server: Serve
   const [filesOpen, setFilesOpen] = useState(false);
   const target = useRef<View>(null);
   const typing = isTyping(runtime, chatId);
-  const { goal, refresh: refreshGoal, supported: goalsSupported } = useChatGoal(server, chatId);
+  const { goal, refresh: refreshGoal, supported: goalsSupported } = useChatGoal(server, chatId, !landing?.prepareChat);
   const focus = useFocusRequest(server.id, chatId);
+  const [revealed, setRevealed] = useState<Record<string, true>>({});
+  const [inputFocused, setInputFocused] = useState(false);
+  const [sendCount, setSendCount] = useState(0);
+  const [width, setWidth] = useState(0);
+  const [dockHeight, setDockHeight] = useState(224);
+  const [petFrame, setPetFrame] = useState<DockPetFrame>({ centerY: 68, size: 74 });
+  const petLayout = useCallback((frame: DockPetFrame) => setPetFrame((current) =>
+    current.centerY === frame.centerY && current.size === frame.size ? current : frame), []);
+  const turnKey = chatKey(server.id, chatId);
+  const beginTurn = (destination: string) => {
+    const key = chatKey(server.id, destination);
+    setRevealed((current) => current[key] ? current : { ...current, [key]: true });
+    setSendCount((n) => n + 1);
+  };
+  const composing = !!landing && (!revealed[turnKey] || !!landing.action);
 
   useEffect(() => {
+    if (Platform.OS === 'web') return;
+    const hide = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide', () => setInputFocused(false));
+    return () => hide.remove();
+  }, []);
+  useEffect(() => { setMenu(false); setSelected(null); setGoalOpen(false); setFilesOpen(false); }, [server.id, chatId]);
+
+  useEffect(() => {
+    if (landing?.prepareChat) return;
     setVisibleChat({ serverId: server.id, chatId });
     return () => setVisibleChat(undefined);
-  }, [server.id, chatId, setVisibleChat]);
+  }, [server.id, chatId, setVisibleChat, landing?.prepareChat]);
 
   // Show what this phone remembers straight away; the server's copy replaces it when it arrives.
   useEffect(() => {
-    hydrateChat(server.id, chatId);
-  }, [server.id, chatId, hydrateChat]);
+    if (!landing?.prepareChat) hydrateChat(server.id, chatId);
+  }, [server.id, chatId, hydrateChat, landing?.prepareChat]);
 
   useEffect(() => {
-    if (runtime?.status === 'online' && !loaded) loadMessages(server.id, chatId);
-  }, [runtime?.status, loaded, server.id, chatId, loadMessages]);
+    if (!landing?.prepareChat && runtime?.status === 'online' && !loaded) loadMessages(server.id, chatId);
+  }, [runtime?.status, loaded, server.id, chatId, loadMessages, landing?.prepareChat]);
 
   // Typing indicators expire client-side: re-render once, when this one runs out.
   const typingUntil = runtime?.typing[chatId];
@@ -126,7 +157,7 @@ export function ChatView({ server, chatId, showBack, embedded }: { server: Serve
     setReplyTo(server.id, chatId, toReplyRef(m));
   }, [server.id, chatId, setReplyTo]);
 
-  if (runtime?.status === 'online' && !chat) {
+  if (runtime?.status === 'online' && !chat && !landing?.prepareChat) {
     return (
       <View style={[s.root, s.center, { paddingTop: insets.top }]}>
         <Text style={s.emptyTitle}>This chat was deleted</Text>
@@ -137,45 +168,51 @@ export function ChatView({ server, chatId, showBack, embedded }: { server: Serve
 
   const view = connectionView(network, runtime, server.bot.title);
   const main = chatId === homeChat(runtime);
-  const title = main ? server.bot.title : chat?.kind === 'home' ? 'Updates' : `#${chat?.title ?? 'Chat'}`;
+  const title = composing ? landing!.title : main ? server.bot.title : chat?.kind === 'home' ? 'Updates' : chat?.title ?? 'Chat';
   const status = view.kind === 'online' ? (typing ? 'working…' : 'online') : view.kind === 'connecting' ? 'connecting…'
     : view.kind === 'recovering' ? 'finding new address…' : view.kind === 'unreachable' ? 'offline' : view.title.toLowerCase();
   const topPad = embedded ? 0 : insets.top;
 
   return (
-    <KeyboardAvoidingView style={s.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <KeyboardViewport>{(keyboardVisible) => {
+      const committed = !landing?.action && (inputFocused || keyboardVisible || !composing);
+      return <View style={s.root} onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
       <BlurTargetView ref={target} style={{ flex: 1 }}>
-        <MessageList server={server} chatId={chatId} messages={shown} loaded={!!loaded || !!messages?.length}
-          typing={typing} top={headerH} bottom={composerH} onOpen={setSelected} onReply={reply} focus={focus}
-          offline={view.kind !== 'online' && view.kind !== 'connecting'} />
+        {!composing ? <Animated.View entering={landing ? FadeIn.duration(reduced ? 0 : 180) : undefined} style={{ flex: 1 }}><MessageList key={turnKey} server={server} chatId={chatId} messages={shown} loaded={!!loaded || !!messages?.length}
+          typing={typing} top={headerH} bottom={composerH + (committed ? 60 : 0)} onOpen={setSelected} onReply={reply} focus={focus}
+          offline={view.kind !== 'online' && view.kind !== 'connecting'} /></Animated.View> : null}
+        {landing && composing ? <View pointerEvents={committed ? 'none' : 'auto'} onLayout={(e) => { if (e.nativeEvent.layout.height > 0) setDockHeight(e.nativeEvent.layout.height); }}
+          style={{ position: 'absolute', left: 0, right: 0, bottom: composerH + 8, display: committed ? 'none' : 'flex' }}>
+          {landing.dock({ focused: committed, onPetLayout: petLayout })}
+        </View> : null}
       </BlurTargetView>
       <View style={s.headerWrap} onLayout={(e) => setHeaderH(e.nativeEvent.layout.height)} pointerEvents="box-none">
         <Glass target={target} borderless style={[s.header, { paddingTop: topPad + 8 }]}>
-          {showBack ? (
-            <IconButton label="Back" onPress={() => (router.canGoBack() ? router.back() : router.replace('/'))}>
-              <ChevronLeft size={26} color={t.colors.text} />
-            </IconButton>
-          ) : <View style={{ width: 4 }} />}
-          <AgentFace server={server} size={38} animated={typing} />
+          <NavigationToggle />
           <View style={{ flex: 1, minWidth: 0 }}>
-            <Text style={s.headerTitle} numberOfLines={1} accessibilityRole="header">{title}</Text>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <View style={s.headerIdentity}>
+              <Text style={s.headerTitle} numberOfLines={1} accessibilityRole="header">{title}</Text>
               <View style={[s.statusDot, { backgroundColor: view.kind !== 'online' ? t.colors.warning : typing ? t.colors.accent : t.colors.success }]} />
-              <Text style={s.headerSub} numberOfLines={1}>{main ? status : `${server.bot.title} · ${status}`}</Text>
+              {typing || view.kind !== 'online' ? <Text style={s.headerSub} numberOfLines={1}>{status}</Text> : null}
             </View>
           </View>
-          <IconButton label="Chat options" onPress={() => setMenu(true)}><MoreHorizontal size={22} color={t.colors.text} /></IconButton>
+          {!composing ? <IconButton label="Chat options" onPress={() => setMenu(true)}><MoreHorizontal size={22} color={t.colors.text} /></IconButton> : null}
+          <InboxButton />
         </Glass>
         <View style={s.hairline} />
         <ConnectionBanner server={server} compact />
         <PausedBanner server={server} />
-        {goal ? <GoalStrip goal={goal} onPress={() => setGoalOpen(true)} /> : null}
+        {!composing && goal ? <GoalStrip goal={goal} onPress={() => setGoalOpen(true)} /> : null}
       </View>
-      <Composer server={server} chatId={chatId} busy={typing} bottomInset={embedded ? 12 : insets.bottom} target={target}
-        onHeight={setComposerH} placeholder={main || chat?.kind === 'home' ? `Message ${server.bot.title}` : `Message #${chat?.title ?? 'chat'}`} />
+      {landing?.action ? <View style={{ position: 'absolute', bottom: 0, left: 16, right: 16, paddingTop: 12, paddingBottom: Math.max(insets.bottom, 12) }}
+        onLayout={(e) => setComposerH(e.nativeEvent.layout.height)}>{landing.action}</View> : <Composer server={server} chatId={chatId} busy={typing} bottomInset={keyboardVisible ? 0 : embedded ? 12 : insets.bottom} target={target}
+        onHeight={setComposerH} placeholder={landing || main || chat?.kind === 'home' ? `Message ${server.bot.title}` : `Message ${chat?.title ?? 'chat'}`}
+        prepareChat={landing?.prepareChat} onFocusChange={setInputFocused} onBeforeSend={beginTurn} />}
+      {!landing?.action && width > 0 ? <ChatPet key={server.id} server={server} active={committed} width={width} composerHeight={composerH}
+        dockHeight={dockHeight} frame={petFrame} sent={sendCount} perched={!landing} /> : null}
       <ChatMenu server={server} chatId={chatId} title={title} visible={menu} onClose={() => setMenu(false)}
         onGoal={goalsSupported && chat?.kind !== 'home' ? () => setGoalOpen(true) : undefined} hasGoal={!!goal && goal.status !== 'done'}
-        onFiles={runtime?.info?.features?.files ? () => setFilesOpen(true) : undefined} onDeleted={() => router.replace('/chats')} />
+        onFiles={runtime?.info?.features?.files ? () => setFilesOpen(true) : undefined} onDeleted={() => router.replace('/chats')} onArchived={() => router.replace('/chats')} />
       <GoalSheet server={server} chatId={chatId} goal={goal} visible={goalOpen} onClose={() => setGoalOpen(false)} onChanged={refreshGoal} />
       <FilesSheet server={server} chatId={chatId} visible={filesOpen} onClose={() => setFilesOpen(false)}
         onJump={(id) => requestFocus(server.id, chatId, id)} />
@@ -186,7 +223,7 @@ export function ChatView({ server, chatId, showBack, embedded }: { server: Serve
           <Text selectable style={s.selectText}>{selectText}</Text>
         </ScrollView>
       </Sheet>
-    </KeyboardAvoidingView>
+    </View>; }}</KeyboardViewport>
   );
 }
 
@@ -225,7 +262,7 @@ function toReplyRef(m: Message): ReplyRef {
   return { id: m.id, role: m.role, text };
 }
 
-function MessageList({ server, chatId, messages, loaded, typing, top, bottom, onOpen, onReply, focus, offline }: {
+const MessageList = memo(function MessageList({ server, chatId, messages, loaded, typing, top, bottom, onOpen, onReply, focus, offline }: {
   server: Server; chatId: string; messages: Message[]; loaded: boolean; typing: boolean; top: number; bottom: number;
   onOpen: (m: Message) => void; onReply: (m: Message) => void; focus: string | null; offline: boolean;
 }) {
@@ -442,7 +479,7 @@ function MessageList({ server, chatId, messages, loaded, typing, top, bottom, on
       ) : null}
     </View>
   );
-}
+});
 
 /** A local calendar day as a number (20261013), cheap to compare across a whole chat. */
 function dayKey(ts: number) {
@@ -491,7 +528,10 @@ const MessageRow = memo(function MessageRow({ server, message, first, last, live
 
   if (message.role === 'system') {
     if (message.meta?.inbox_id && inboxItem) {
-      return <Animated.View entering={entering} style={[s.lane, s.systemCard]}><InboxCard serverId={server.id} item={inboxItem} /></Animated.View>;
+      return <Animated.View entering={entering} style={[s.lane, s.systemCard]}>
+        {layout === 'compact' ? <View style={s.compact}><View style={s.gutter} /><View style={{ flex: 1, minWidth: 0 }}><InboxCard serverId={server.id} item={inboxItem} compact embedded /></View></View>
+          : <View style={s.botRow}><View style={s.botBody}><InboxCard serverId={server.id} item={inboxItem} embedded /></View></View>}
+      </Animated.View>;
     }
     return <View style={s.systemLine}><Text style={s.systemText}>{message.text}</Text></View>;
   }
@@ -511,7 +551,7 @@ const MessageRow = memo(function MessageRow({ server, message, first, last, live
           <Text style={s.routineText} numberOfLines={1}>{routine}</Text>
         </View>
       ) : null}
-      {message.text ? <Markdown text={message.text} resolveUrl={resolve} tone={onAccent ? 'onAccent' : 'default'} selectable={!TOUCH} /> : null}
+      {message.text ? <Markdown text={message.text} resolveUrl={resolve} tone={onAccent ? 'onAccent' : 'default'} selectable={!TOUCH} compact={layout === 'compact'} /> : null}
       {message.status === 'streaming' && live ? <Cursor onAccent={onAccent} /> : null}
     </>
   );
@@ -527,13 +567,14 @@ const MessageRow = memo(function MessageRow({ server, message, first, last, live
       {message.status === 'failed' ? <FailedActions server={server} message={message} right={mine} /> : null}
     </>
   );
-  const toolbar = !TOUCH && hover && sendable ? <HoverBar message={message} actions={actions} /> : null;
+  const responseActions = isBot && sendable && !message.meta?.picker && !!message.text ? <HoverBar message={message} actions={actions} serverId={server.id} inline /> : null;
+  const toolbar = !responseActions && !TOUCH && hover && sendable ? <HoverBar message={message} actions={actions} serverId={server.id} /> : null;
 
   let content;
   if (layout === 'compact') {
     content = (
-      <View style={[s.compact, first ? { marginTop: 14 } : { marginTop: 2 }]}>
-        <View style={s.gutter}>{first ? (isBot ? <AgentFace server={server} size={36} still /> : <UserAvatar size={36} />) : null}</View>
+      <View style={[s.compact, first ? { marginTop: 8 } : { marginTop: 2 }]}>
+        <View style={s.gutter}>{first ? (isBot ? <AgentFace server={server} size={28} still /> : <UserAvatar size={28} />) : null}</View>
         <View style={{ flex: 1, minWidth: 0 }}>
           {first ? (
             <View style={s.compactHead}>
@@ -542,13 +583,14 @@ const MessageRow = memo(function MessageRow({ server, message, first, last, live
             </View>
           ) : null}
           <View style={{ opacity: message.status === 'pending' ? 0.6 : 1 }}>{quote(false)}{text(false)}{files}</View>
+          {responseActions}
           {footer}
         </View>
       </View>
     );
   } else if (isBot) {
     content = (
-      <View style={[s.botRow, first ? { marginTop: 16 } : { marginTop: 4 }]}>
+      <View style={[s.botRow, first ? { marginTop: 12 } : { marginTop: 4 }]}>
         {first ? (
           <View style={s.botHead}>
             <AgentFace server={server} size={26} still />
@@ -556,7 +598,7 @@ const MessageRow = memo(function MessageRow({ server, message, first, last, live
             <Text style={s.time}>{timeOf(message.created_at)}</Text>
           </View>
         ) : null}
-        <View style={s.botBody}>{quote(false)}{text(false)}{files}</View>
+        <View style={s.botBody}>{quote(false)}{text(false)}{files}{responseActions}</View>
         {footer}
       </View>
     );
@@ -664,22 +706,29 @@ function ReplyQuote({ server, reply, onAccent, onPress }: { server: Server; repl
   );
 }
 
-/** With a mouse: reply, copy and more, on hover. */
-function HoverBar({ message, actions }: { message: Message; actions: Actions }) {
+/** Visible below completed replies; also available on hover for other messages on desktop. */
+function HoverBar({ message, actions, serverId, inline = false }: { message: Message; actions: Actions; serverId: string; inline?: boolean }) {
   const t = useTheme();
   const s = useStyles();
   const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), 1400);
+    return () => clearTimeout(timer);
+  }, [copied]);
   return (
-    <View style={s.hoverBar}>
-      <IconButton label="Reply" size={32} onPress={() => actions.reply(message)}><Reply size={16} color={t.colors.textSecondary} /></IconButton>
+    <View style={inline ? s.responseActions : s.hoverBar}>
       {message.text ? (
-        <IconButton label={copied ? 'Copied' : 'Copy'} size={32} onPress={async () => {
-          await Clipboard.setStringAsync(message.text);
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1400);
-        }}><Copy size={16} color={copied ? t.colors.success : t.colors.textSecondary} /></IconButton>
+        <Tap accessibilityLabel={copied ? 'Copied response' : 'Copy response'} onPress={async () => {
+          try { await Clipboard.setStringAsync(message.text); setCopied(true); haptic.selection(); }
+          catch { useApp.getState().toast({ serverId, title: 'Couldn’t copy', body: 'Try again or use Select text from the message options.' }); }
+        }} style={s.copyResponse} hitSlop={4}>
+          {copied ? <Check size={15} color={t.colors.success} /> : <Copy size={15} color={t.colors.textSecondary} />}
+          {inline ? <Text style={[s.copyResponseText, copied && { color: t.colors.success }]}>{copied ? 'Copied' : 'Copy'}</Text> : null}
+        </Tap>
       ) : null}
-      <IconButton label="More" size={32} onPress={() => actions.open(message)}><MoreHorizontal size={16} color={t.colors.textSecondary} /></IconButton>
+      <IconButton label="Reply to response" size={inline ? 40 : 32} onPress={() => actions.reply(message)}><Reply size={16} color={t.colors.textSecondary} /></IconButton>
+      <IconButton label="More response options" size={inline ? 40 : 32} onPress={() => actions.open(message)}><MoreHorizontal size={16} color={t.colors.textSecondary} /></IconButton>
     </View>
   );
 }
@@ -705,9 +754,11 @@ function MessageMenu({ server, message, busy, onClose, onReply, onSelectText }: 
     <Sheet visible={!!message} onClose={onClose}>
       {m.text ? <Text style={s.menuPreview} numberOfLines={2}>{plainText(m.text)}</Text> : null}
       <SheetAction icon={<Reply size={20} color={t.colors.text} />} label="Reply" onPress={run(() => onReply(m))} />
-      {m.text ? <SheetAction icon={<Copy size={20} color={t.colors.text} />} label="Copy text" onPress={run(() => {
-        Clipboard.setStringAsync(m.text);
-        useApp.getState().toast({ serverId: server.id, title: 'Copied', body: '' });
+      {m.text ? <SheetAction icon={<Copy size={20} color={t.colors.text} />} label="Copy text" onPress={run(async () => {
+        try {
+          await Clipboard.setStringAsync(m.text);
+          useApp.getState().toast({ serverId: server.id, title: 'Copied', body: '' });
+        } catch { useApp.getState().toast({ serverId: server.id, title: 'Couldn’t copy', body: 'Try again or use Select text.' }); }
       })} /> : null}
       {m.text && TOUCH ? <SheetAction icon={<FileText size={20} color={t.colors.text} />} label="Select text" onPress={run(() => onSelectText(m.text))} /> : null}
       {m.text ? <SheetAction icon={<Share size={20} color={t.colors.text} />} label="Share" onPress={run(() => {
@@ -819,24 +870,12 @@ function Dot({ delay, reduced, color }: { delay: number; reduced: boolean; color
 
 function EmptyChat({ server, chatId, top, bottom }: { server: Server; chatId: string; top: number; bottom: number }) {
   const s = useStyles();
-  const sendMessage = useApp((st) => st.sendMessage);
   const chat = useApp((st) => st.runtime[server.id]?.chats[chatId]);
   const home = chat?.kind === 'home';
+  if (!home) return <View style={{ flex: 1 }} />;
   return (
     <View style={[s.center, { flex: 1, paddingTop: top, paddingBottom: bottom, paddingHorizontal: 28, gap: 12 }]}>
-      <Animated.View entering={ZoomIn.duration(220).easing(easeOut)}>
-        <AgentFace server={server} size={92} mood="idle" animated glow />
-      </Animated.View>
-      <Text style={s.emptyTitle}>{home ? 'Updates from your routines' : `Say hi to ${server.bot.title}`}</Text>
-      <Text style={s.emptyText}>
-        {home ? 'When a scheduled routine finishes, its results land here and in your inbox.'
-          : server.bot.description || 'Your agent runs on your own machine. Ask it anything: it can use tools, browse, run code, and remember.'}
-      </Text>
-      {home ? null : (
-        <View style={s.suggestions}>
-          {SUGGESTIONS.map((q) => <Chip key={q} label={q} onPress={() => { haptic.light(); sendMessage(server.id, chatId, q); }} />)}
-        </View>
-      )}
+      <Text style={s.emptyText}>Routine results will appear here.</Text>
     </View>
   );
 }
@@ -849,8 +888,9 @@ const useStyles = makeStyles((t) => ({
   headerWrap: { position: 'absolute', top: 0, left: 0, right: 0 },
   header: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 8, paddingBottom: 10 },
   hairline: { height: 1, backgroundColor: t.colors.border },
-  headerTitle: { ...t.type.heading, color: t.colors.text },
-  headerSub: { ...t.type.caption, color: t.colors.textSecondary },
+  headerIdentity: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  headerTitle: { ...t.type.heading, color: t.colors.text, flexShrink: 1 },
+  headerSub: { ...t.type.caption, color: t.colors.textSecondary, maxWidth: '40%' },
   statusDot: { width: 7, height: 7, borderRadius: 4 },
   dayWrap: { alignItems: 'center', marginTop: 20, marginBottom: 4 },
   day: {
@@ -866,15 +906,18 @@ const useStyles = makeStyles((t) => ({
   bubbleTail: { borderBottomRightRadius: 6 },
   time: { ...t.type.caption, fontSize: 11.5, color: t.colors.textTertiary },
   compact: { flexDirection: 'row', paddingHorizontal: 14, paddingRight: 18 },
-  gutter: { width: 48 },
+  gutter: { width: 38 },
   compactHead: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 3 },
-  author: { fontFamily: t.fonts.semibold, fontSize: 15 },
+  author: { fontFamily: t.fonts.semibold, fontSize: 14 },
   routine: {
     flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 4,
     borderRadius: t.radius.pill, backgroundColor: t.colors.accentSoft, marginBottom: 6,
   },
   routineText: { ...t.type.caption, fontFamily: t.fonts.semibold, color: t.colors.onAccentSoft },
-  systemCard: { paddingHorizontal: 14, marginTop: 14 },
+  systemCard: { marginTop: 8 },
+  responseActions: { flexDirection: 'row', alignItems: 'center', gap: 2, marginTop: 2, alignSelf: 'flex-start' },
+  copyResponse: { flexDirection: 'row', alignItems: 'center', gap: 5, minHeight: 40, paddingHorizontal: 8, borderRadius: t.radius.sm },
+  copyResponseText: { ...t.type.caption, color: t.colors.textSecondary },
   systemLine: { alignItems: 'center', marginVertical: 10, paddingHorizontal: 24 },
   systemText: { ...t.type.caption, color: t.colors.textSecondary, textAlign: 'center' },
   quote: {

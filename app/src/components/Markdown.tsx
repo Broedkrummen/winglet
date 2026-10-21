@@ -16,6 +16,7 @@ type Props = {
   tone?: 'default' | 'onAccent' | 'muted';
   /** Text can be selected in place. Off in chat on phones, where a long press opens the message menu. */
   selectable?: boolean;
+  compact?: boolean;
 };
 
 type Styles = ReturnType<typeof useStyles>;
@@ -26,8 +27,10 @@ const FOLD_LINES = 18;
 const FOLDED_LINES = 12;
 
 /** Chat-flavoured Markdown: paragraphs, headings, lists, highlighted code, quotes, tables, links, images. */
-export const Markdown = memo(function Markdown({ text, resolveUrl, tone = 'default', selectable = true }: Props) {
-  const s = useStyles();
+export const Markdown = memo(function Markdown({ text, resolveUrl, tone = 'default', selectable = true, compact = false }: Props) {
+  const base = useStyles();
+  const s = useMemo(() => compact ? { ...base, root: { ...base.root, gap: 5 }, p: { ...base.p, fontSize: 15, lineHeight: 21 },
+    codeText: { ...base.codeText, fontSize: 12.5, lineHeight: 18 }, codeInline: { ...base.codeInline, fontSize: 12.5 }, list: { ...base.list, gap: 2 } } : base, [base, compact]);
   const t = useTheme();
   const ctx: Ctx = { resolveUrl, s, t, tone, sel: selectable };
   let tokens: Token[];
@@ -254,7 +257,7 @@ function decode(text: string): string {
 }
 
 const useStyles = makeStyles((t) => ({
-  root: { gap: 8 },
+  root: { gap: 6 },
   p: { ...t.type.body, color: t.colors.text },
   onAccent: { color: t.colors.onAccent },
   muted: { color: t.colors.textSecondary },

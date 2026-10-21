@@ -8,7 +8,7 @@ const exports: any = {};
 vm.runInNewContext(ts.transpileModule(readFileSync(new URL('../src/lib/pets.ts', import.meta.url), 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText, { exports, require: () => ({}) });
-const { petState, petFrames, petBox, PET_STATES, hashText, paletteColor, avatarColor } = exports;
+const { petState, petFrames, petBox, PET_STATES, hashText, paletteColor, avatarColor, petTones } = exports;
 
 const CODEX = ['idle', 'running-right', 'running-left', 'waving', 'jumping', 'failed', 'waiting', 'running', 'review'];
 const LEGACY = ['idle', 'wave', 'run', 'failed', 'review', 'jump', 'extra1', 'extra2'];
@@ -72,4 +72,22 @@ test("a bot's colour follows its pet, and falls back to the one it was made with
   assert.equal(avatarColor(PALETTE, 'atlas', { slug: 'boba' }), avatarColor(PALETTE, 'nova', { slug: 'boba' }));
   const colours = new Set(['boba', 'mochi', 'pixel', 'ember', 'cloud', 'sprout'].map((slug) => avatarColor(PALETTE, 'hermes', { slug })));
   assert.ok(colours.size > 1);
+});
+
+test("a pet's own palette wins over the colour its slug hashes to", () => {
+  const palette = { base: '#d22832', soft: '#f5d0d2', deep: '#500f13' };
+  assert.equal(avatarColor(['#111111', '#222222'], 'bot', { slug: 'boba', palette }), '#d22832');
+  // Older servers send no palette: exactly today's colour.
+  assert.equal(avatarColor(['#111111', '#222222'], 'bot', { slug: 'boba' }), paletteColor(['#111111', '#222222'], 'pet:boba'));
+});
+
+test('the disc behind a pet is a tint of it, never its own colour', () => {
+  const palette = { base: '#d22832', soft: '#f5d0d2', deep: '#500f13' };
+  const light = petTones({ palette }, 'light')!.disc;
+  const dark = petTones({ palette }, 'dark')!.disc;
+  assert.ok(!light.includes('#d22832') && !dark.includes('#d22832'));
+  assert.equal(light[1], '#f5d0d2');
+  assert.equal(dark[1], '#500f13');
+  assert.equal(petTones({}, 'light'), null);
+  assert.equal(petTones(null, 'dark'), null);
 });

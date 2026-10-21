@@ -27,8 +27,8 @@ and tap you on the shoulder when they need you.
 </div>
 
 > [!TIP]
-> **New in [v0.4.0](docs/releases/v0.4.0.md):** a Home built around your main bot, pets throughout the app,
-> one "Add a bot" flow, and quieter chats with tool activity you can expand.
+> **New in [v0.5.0](docs/releases/v0.5.0.md):** chat-first navigation with a sidebar, an animated bot dock,
+> pinned and archived chats, and model controls inside the message box.
 
 ## 💡 Why Winglet?
 

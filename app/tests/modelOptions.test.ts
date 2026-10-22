@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { isCurrentModel, modelName, modelProviders, shortModel } from '../src/lib/modelOptions.ts';
+import { activeModel, isCurrentModel, modelName, modelProviders, shortModel } from '../src/lib/modelOptions.ts';
 import type { Picker } from '../src/lib/types.ts';
 
 const picker: Picker = {
@@ -40,4 +40,22 @@ test('same model name on another provider is not marked as the current choice', 
   assert.equal(isCurrentModel(picker, 'other', 'glm-5.3-flash'), false);
   assert.equal(isCurrentModel(picker, 'router', 'glm-5.3-flash'), true);
   assert.deepEqual(modelProviders({ ...picker, providers: undefined }), []);
+});
+
+test('two vendor IDs with the same name never both receive the current checkmark', () => {
+  const p = { ...picker, current_model: 'vendor-a/custom', current_provider: 'router' };
+  assert.equal(isCurrentModel(p, 'router', 'vendor-a/custom'), true);
+  assert.equal(isCurrentModel(p, 'router', 'vendor-b/custom'), false);
+});
+
+test('the active model and provider stay together when a chat uses a fallback', () => {
+  const configured = { model: 'deepseek/default', provider: 'openrouter', label: 'OpenRouter', reasoning_effort: '' };
+  assert.equal(activeModel({ configured, chat: { model: 'z-ai/glm', provider: '', source: 'last_turn' } }).model, 'z-ai/glm');
+  assert.equal(activeModel({ configured, chat: { model: 'z-ai/glm', provider: '', source: 'last_turn' } }).provider, '');
+  assert.equal(activeModel({ configured, chat: null }).model, 'deepseek/default');
+});
+
+test('models beyond the old server cap are searchable and selectable by exact ID', () => {
+  const providers = modelProviders({ ...picker, providers: [{ slug: 'router', name: 'OpenRouter', models: Array.from({ length: 500 }, (_, i) => `vendor/model-${i}`) }] }, 'model-499');
+  assert.deepEqual(providers[0].models, ['vendor/model-499']);
 });

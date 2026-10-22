@@ -5,6 +5,7 @@ import { JobSheet } from '../components/JobSheet';
 import { Download, Search, Sparkles, Trash2 } from '../components/icons';
 import { Markdown } from '../components/Markdown';
 import { Screen } from '../components/Screen';
+import { withSelectedServer } from '../components/ServerScreen';
 import { Sheet } from '../components/Sheet';
 import { Button, ConfirmButton, ListGroup, ListRow, LoadError, SearchField, SectionHeader, Segmented, Skeleton, Toggle } from '../components/ui';
 import { byCategory, categoryLabel, matches, shortDescription } from '../lib/abilities';
@@ -18,7 +19,9 @@ import type { CatalogSkill, Job, Server, Skill } from '../lib/types';
 const ORIGIN: Record<Skill['provenance'], string> = { bundled: 'Comes with Hermes', hub: 'Installed', agent: 'Made by your agent or you' };
 
 /** What your agent knows how to do: turn skills on and off, read them, and add Hermes's official ones. */
-export default function SkillsScreen() {
+export default withSelectedServer(SkillsScreen);
+
+function SkillsScreen() {
   const s = useStyles();
   const server = useApp((st) => st.servers.find((x) => x.id === st.selection.serverId) ?? st.servers[0]);
   const [tab, setTab] = useState<'installed' | 'add'>('installed');

@@ -105,3 +105,14 @@ test('ambiguous display names retain their exact IDs and select the requested sn
   await rows[1].props.onPress();
   assert.deepEqual(body, { provider: 'provider', model: 'claude-sonnet-4-20250201', message_id: 'm' });
 });
+
+test('a custom model uses the selected provider and its exact ID', async () => {
+  let body: any;
+  const h = harness(async (_server, _route, init) => { body = JSON.parse(init.body); return {}; });
+  (h.message.meta.picker.providers[0] as any).custom_models = true;
+  const field = find(h.render(), (n) => n.props?.accessibilityLabel === 'Custom model ID')[0];
+  field.props.onChangeText('vendor/new-model:free');
+  const button = find(h.render(), (n) => n.props?.title === 'Use custom model')[0];
+  await button.props.onPress();
+  assert.deepEqual(body, { provider: 'provider', model: 'vendor/new-model:free', message_id: 'm' });
+});

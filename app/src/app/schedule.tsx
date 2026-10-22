@@ -4,10 +4,11 @@ import { ActivityIndicator, Text, View } from 'react-native';
 import Animated, { FadeIn, LinearTransition } from 'react-native-reanimated';
 import { CalendarClock, CalendarPlus, CircleAlert, CirclePause, Pause, Play, Plus } from '../components/icons';
 import { Screen } from '../components/Screen';
+import { withSelectedServer } from '../components/ServerScreen';
 import { Sheet } from '../components/Sheet';
 import { Button, Card, Chip, ConfirmButton, Field, IconButton, LoadError, Skeleton, Tap } from '../components/ui';
 import { agoText } from '../lib/agent';
-import { api, ApiError, signedApi } from '../lib/api';
+import { api, signedApi } from '../lib/api';
 import { firstLine, whenNext } from '../lib/control';
 import { haptic } from '../lib/haptics';
 import { useApp } from '../lib/store';
@@ -23,7 +24,9 @@ const IDEAS = [
 type Draft = { id?: string; name: string; prompt: string; schedule: string };
 
 /** Prompts your agent runs on its own schedule. Results arrive in the Updates chat. */
-export default function ScheduleScreen() {
+export default withSelectedServer(ScheduleScreen);
+
+function ScheduleScreen() {
   const t = useTheme();
   const s = useStyles();
   const server = useApp((st) => st.servers.find((x) => x.id === st.selection.serverId) ?? st.servers[0]);
@@ -175,14 +178,15 @@ function EditSheet({ server, draft, onClose, onSaved }: { server: Server; draft:
   useEffect(() => {
     const text = form.schedule.trim();
     if (!draft || !text) { setPreview(null); setParseError(''); setChecking(false); return; }
+    let active = true;
     setChecking(true);
     const id = setTimeout(() => {
       api<{ display: string; next_run_at: string | null }>(server, '/api/schedule/parse', { method: 'POST', body: JSON.stringify({ schedule: text }) })
-        .then((p) => { setPreview(p); setParseError(''); })
-        .catch((e) => { setPreview(null); setParseError(e instanceof ApiError && e.status === 400 ? firstLine(e.message) : ''); })
-        .finally(() => setChecking(false));
+        .then((p) => { if (active) { setPreview(p); setParseError(''); } })
+        .catch((e) => { if (active) { setPreview(null); setParseError(firstLine((e as Error).message)); } })
+        .finally(() => { if (active) setChecking(false); });
     }, 400);
-    return () => clearTimeout(id);
+    return () => { active = false; clearTimeout(id); };
   }, [form.schedule, draft, server]);
 
   const save = async () => {
@@ -218,9 +222,9 @@ function EditSheet({ server, draft, onClose, onSaved }: { server: Server; draft:
 
   const f = draft ?? last;
   if (!f) return null;
-  const ready = !!form.prompt.trim() && !!form.schedule.trim() && !parseError && !checking;
+  const ready = !!form.prompt.trim() && !!form.schedule.trim() && !!preview && !parseError && !checking;
   return (
-    <Sheet visible={!!draft} onClose={onClose} title={form.id ? 'Edit routine' : 'New routine'}>
+    <Sheet visible={!!draft} onClose={onClose} title={form.id ? 'Edit routine' : 'New routine'} scrollable>
       <View style={{ gap: 14, paddingHorizontal: 4 }}>
         <Field label="Name" value={form.name} onChangeText={(name) => setForm((x) => ({ ...x, name }))} placeholder="Morning briefing" />
         <Field label="What should it do?" value={form.prompt} onChangeText={(prompt) => setForm((x) => ({ ...x, prompt }))} multiline

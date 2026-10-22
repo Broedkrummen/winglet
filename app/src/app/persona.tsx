@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Platform, Text, TextInput, View } from 'react-native';
 import { Screen } from '../components/Screen';
-import { Button, Card, Skeleton } from '../components/ui';
+import { withSelectedServer } from '../components/ServerScreen';
+import { Button, Card, LoadError, Skeleton } from '../components/ui';
 import { api, signedApi } from '../lib/api';
 import { haptic } from '../lib/haptics';
 import { useApp } from '../lib/store';
@@ -10,7 +11,9 @@ import { makeStyles, useTheme } from '../lib/themeContext';
 const MAX = 20_000;
 
 /** The agent's persona (SOUL.md): who it is and how it talks. Applies to new chats. */
-export default function PersonaScreen() {
+export default withSelectedServer(PersonaScreen);
+
+function PersonaScreen() {
   const t = useTheme();
   const s = useStyles();
   const server = useApp((st) => st.servers.find((x) => x.id === st.selection.serverId) ?? st.servers[0]);
@@ -18,12 +21,15 @@ export default function PersonaScreen() {
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
 
-  useEffect(() => {
+  const load = () => {
     if (!server) return;
-    api<{ content: string }>(server, '/api/identity').then((d) => { setSaved(d.content); setText(d.content); })
-      .catch((e) => setMessage((e as Error).message));
-  }, [server?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+    setError('');
+    return api<{ content: string }>(server, '/api/identity').then((d) => { setSaved(d.content); setText(d.content); })
+      .catch((e) => setError((e as Error).message));
+  };
+  useEffect(() => { load(); }, [server?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const save = async () => {
     if (!server) return;
@@ -44,9 +50,9 @@ export default function PersonaScreen() {
   const changed = saved !== null && text !== saved;
   return (
     <Screen title="Persona" subtitle={`Who ${server?.bot.title ?? 'your agent'} is and how it talks. Plain words work best: its tone, what to focus on, what to avoid.`}>
-      {saved === null ? <Skeleton height={320} radius={20} style={{ marginTop: 12 }} /> : (
+      {saved === null ? error ? <LoadError message={error} onRetry={load} /> : <Skeleton height={320} radius={20} style={{ marginTop: 12 }} /> : (
         <Card style={{ marginTop: 12, padding: 0, overflow: 'hidden' }}>
-          <TextInput value={text} onChangeText={setText} multiline textAlignVertical="top" maxLength={MAX}
+          <TextInput value={text} onChangeText={setText} editable={!busy} multiline textAlignVertical="top" maxLength={MAX}
             placeholder="You are a calm, practical assistant. Keep answers short…" placeholderTextColor={t.colors.textTertiary}
             style={s.editor} accessibilityLabel="Persona" autoCorrect={Platform.OS !== 'web'} />
         </Card>

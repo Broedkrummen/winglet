@@ -6,7 +6,7 @@ import type { Server } from './types';
 export function webPushServer(servers: Server[]): Server | undefined {
   if (Platform.OS !== 'web') return undefined;
   const origin = globalThis.location?.origin;
-  return servers.find((s) => s.url === origin);
+  return servers.find((s) => !s.parent && s.url.replace(/\/+$/, '') === origin);
 }
 
 export type PushState = 'unsupported' | 'needs-install' | 'insecure' | 'default' | 'denied' | 'granted';

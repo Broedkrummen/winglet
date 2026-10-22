@@ -10,7 +10,7 @@ import { makeStyles, useTheme } from '../lib/themeContext';
 import type { Message, Picker, Server } from '../lib/types';
 import { Check, ChevronDown, Clock, Cpu, Search, ShieldQuestion, SlidersHorizontal, X } from './icons';
 import { Markdown } from './Markdown';
-import { Button, Chip } from './ui';
+import { Button, Chip, Field } from './ui';
 
 const SHOWN_PER_PROVIDER = 8;
 
@@ -37,6 +37,8 @@ export function PickerCard({ server, message, presentation = 'card', onChosen }:
   const [query, setQuery] = useState('');
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [details, setDetails] = useState(false);
+  const [customProvider, setCustomProvider] = useState('');
+  const [customModel, setCustomModel] = useState('');
   const pending = useRef(false);
   const [, tick] = useState(0);
   useEffect(() => {
@@ -155,6 +157,18 @@ export function PickerCard({ server, message, presentation = 'card', onChosen }:
             );
           })}
           {!providers.length ? <Text style={s.sub}>No model matches “{query}”.</Text> : null}
+          {picker.providers?.some((p) => p.custom_models) ? <View style={{ gap: 10 }}>
+            <Text style={s.provider}>Custom model</Text>
+            <View style={s.chips}>
+              {picker.providers.filter((p) => p.custom_models).map((p) => <Chip key={p.slug} label={p.name}
+                selected={(customProvider || picker.current_provider || picker.providers?.find((x) => x.custom_models)?.slug) === p.slug}
+                onPress={() => setCustomProvider(p.slug)} />)}
+            </View>
+            <Field value={customModel} onChangeText={setCustomModel} placeholder="Exact model ID, e.g. vendor/model-name"
+              accessibilityLabel="Custom model ID" autoCapitalize="none" autoCorrect={false} />
+            <Button title="Use custom model" variant="tonal" loading={busy === 'custom'} disabled={!!busy || !customModel.trim()}
+              onPress={() => choose('custom', { provider: customProvider || picker.providers?.find((p) => p.custom_models && p.slug === picker.current_provider)?.slug || picker.providers?.find((p) => p.custom_models)?.slug || '', model: customModel.trim() })} />
+          </View> : null}
         </View>
       ) : picker.kind === 'confirm' ? (
         <View style={{ gap: 12 }}>

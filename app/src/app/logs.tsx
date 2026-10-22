@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Platform, Pressable, Text, View } from 'react-native';
 import { RefreshCw } from '../components/icons';
 import { Screen } from '../components/Screen';
+import { withSelectedServer } from '../components/ServerScreen';
 import { Button, Card, Chip, IconButton, LoadError, SearchField, Segmented, Skeleton } from '../components/ui';
 import { api } from '../lib/api';
 import { bytes, logLevel, splitLogLine, type LogLevel } from '../lib/control';
@@ -15,7 +16,9 @@ const LEVELS: { value: Level; label: string }[] = [
 ];
 
 /** The end of Hermes's own logs, newest first, with secrets hidden the way Hermes hides them. */
-export default function LogsScreen() {
+export default withSelectedServer(LogsScreen);
+
+function LogsScreen() {
   const t = useTheme();
   const s = useStyles();
   const server = useApp((st) => st.servers.find((x) => x.id === st.selection.serverId) ?? st.servers[0]);
@@ -27,6 +30,7 @@ export default function LogsScreen() {
   const [data, setData] = useState<{ lines: string[]; size: number } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const requestSeq = useRef(0);
 
   useEffect(() => {
     const id = setTimeout(() => setDebounced(query.trim()), 350);
@@ -35,12 +39,13 @@ export default function LogsScreen() {
 
   const load = useCallback(() => {
     if (!server) return;
+    const seq = ++requestSeq.current;
     setLoading(true);
     const q = new URLSearchParams({ file, level, q: debounced, lines: String(lines) });
     return api<{ lines: string[]; size: number }>(server, `/api/logs?${q}`)
-      .then((d) => { setData(d); setError(''); })
-      .catch((e) => setError((e as Error).message))
-      .finally(() => setLoading(false));
+      .then((d) => { if (seq === requestSeq.current) { setData(d); setError(''); } })
+      .catch((e) => { if (seq === requestSeq.current) setError((e as Error).message); })
+      .finally(() => { if (seq === requestSeq.current) setLoading(false); });
   }, [server, file, level, debounced, lines]);
   useEffect(() => { load(); }, [load]);
 

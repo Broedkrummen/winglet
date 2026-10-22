@@ -4,6 +4,7 @@ import Animated, { FadeIn } from 'react-native-reanimated';
 import { JobSheet } from '../components/JobSheet';
 import { CheckCircle2, CircleAlert, ExternalLink, Plug, RefreshCw, Search, Trash2 } from '../components/icons';
 import { Screen } from '../components/Screen';
+import { withSelectedServer } from '../components/ServerScreen';
 import { Sheet } from '../components/Sheet';
 import { Button, Card, ConfirmButton, Field, ListGroup, ListRow, LoadError, SearchField, SectionHeader, Skeleton, Toggle } from '../components/ui';
 import { matches, missingEnv, prettyName, serverPlace, shortDescription, signsIn } from '../lib/abilities';
@@ -19,7 +20,9 @@ const SIGN_IN_POLL_MS = 2000;
 const SIGN_IN_WAIT_MS = 10 * 60 * 1000;
 
 /** MCP servers connect your agent to other apps and services. */
-export default function McpScreen() {
+export default withSelectedServer(McpScreen);
+
+function McpScreen() {
   const t = useTheme();
   const s = useStyles();
   const server = useApp((st) => st.servers.find((x) => x.id === st.selection.serverId) ?? st.servers[0]);

@@ -8,14 +8,16 @@ import { Screen } from '../components/Screen';
 import { Sheet } from '../components/Sheet';
 import { Button, Card, Chip, ListGroup, ListRow, SectionHeader, Toggle } from '../components/ui';
 import { describeTestPush, enableNtfy, enableWebPush, openNtfySubscribe, sendTestPush, webPushServer, webPushState, type PushState } from '../lib/push';
-import { quietHours, usePushPrefs } from '../lib/pushPrefs';
+import { pushPrefsKey, quietHours, usePushPrefs } from '../lib/pushPrefs';
 import { homeChat, useApp } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
 import type { Server } from '../lib/types';
 
 /** Turn on notifications: Web Push in the web app, the free ntfy app on Android. */
 export default function NotificationsScreen() {
-  const servers = useApp((st) => st.servers);
+  const allServers = useApp((st) => st.servers);
+  // A device has one subscription and one set of quiet hours per Hermes server.
+  const servers = allServers.filter((server) => !server.parent);
   return (
     <Screen title="Notifications" subtitle="Get a nudge when a bot needs an approval, asks a question, or finishes something. Tapping a notification opens exactly that item.">
       {Platform.OS === 'web' ? <WebPushSettings servers={servers} /> : servers.map((srv) => <NtfySettings key={srv.id} server={srv} />)}
@@ -40,7 +42,7 @@ function QuietSettings({ server, named }: { server: Server; named: boolean }) {
   const s = useStyles();
   const supported = useApp((st) => !!st.runtime[server.id]?.info?.features?.mute);
   const chats = useApp((st) => st.runtime[server.id]?.chats);
-  const prefs = usePushPrefs((st) => st.byServer[server.id]);
+  const prefs = usePushPrefs((st) => st.byServer[pushPrefsKey(server)]);
   const [editing, setEditing] = useState<'start' | 'end' | null>(null);
   const [error, setError] = useState('');
 

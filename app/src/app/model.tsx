@@ -2,20 +2,23 @@ import { router } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Text, View } from 'react-native';
 import { Check } from '../components/icons';
-import { modelName } from '../lib/modelOptions';
+import { modelName, modelProviders } from '../lib/modelOptions';
 import { Screen } from '../components/Screen';
+import { withSelectedServer } from '../components/ServerScreen';
 import { Sheet } from '../components/Sheet';
-import { Button, Card, ListGroup, ListRow, LoadError, SearchField, SectionHeader, Skeleton } from '../components/ui';
+import { Button, Card, Chip, Field, ListGroup, ListRow, LoadError, SearchField, SectionHeader, Skeleton } from '../components/ui';
 import { api, signedApi } from '../lib/api';
 import { haptic } from '../lib/haptics';
 import { useApp } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
 
-type Options = { model: string; provider: string; providers: { slug: string; name: string; models: string[] }[] };
+type Options = { model: string; provider: string; providers: { slug: string; name: string; models: string[]; custom_models?: boolean }[] };
 type Result = { ok: boolean; confirm_required?: boolean; confirm_message?: string; model?: string; provider?: string };
 
 /** The model new chats start with. A chat can still switch on its own from its composer. */
-export default function ModelScreen() {
+export default withSelectedServer(ModelScreen);
+
+function ModelScreen() {
   const t = useTheme();
   const s = useStyles();
   const server = useApp((st) => st.servers.find((x) => x.id === st.selection.serverId) ?? st.servers[0]);
@@ -25,6 +28,8 @@ export default function ModelScreen() {
   const [confirm, setConfirm] = useState<{ provider: string; model: string; message: string } | null>(null);
   const [error, setError] = useState('');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [customProvider, setCustomProvider] = useState('');
+  const [customModel, setCustomModel] = useState('');
 
   const load = () => {
     if (!server) return;
@@ -40,10 +45,12 @@ export default function ModelScreen() {
       const result = await signedApi<Result>(server, 'PUT', '/api/models/default', { provider, model, ...(confirmed ? { confirm: true } : {}) });
       if (result.confirm_required) {
         setConfirm({ provider, model, message: result.confirm_message ?? '' });
-      } else {
+      } else if (result.ok) {
         haptic.success();
         setConfirm(null);
-        load();
+        await load();
+      } else {
+        throw new Error('The model was not changed. Try again.');
       }
     } catch (e) {
       // A toast, where you're looking: the screen's own error line is at the top of a long list.
@@ -55,9 +62,7 @@ export default function ModelScreen() {
   };
 
   const q = query.trim().toLowerCase();
-  const providers = useMemo(() => (options?.providers ?? []).map((p) => ({
-    ...p, models: q ? p.models.filter((m) => `${m} ${modelName(m)} ${p.name}`.toLowerCase().includes(q)) : p.models,
-  })).filter((p) => p.models.length), [options, q]);
+  const providers = useMemo(() => modelProviders({ providers: options?.providers, current_model: options?.model, current_provider: options?.provider }, q), [options, q]);
 
   return (
     <Screen title="Default model" subtitle="New chats start with this model. To change one conversation, tap the model name in its message box."
@@ -70,13 +75,26 @@ export default function ModelScreen() {
         </Card>
       ) : null}
       <SearchField value={query} onChangeText={setQuery} placeholder="Find a model" style={{ marginTop: 16 }} />
+      {options?.providers.length ? <>
+        <SectionHeader title="Custom model" />
+        <Card style={{ gap: 12 }}>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+            {options.providers.map((p) => <Chip key={p.slug} label={p.name}
+              selected={p.slug === (customProvider || options.provider || options.providers[0]?.slug)} onPress={() => setCustomProvider(p.slug)} />)}
+          </View>
+          <Field label="Model ID" value={customModel} onChangeText={setCustomModel} autoCapitalize="none" autoCorrect={false}
+            placeholder="Exact model ID, e.g. vendor/model-name" hint="Use any model supported by the selected provider, including models missing from its catalog." />
+          <Button title="Use custom model" variant="tonal" disabled={!!busy || !customModel.trim()} loading={!!busy && busy.endsWith(`/${customModel.trim()}`)}
+            onPress={() => set(customProvider || options.provider || options.providers[0].slug, customModel.trim())} />
+        </Card>
+      </> : null}
       {error && options ? <Text style={s.error}>{error}</Text> : null}
       {!options ? (error ? <LoadError message={error} onRetry={load} /> : (
         <View style={{ gap: 10, marginTop: 16 }}>{[0, 1, 2].map((i) => <Skeleton key={i} height={52} radius={16} />)}</View>
       )) : providers.length === 0 ? (
         <Card style={{ marginTop: 16, gap: 12 }}>
-          <Text style={s.note}>{q ? `No model matches “${query}”.` : 'No providers are set up yet. Add one with its API key.'}</Text>
-          {q ? null : <Button title="Add a provider" variant="tonal" size="sm" onPress={() => router.push('/providers')} />}
+          <Text style={s.note}>{q ? `No model matches “${query}”.` : options.providers.length ? 'No catalog models are available yet. Enter a custom model ID above.' : 'No providers are set up yet. Add one with its API key.'}</Text>
+          {q || options.providers.length ? null : <Button title="Add a provider" variant="tonal" size="sm" onPress={() => router.push('/providers')} />}
         </Card>
       ) : providers.map((p) => (
         <View key={p.slug}>

@@ -1,7 +1,7 @@
 name: winglet
 label: Winglet
 kind: platform
-version: 0.5.0
+version: 0.5.1
 description: >
   Winglet: your Hermes agents on your phone. Adds the Winglet mobile app as a
   messaging platform, with QR pairing, push notifications, and one-tap

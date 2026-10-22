@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import { Ban, KeyRound, ShieldCheck, Smartphone, UserPlus } from '../components/icons';
 import { Screen } from '../components/Screen';
+import { withSelectedServer } from '../components/ServerScreen';
 import { Button, Card, Skeleton } from '../components/ui';
 import { agoText } from '../lib/agent';
 import { api } from '../lib/api';
@@ -23,7 +24,9 @@ const LABELS: Record<string, string> = {
 };
 
 /** The server's record of control actions: who did what, when, and what was refused. Owners only. */
-export default function ActivityScreen() {
+export default withSelectedServer(ActivityScreen);
+
+function ActivityScreen() {
   const t = useTheme();
   const s = useStyles();
   const server = useApp((st) => st.servers.find((x) => x.id === st.selection.serverId) ?? st.servers[0]);

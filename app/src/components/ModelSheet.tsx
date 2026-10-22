@@ -4,7 +4,7 @@ import { ScrollView } from 'react-native-gesture-handler';
 import { sendHidden } from '../lib/actions';
 import { api } from '../lib/api';
 import { haptic } from '../lib/haptics';
-import { modelName } from '../lib/modelOptions';
+import { activeModel, modelName } from '../lib/modelOptions';
 import { useModelSheet } from '../lib/modelSheet';
 import { isOwner, useApp } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
@@ -49,18 +49,19 @@ export function ModelButton({ server, chatId, variant = 'compact', prepareChat }
     }
     return undefined;
   });
+  const lastReply = useApp((st) => st.runtime[server.id]?.lastReplyAt);
 
-  // Refresh after a choice, not twice for every open/close. A late response from another chat is ignored.
+  // Re-read after choices, completed replies and explicit opens. Ignore responses from a previous chat.
   useEffect(() => {
     if (!ready || !owner) return;
     let alive = true;
     api<AgentInfo>(server, prepareChat ? '/api/agent' : `/api/agent?chat=${encodeURIComponent(chatId)}`).then((i) => alive && setSnapshot({ key, info: i })).catch(() => undefined);
     return () => { alive = false; };
-  }, [server, chatId, key, ready, owner, picked, revision, prepareChat]);
+  }, [server, chatId, key, ready, owner, picked, revision, prepareChat, lastReply]);
 
   if (!ready || !owner) return null;
-  const model = (!prepareChat && info?.chat?.model) || info?.configured.model || '';
-  const show = () => { Keyboard.dismiss(); setMountedKey(key); setOpenKey(key); if (!info) refresh((n) => n + 1); };
+  const model = activeModel(info).model;
+  const show = () => { Keyboard.dismiss(); setMountedKey(key); setOpenKey(key); refresh((n) => n + 1); };
   return (
     <>
       <Tap feedback="selection" scaleTo={0.98} onPress={prepareChat ? async () => {
@@ -129,6 +130,7 @@ function ModelSheet({ server, chatId, visible, onClose, onDismiss, model, info, 
       useModelSheet.getState().clear(key);
       setAsked(false);
       setReasoningFailed(false);
+      setConfirmed(false);
       return;
     }
     if (openCard) setShownId(latest!.id);
@@ -179,7 +181,7 @@ function ModelSheet({ server, chatId, visible, onClose, onDismiss, model, info, 
     <Sheet visible={visible} onClose={onClose} onDismiss={onDismiss} title={showThinking ? 'Thinking' : 'Choose model'}>
       <ScrollView style={[s.scroll, { maxHeight: Math.min(380, windowHeight * 0.42) }]} contentContainerStyle={s.body} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
         <View style={s.now}>
-          <Text style={s.nowSub} numberOfLines={1}>{model ? modelName(model) : 'For this conversation'}{(p?.current_label || info?.chat?.provider || info?.configured.label) ? ` · ${p?.current_label || info?.chat?.provider || info?.configured.label}` : ''}</Text>
+          <Text style={s.nowSub} numberOfLines={1}>{model ? modelName(model) : 'For this conversation'}{activeModel(info).provider ? ` · ${activeModel(info).provider}` : ''}</Text>
         </View>
 
         {showThinking ? <Tap feedback="selection" onPress={() => setAsked(false)} style={s.backModels}>

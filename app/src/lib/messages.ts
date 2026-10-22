@@ -2,6 +2,14 @@ import type { Message } from './types';
 
 const isLocal = (m: Message) => m.status === 'pending' || m.status === 'queued' || m.status === 'failed';
 
+/** Only completed answers produce chat alerts. Inbox cards have their own alert. */
+export function isNotifiable(m: Message): boolean {
+  const meta = m.meta ?? {};
+  return m.role === 'bot' && m.status === 'final' && meta.notify !== false
+    && !meta.hidden && !meta.picker && !meta.inbox_id && !meta.activity && !meta.status_key && !meta.routine
+    && !activityKind(m) && !!(m.text.trim() || meta.attachments?.length);
+}
+
 /**
  * Preserve newer live replies and older pages while applying durable deletions from history or the
  * socket. Server insertion positions, rather than timestamps, determine history and paging order.

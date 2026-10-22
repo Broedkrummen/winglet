@@ -14,6 +14,22 @@ KINDS = SimpleNamespace(TEXT="text", COMMAND="command", PHOTO="photo", VOICE="vo
                         VIDEO="video", AUDIO="audio")
 
 
+async def test_model_picker_merges_the_full_catalog_without_truncating(adapter, monkeypatch):
+    adapter._hub.store.ensure_chat("general", "General")
+    models = [f"vendor/model-{i}" for i in range(500)]
+    monkeypatch.setattr(adapter.module.hermes_api, "model_options", lambda: {"providers": [
+        {"slug": "openrouter", "name": "OpenRouter", "authenticated": True, "models": models}]})
+
+    async def choose(*args):
+        return "Changed."
+
+    result = await adapter.send_model_picker("general", [{"slug": "openrouter", "models": models[:50]}],
+                                             models[-1], "openrouter", "session", choose)
+    picker = adapter._hub.store.get_message(result.message_id)["meta"]["picker"]
+    assert picker["providers"][0]["models"] == models
+    assert picker["providers"][0]["custom_models"] is True
+
+
 class Event(SimpleNamespace):
     def __init__(self, **kw):
         super().__init__(media_urls=[], media_types=[], reply_to_message_id=None, reply_to_text=None, **kw)

@@ -218,6 +218,10 @@ def chat_model(runner, session_key: str) -> Optional[dict]:
     """The model a chat is really using, when Hermes knows: a /model switch for this chat, or the
     model its last turn resolved to (a fallback can change it). None means "the configured one"."""
     try:
+        cached = getattr(runner, "_cached_agent_for", None)
+        agent = cached(session_key) if callable(cached) else None
+        if agent is not None and isinstance(getattr(agent, "model", None), str) and agent.model:
+            return {"model": agent.model, "provider": str(getattr(agent, "provider", "") or ""), "source": "last_turn"}
         override = (getattr(runner, "_session_model_overrides", None) or {}).get(session_key)
         if isinstance(override, dict) and override.get("model"):
             return {"model": str(override["model"]), "provider": str(override.get("provider") or ""), "source": "chat"}
@@ -239,12 +243,13 @@ def model_options(include_unconfigured: bool = False) -> dict:
     payload = build_model_options_payload(load_picker_context(), include_unconfigured=include_unconfigured)
     providers = []
     for p in payload.get("providers") or []:
-        models = [m if isinstance(m, str) else str((m or {}).get("id") or "") for m in (p.get("models") or [])][:80]
+        models = list(dict.fromkeys(m if isinstance(m, str) else str((m or {}).get("id") or "")
+                                    for m in (p.get("models") or [])))
         providers.append({"slug": p.get("slug", ""), "name": p.get("name") or p.get("slug", ""),
                           "authenticated": bool(p.get("authenticated")), "is_current": bool(p.get("is_current")),
                           "auth_type": p.get("auth_type", ""), "key_env": p.get("key_env", ""),
                           "models": [m for m in models if m], "total_models": p.get("total_models") or len(models),
-                          "warning": p.get("warning", "")})
+                          "warning": p.get("warning", ""), "custom_models": True})
     return {"model": payload.get("model", ""), "provider": payload.get("provider", ""), "providers": providers}
 
 

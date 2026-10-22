@@ -73,6 +73,8 @@ export type Message = {
     status_key?: string;
     /** A command the app sent for a control (/model and /reasoning from the model sheet); not shown in the chat. */
     hidden?: boolean;
+    /** Internal controls and progress stay silent, including after edits. */
+    notify?: boolean;
     /** A choice the agent offers: a model, a setting, or a command to confirm. */
     picker?: Picker;
     /** The routine (scheduled job) whose result this is. */
@@ -143,7 +145,7 @@ export type Picker = {
   current_model?: string;
   current_provider?: string;
   current_label?: string;
-  providers?: { slug: string; name: string; models: string[] }[];
+  providers?: { slug: string; name: string; models: string[]; custom_models?: boolean }[];
   choices?: { value: string; label: string; current?: boolean }[];
   detail?: string;
   selected?: string;

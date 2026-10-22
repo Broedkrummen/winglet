@@ -48,7 +48,7 @@ export function useAddBot(): { open: () => void; sheet: ReactNode } {
   const open = useCallback(() => setVisible(true), []);
   const close = () => setVisible(false);
   const sheet = (
-    <Sheet visible={visible} onClose={close} title="Add a bot">
+    <Sheet visible={visible} onClose={close} title="Add a bot" scrollable>
       <ListGroup style={{ marginBottom: 12 }}>
         <ListRow icon={<Bot size={18} color={canMake ? t.colors.success : t.colors.textTertiary} />} iconColor={canMake ? t.colors.success : undefined}
           title="Create a new bot"

@@ -4,7 +4,7 @@ import { Text, View } from 'react-native';
 import { exportChat } from '../lib/exportChat';
 import { chatKey, changeChatOrganization } from '../lib/chatOrganization';
 import { usePrefs } from '../lib/prefs';
-import { mutedUntil, usePushPrefs } from '../lib/pushPrefs';
+import { mutedUntil, pushPrefsKey, usePushPrefs } from '../lib/pushPrefs';
 import { homeChat, useApp } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
 import type { Server } from '../lib/types';
@@ -39,7 +39,7 @@ export function ChatMenu({ server, chatId, title, visible, onClose, onGoal, hasG
   const renameChat = useApp((st) => st.renameChat);
   const deleteChat = useApp((st) => st.deleteChat);
   const features = useApp((st) => st.runtime[server.id]?.info?.features);
-  const prefs = usePushPrefs((st) => st.byServer[server.id]);
+  const prefs = usePushPrefs((st) => st.byServer[pushPrefsKey(server)]);
   const organization = usePrefs((st) => st.prefs);
   const key = chatKey(server.id, chatId);
   const pinned = organization.pinnedChats.includes(key);

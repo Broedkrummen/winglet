@@ -70,6 +70,7 @@ export default function RootLayout() {
   useEffect(() => {
     if (Platform.OS === 'web') {
       const onVis = () => setForeground(document.visibilityState === 'visible');
+      onVis();
       document.addEventListener('visibilitychange', onVis);
       return () => document.removeEventListener('visibilitychange', onVis);
     }

@@ -4,6 +4,7 @@ import { Text, View } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { MessageSquareText, Pin, Search } from '../components/icons';
 import { Screen } from '../components/Screen';
+import { withSelectedServer } from '../components/ServerScreen';
 import { Button, LoadError, SearchField, Skeleton, Tap } from '../components/ui';
 import { ago } from '../lib/agent';
 import { api } from '../lib/api';
@@ -15,7 +16,9 @@ import type { SessionRow } from '../lib/types';
 const PAGE = 30;
 
 /** Every conversation the agent has had, in any app or routine: browse, search, and read them. */
-export default function SessionsScreen() {
+export default withSelectedServer(SessionsScreen);
+
+function SessionsScreen() {
   const t = useTheme();
   const s = useStyles();
   const server = useApp((st) => st.servers.find((x) => x.id === st.selection.serverId) ?? st.servers[0]);

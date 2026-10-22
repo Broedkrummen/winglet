@@ -303,6 +303,51 @@ async def test_bot_reply_pushes_only_when_app_is_closed(client, hub, monkeypatch
     assert payload["topic"] == "t" and "while closed" not in payload["message"]  # generic text only
 
 
+async def test_streaming_and_internal_edits_notify_only_once_when_finished(client, hub, monkeypatch):
+    monkeypatch.setattr("plugin.hub.PUSH_DEBOUNCE_SECONDS", 0.01)
+    device, _ = hub.store.add_device("Phone")
+    hub.store.add_push_sub(device["id"], "ntfy", "https://ntfy.sh/t", {"server": "https://ntfy.sh", "topic": "t"})
+    message = await hub.post_message("general", "partial", status="streaming")
+    await asyncio.sleep(0.05)
+    assert hub._http.posts == []
+    await hub.edit_message(message["id"], "still partial")
+    await asyncio.sleep(0.05)
+    assert hub._http.posts == []
+    await hub.edit_message(message["id"], "Finished answer.", final=True)
+    await asyncio.sleep(0.4)
+    assert len(hub._http.posts) == 1
+    await hub.edit_message(message["id"], "Finished answer.", final=True)
+    silent = await hub.post_message("general", "Internal", push=False)
+    await hub.edit_message(silent["id"], "Internal updated", final=True)
+    await hub.post_message("general", "🔍 web_search: cats")
+    await hub.post_message("general", "🔍 Searching the web for cats")
+    await asyncio.sleep(0.4)
+    assert len(hub._http.posts) == 1
+
+
+async def test_an_open_phone_does_not_silence_other_devices(client, hub):
+    token = await pair(client, hub)
+    second, _ = hub.store.add_device("Other phone")
+    hub.store.add_push_sub(second["id"], "ntfy", "https://ntfy.sh/other", {"server": "https://ntfy.sh", "topic": "other"})
+    ws = await client.ws_connect(f"/api/ws?token={token}")
+    await ws.receive_json()
+    await hub.post_message("general", "Finished.")
+    await asyncio.sleep(0.4)
+    assert len(hub._http.posts) == 1
+    await ws.close()
+
+
+async def test_replaying_an_older_reply_after_a_newer_reply_does_not_notify_again(client, hub, monkeypatch):
+    device, _ = hub.store.add_device("Phone")
+    hub.store.add_push_sub(device["id"], "ntfy", "https://ntfy.sh/t", {"server": "https://ntfy.sh", "topic": "t"})
+    monkeypatch.setattr(hub, "schedule_push", lambda *args, **kwargs: None)
+    older = await hub.post_message("general", "First answer")
+    newer = await hub.post_message("general", "Second answer")
+    for message in (older, newer, older):
+        await hub._delayed_push("general", message["id"], 0)
+    assert len(hub._http.posts) == 2
+
+
 async def test_static_serving_and_spa_fallback(client, hub):
     root = hub.web_root
     root.mkdir()

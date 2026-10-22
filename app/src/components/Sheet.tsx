@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Keyboard, Modal, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
-import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
+import { Gesture, GestureDetector, GestureHandlerRootView, ScrollView } from 'react-native-gesture-handler';
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLock } from '../lib/appLock';
@@ -14,8 +14,9 @@ import { X } from './icons';
  * A bottom sheet: springs up, drags down to dismiss, closes on the backdrop or the back button.
  * On wide screens it becomes a centred dialog.
  */
-export function Sheet({ visible, onClose, onDismiss, title, children }: {
+export function Sheet({ visible, onClose, onDismiss, title, children, scrollable = false }: {
   visible: boolean; onClose: () => void; onDismiss?: () => void; title?: string; children: ReactNode;
+  scrollable?: boolean;
 }) {
   const t = useTheme();
   const s = useStyles();
@@ -77,7 +78,8 @@ export function Sheet({ visible, onClose, onDismiss, title, children }: {
                     </View>
                   </View>
                 </GestureDetector>
-                <View style={s.content}>{children}</View>
+                {scrollable ? <ScrollView style={s.content} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">{children}</ScrollView>
+                  : <View style={s.content}>{children}</View>}
               </Glass>
             </Animated.View>
         </View>

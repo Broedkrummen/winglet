@@ -7,6 +7,7 @@ import { Check, Download, PawPrint, Search, Trash2 } from '../components/icons';
 import { JobSheet } from '../components/JobSheet';
 import { PetSprite } from '../components/PetSprite';
 import { Screen } from '../components/Screen';
+import { withSelectedServer } from '../components/ServerScreen';
 import { Sheet } from '../components/Sheet';
 import { Button, Card, Chip, ConfirmButton, Field, ListGroup, ListRow, SectionHeader, Skeleton, Tap, Toggle } from '../components/ui';
 import { api, ApiError, mediaUrl, signedApi } from '../lib/api';
@@ -22,7 +23,9 @@ const TILE_GAP = 10;
 type Picked = { pet: InstalledPet | CatalogPet; installed: boolean };
 
 /** The agent's pet: its animated face on every phone, picked from the petdex gallery. */
-export default function PetsScreen() {
+export default withSelectedServer(PetsScreen);
+
+function PetsScreen() {
   const t = useTheme();
   const s = useStyles();
   const server = useApp((st) => st.servers.find((x) => x.id === st.selection.serverId) ?? st.servers[0]);

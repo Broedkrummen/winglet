@@ -1,12 +1,16 @@
 """Your agent from the phone: pickers, the model, provider keys, persona, memory and usage."""
 
+import asyncio
 import json
 import time
+from types import ModuleType, SimpleNamespace
+import sys
 
 import pytest
 
 from plugin.hub import Hub
 from plugin.store import Store
+from plugin import hermes_api
 from test_trust import pair_phone, post_signed, seal
 
 
@@ -16,6 +20,29 @@ class Refused(ValueError):
 
 class Unavailable(RuntimeError):
     pass
+
+
+def test_inventory_keeps_all_models_and_empty_configured_endpoints(monkeypatch):
+    inventory = ModuleType("hermes_cli.inventory")
+    models = [f"vendor/model-{i}" for i in range(500)]
+    inventory.load_picker_context = lambda: None
+    inventory.build_model_options_payload = lambda *args, **kwargs: {"providers": [
+        {"slug": "openrouter", "authenticated": True, "models": [{"id": m} for m in models]},
+        {"slug": "custom:local", "authenticated": True, "models": []}]}
+    monkeypatch.setitem(sys.modules, "hermes_cli.inventory", inventory)
+    payload = hermes_api.model_options.__wrapped__()
+    assert payload["providers"][0]["models"] == models
+    assert payload["providers"][1]["custom_models"] is True
+
+
+def test_current_runtime_model_is_reported_after_an_agent_fallback():
+    runner = SimpleNamespace(
+        _session_model_overrides={"chat": {"model": "deepseek/selected", "provider": "openrouter"}},
+        _cached_agent_for=lambda key: SimpleNamespace(model="z-ai/glm-fallback", provider="openrouter") if key == "chat" else None,
+        _last_resolved_model={"*": "some-other-bots-model"},
+    )
+    assert hermes_api.chat_model(runner, "chat")["model"] == "z-ai/glm-fallback"
+    assert hermes_api.chat_model(runner, "new-chat") is None
 
 
 class FakeHermes:
@@ -134,6 +161,96 @@ async def test_model_picker_switches_through_hermes_and_closes_the_card(client, 
     assert calls == [("general", "claude-y", "anthropic")]
     # One answer per card.
     assert (await client.post(path, json={"provider": "anthropic", "model": "claude-x"}, headers=owner.auth)).status == 410
+
+
+async def test_custom_models_are_allowed_only_for_an_offered_provider(client, hub):
+    owner = await pair_phone(client, hub)
+    calls = []
+    hub.chat_model = None
+
+    async def choose(chat, model, provider):
+        calls.append((chat, model, provider))
+        return "Model updated."
+
+    message = await hub.post_picker("general", "model", "Choose", {"providers": [
+        {"slug": "openrouter", "name": "OpenRouter", "models": ["first"], "custom_models": True}]}, choose)
+    path = f"/api/pickers/{message['meta']['picker']['id']}/select"
+    for provider, model in [("other", "custom/model"), ("openrouter", ""), ("openrouter", "bad\nmodel")]:
+        assert (await client.post(path, json={"provider": provider, "model": model}, headers=owner.auth)).status == 400
+    resp = await client.post(path, json={"provider": "openrouter", "model": "vendor/custom-model:free"}, headers=owner.auth)
+    assert resp.status == 200
+    assert calls == [("general", "vendor/custom-model:free", "openrouter")]
+
+
+async def test_picker_failure_does_not_claim_success_and_can_be_retried(client, hub):
+    owner = await pair_phone(client, hub)
+    calls = []
+
+    async def choose(chat, value):
+        calls.append(value)
+        if len(calls) == 1:
+            raise RuntimeError("temporary failure")
+        return "Changed."
+
+    message = await hub.post_picker("general", "choice", "Choose", {"choices": [{"value": "high"}]}, choose)
+    path = f"/api/pickers/{message['meta']['picker']['id']}/select"
+    assert (await client.post(path, json={"value": "high"}, headers=owner.auth)).status == 502
+    assert hub.store.get_message(message["id"])["meta"]["picker"]["status"] == "open"
+    assert (await client.post(path, json={"value": "high"}, headers=owner.auth)).status == 200
+
+
+async def test_a_concurrent_picker_tap_cannot_expire_an_inflight_selection(client, hub):
+    owner = await pair_phone(client, hub)
+    started, finish = asyncio.Event(), asyncio.Event()
+
+    async def choose(chat, value):
+        started.set()
+        await finish.wait()
+        return "Changed."
+
+    message = await hub.post_picker("general", "choice", "Choose", {"choices": [{"value": "high"}]}, choose)
+    path = f"/api/pickers/{message['meta']['picker']['id']}/select"
+    first = asyncio.ensure_future(client.post(path, json={"value": "high"}, headers=owner.auth))
+    await asyncio.wait_for(started.wait(), 2)
+    assert (await client.post(path, json={"value": "high"}, headers=owner.auth)).status == 409
+    assert hub.store.get_message(message["id"])["meta"]["picker"]["status"] == "open"
+    finish.set()
+    assert (await first).status == 200
+    assert hub.store.get_message(message["id"])["meta"]["picker"]["status"] == "done"
+
+
+async def test_hermes_error_reply_leaves_the_actual_model_and_card_unchanged(client, hub):
+    owner = await pair_phone(client, hub)
+
+    async def choose(*args):
+        return "Provider rejected this model."
+
+    message = await hub.post_picker("general", "model", "Choose", {"providers": [
+        {"slug": "anthropic", "models": ["claude-x"]}]}, choose)
+    path = f"/api/pickers/{message['meta']['picker']['id']}/select"
+    resp = await client.post(path, json={"provider": "anthropic", "model": "claude-x"}, headers=owner.auth)
+    assert resp.status == 400 and "rejected" in (await resp.json())["error"]
+    assert hub.store.get_message(message["id"])["meta"]["picker"]["status"] == "open"
+
+
+@pytest.mark.parametrize("current,provider,model", [
+    ({"model": "shared-model", "provider": "first"}, "second", "shared-model"),
+    ({"model": "vendor-a/shared", "provider": "openrouter"}, "openrouter", "vendor-b/shared"),
+    (None, "openrouter", "missing/model"),
+])
+async def test_failed_route_changes_cannot_claim_a_different_provider_or_vendor(client, hub, current, provider, model):
+    owner = await pair_phone(client, hub)
+    hub.chat_model = lambda chat: current
+
+    async def choose(*args):
+        return "Provider rejected the route."
+
+    message = await hub.post_picker("general", "model", "Choose", {"providers": [
+        {"slug": provider, "models": [model]}]}, choose)
+    path = f"/api/pickers/{message['meta']['picker']['id']}/select"
+    response = await client.post(path, json={"provider": provider, "model": model}, headers=owner.auth)
+    assert response.status == 400
+    assert hub.store.get_message(message["id"])["meta"]["picker"]["status"] == "open"
 
 
 async def test_choice_and_confirm_pickers_hand_back_the_value(client, hub):

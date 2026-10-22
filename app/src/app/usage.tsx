@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { shortModel } from '../components/PickerCard';
 import { Screen } from '../components/Screen';
+import { withSelectedServer } from '../components/ServerScreen';
 import { Card, LoadError, SectionHeader, Segmented, Skeleton } from '../components/ui';
 import { api } from '../lib/api';
 import { useApp } from '../lib/store';
@@ -20,7 +21,9 @@ const money = (n: number) => n === 0 ? '$0' : n < 0.01 ? '<$0.01' : `$${n.toFixe
 const tokens = (r: Row) => (r.input_tokens ?? 0) + (r.output_tokens ?? 0);
 
 /** Tokens and estimated cost, per day and per model, from Hermes's own session records. */
-export default function UsageScreen() {
+export default withSelectedServer(UsageScreen);
+
+function UsageScreen() {
   const s = useStyles();
   const server = useApp((st) => st.servers.find((x) => x.id === st.selection.serverId) ?? st.servers[0]);
   const [days, setDays] = useState<'7' | '30' | '90'>('30');

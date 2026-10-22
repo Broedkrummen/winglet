@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import { CheckCircle2, Key, Plug } from '../components/icons';
 import { Screen } from '../components/Screen';
+import { withSelectedServer } from '../components/ServerScreen';
 import { Sheet } from '../components/Sheet';
 import { Button, ConfirmButton, Field, ListGroup, ListRow, LoadError, SectionHeader, Skeleton } from '../components/ui';
 import { api, serverKey, signedApi } from '../lib/api';
@@ -14,7 +15,9 @@ type Provider = { slug: string; name: string; authenticated: boolean; is_current
   total_models: number; warning: string };
 
 /** Where models come from: which providers are ready, and adding or removing an API key. */
-export default function ProvidersScreen() {
+export default withSelectedServer(ProvidersScreen);
+
+function ProvidersScreen() {
   const t = useTheme();
   const s = useStyles();
   const server = useApp((st) => st.servers.find((x) => x.id === st.selection.serverId) ?? st.servers[0]);
@@ -85,7 +88,7 @@ function KeySheet({ provider, onClose, onSaved }: { provider: Provider | null; o
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [last, setLast] = useState<Provider | null>(provider);
-  if (provider && provider !== last) setLast(provider);
+  if (provider && provider !== last) { setLast(provider); setValue(''); setError(''); }
   const p = provider ?? last;
   const close = () => { setValue(''); setError(''); onClose(); };
 
@@ -127,7 +130,7 @@ function KeySheet({ provider, onClose, onSaved }: { provider: Provider | null; o
 
   if (!p) return null;
   return (
-    <Sheet visible={!!provider} onClose={close} title={p.name}>
+    <Sheet visible={!!provider} onClose={close} title={p.name} scrollable>
       <View style={{ gap: 14, paddingHorizontal: 4 }}>
         <Field value={value} onChangeText={setValue} placeholder={p.authenticated ? 'Paste a new key to replace it' : `Paste your ${p.name} API key`}
           secureTextEntry autoCapitalize="none" autoCorrect={false} hint={`Saved on your server as ${p.key_env}. It's checked with ${p.name} first.`} />

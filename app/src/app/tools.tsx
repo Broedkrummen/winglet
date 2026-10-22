@@ -3,6 +3,7 @@ import { Text, View } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { Plug, ShieldAlert, TriangleAlert } from '../components/icons';
 import { Screen } from '../components/Screen';
+import { withSelectedServer } from '../components/ServerScreen';
 import { Sheet } from '../components/Sheet';
 import { Button, ListGroup, ListRow, LoadError, SectionHeader, Segmented, Skeleton, Toggle } from '../components/ui';
 import { shortDescription } from '../lib/abilities';
@@ -19,7 +20,9 @@ const MODES: { value: ApprovalMode; label: string; about: string }[] = [
 ];
 
 /** What the agent can use when it works through Winglet, how risky commands get approved, and what members get. */
-export default function ToolsScreen() {
+export default withSelectedServer(ToolsScreen);
+
+function ToolsScreen() {
   const t = useTheme();
   const s = useStyles();
   const server = useApp((st) => st.servers.find((x) => x.id === st.selection.serverId) ?? st.servers[0]);

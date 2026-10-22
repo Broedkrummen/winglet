@@ -299,7 +299,7 @@ export function Skeleton({ width, height = 14, radius = 8, style }: { width?: nu
 export function Card({ children, style, onPress, accessibilityLabel }: { children: ReactNode; style?: StyleProp<ViewStyle>; onPress?: () => void; accessibilityLabel?: string }) {
   const s = useStyles();
   const t = useTheme();
-  if (!onPress) return <View style={[s.card, style]}>{children}</View>;
+  if (!onPress) return <View style={[s.card, style]} accessibilityLabel={accessibilityLabel}>{children}</View>;
   return (
     <Tap feedback="selection" scaleTo={0.98} onPress={onPress} accessibilityLabel={accessibilityLabel}
       style={({ hovered }) => [s.card, hovered && { borderColor: t.colors.borderStrong }, style]}>

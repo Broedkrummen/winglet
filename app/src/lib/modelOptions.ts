@@ -15,12 +15,24 @@ export function modelName(id: string): string {
       (word) => /^(gpt|glm)$/i.test(word) ? word.toUpperCase() : word[0].toUpperCase() + word.slice(1).toLowerCase());
 }
 
-export function isCurrentModel(picker: Picker, provider: string, model: string): boolean {
-  return provider === picker.current_provider && !!picker.current_model && shortModel(model) === shortModel(picker.current_model);
+type ModelSelection = Pick<Picker, 'providers' | 'current_model' | 'current_provider'>;
+
+export function isCurrentModel(picker: ModelSelection, provider: string, model: string): boolean {
+  if (provider !== picker.current_provider || !picker.current_model) return false;
+  // Exact vendor IDs disambiguate snapshots and same-named models on aggregators.
+  if (model === picker.current_model) return true;
+  if (model.includes('/') && picker.current_model.includes('/')) return false;
+  return shortModel(model) === shortModel(picker.current_model);
+}
+
+/** Prefer this chat's resolved model; never borrow another chat's provider label. */
+export function activeModel(info: import('./types').AgentInfo | null | undefined) {
+  if (info?.chat?.model) return { model: info.chat.model, provider: info.chat.provider || '', source: info.chat.source };
+  return { model: info?.configured.model || '', provider: info?.configured.label || info?.configured.provider || '', source: 'default' };
 }
 
 /** Current provider/model first; search both readable names and exact ids without changing either. */
-export function modelProviders(picker: Picker, query = '') {
+export function modelProviders(picker: ModelSelection, query = '') {
   const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
   return (picker.providers ?? []).map((provider) => ({
     ...provider,

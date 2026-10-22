@@ -7,6 +7,7 @@ import {
   CalendarClock, Check, CircleAlert, CircleArrowUp, CirclePause, CircleHelp, RefreshCw, RotateCw, ScrollText, ShieldCheck,
 } from '../components/icons';
 import { Screen } from '../components/Screen';
+import { withSelectedServer } from '../components/ServerScreen';
 import { Sheet } from '../components/Sheet';
 import { Button, Card, ListGroup, ListRow, SectionHeader, Skeleton, Toggle } from '../components/ui';
 import { VerifyNotice } from '../components/VerifyPhone';
@@ -26,7 +27,9 @@ const JOB_LABEL: Record<Job['kind'], string> = {
 };
 
 /** The machine your agent runs on: how it's doing, and the few controls that keep it running. */
-export default function ServerScreen() {
+export default withSelectedServer(ServerScreen);
+
+function ServerScreen() {
   const t = useTheme();
   const s = useStyles();
   const server = useApp((st) => st.servers.find((x) => x.id === st.selection.serverId) ?? st.servers[0]);

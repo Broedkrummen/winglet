@@ -5,7 +5,7 @@ import { RecoveryCoordinator } from './recovery';
 import { sound } from './sounds';
 import { api, ApiError, wsUrl } from './api';
 import { cacheGet, cacheRemove, cacheSet } from './cache';
-import { activityKind, markFailed, mergeMessages } from './messages';
+import { isNotifiable, markFailed, mergeMessages } from './messages';
 import { getJSON, setJSON } from './storage';
 import { NEEDS_VERIFY } from './verify';
 import type { Attachment, BotRow, Chat, ConnStatus, DraftFile, InboxItem, Job, Me, Message, PauseState, PetSheet, ReplyRef, Server, ServerInfo } from './types';
@@ -296,6 +296,7 @@ export const useApp = create<AppState>((set, get) => {
       case 'message.new':
       case 'message.update': {
         const m = ev.message as Message;
+        const before = get().runtime[serverId]?.messages[ev.chat_id]?.find((x) => x.id === m.id);
         upsertMessage(serverId, ev.chat_id, m);
         const clientId = m.meta?.client_id;
         if (m.role === 'user' && clientId && get().runtime[serverId]?.outbox.some((o) => o.client_id === clientId)) {
@@ -306,7 +307,8 @@ export const useApp = create<AppState>((set, get) => {
         const seeing = get().foreground && vis?.serverId === serverId && vis.chatId === ev.chat_id;
         // A reply ends the bot's turn. Its tool-progress bubbles arrive as final messages too, but it's still
         // working: Hermes only re-sends "typing" a moment later, and the chat shouldn't flicker in between.
-        if (m.role === 'bot' && m.status === 'final' && !m.meta?.picker && !m.meta?.hidden && !activityKind(m)) {
+        const finished = isNotifiable(m) && (!before || before.status === 'streaming') && (!before || m.updated_at >= before.updated_at);
+        if (finished) {
           const wasTyping = !!get().runtime[serverId]?.typing[ev.chat_id];
           patch(serverId, (s) => {
             const typing = { ...s.typing };
@@ -316,8 +318,7 @@ export const useApp = create<AppState>((set, get) => {
           // Once per turn, and only where you can see it land (elsewhere it toasts).
           if (wasTyping && seeing) sound.reply();
         }
-        const setting = m.meta?.picker?.kind === 'model' || m.meta?.picker?.kind === 'choice';
-        if (ev.type === 'message.new' && m.role === 'bot' && !m.meta?.hidden && !setting && !seeing && server) {
+        if (finished && !seeing && get().foreground && server) {
           const chat = get().runtime[serverId]?.chats[ev.chat_id];
           toast({ serverId, title: `${server.bot.title}${chat && chat.kind === 'chat' ? ` · ${chat.title}` : ''}`,
             body: m.text.slice(0, 140) || 'Sent an attachment', href: `/chat/${serverId}/${ev.chat_id}` });
@@ -362,7 +363,7 @@ export const useApp = create<AppState>((set, get) => {
         patch(serverId, (s) => ({ inbox: { ...s.inbox, [item.id]: item }, pending: ev.pending ?? s.pending }));
         // A member can't answer approvals; the card in their chat already says it's waiting for an owner.
         const actionable = item.kind !== 'result' && (item.kind !== 'approval' || isOwner(get().runtime[serverId]));
-        if (ev.type === 'inbox.new' && actionable && server) {
+        if (ev.type === 'inbox.new' && actionable && item.status === 'pending' && get().foreground && server) {
           if (get().foreground) sound.needsYou();
           toast({ serverId, title: `${server.bot.title} · ${item.title}`, body: item.body.slice(0, 140),
             href: `/inbox?server=${encodeURIComponent(serverId)}&item=${encodeURIComponent(item.id)}` });
@@ -554,7 +555,7 @@ export const useApp = create<AppState>((set, get) => {
     setVisibleChat: (v) => set({ visibleChat: v }),
 
     setForeground: (fg) => {
-      set({ foreground: fg });
+      set({ foreground: fg, ...(!fg ? { toasts: [] } : {}) });
       coordinator.setForeground(fg);
       connections.forEach((c) => c.presence(fg));
       if (fg) connections.forEach((c) => c.ensureOpen());

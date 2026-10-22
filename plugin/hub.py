@@ -41,7 +41,7 @@ from .store import ROLES, Store, new_id
 
 logger = logging.getLogger(__name__)
 
-VERSION = "0.4.0"
+VERSION = "0.5.1"
 # Wire protocol: bumped only for breaking changes. The app compares these to its own and asks for
 # whichever side is out of date to be updated.
 PROTOCOL = 2
@@ -62,7 +62,7 @@ SIGN_IN_PAGE = ("<!doctype html><meta charset=utf-8><meta name=viewport content=
                 "<meta name=color-scheme content='light dark'>"
                 "<title>Winglet</title><body style='font:17px system-ui;margin:40px 24px;text-align:center'>"
                 "<h2>{title}</h2><p>{body}</p>")
-PUSH_DEBOUNCE_SECONDS = 2.5
+PUSH_DEBOUNCE_SECONDS = 0.3
 MAX_TEXT = 16_000
 PUSH_SUBJECT = "https://github.com/VIKASRP24/winglet"
 PAIR_FAILURES_PER_MINUTE = 10
@@ -216,6 +216,7 @@ class Hub:
         self._http = http_client
         self._sockets: Dict[web.WebSocketResponse, Dict[str, Any]] = {}
         self._push_tasks: Dict[str, asyncio.Task] = {}
+        self._pushed_messages: Dict[str, None] = {}
         self._typing: Set[str] = set()
         self._pair_failures: Dict[str, List[float]] = {}
         self._alive_cache: Dict[str, tuple] = {}
@@ -1345,10 +1346,12 @@ class Hub:
 
     async def post_message(self, chat_id: str, text: str, *, role: str = "bot", status: str = "final",
                            meta: Optional[Dict[str, Any]] = None, push: bool = True) -> Dict[str, Any]:
+        if not push:
+            meta = {**(meta or {}), "notify": False}
         message = self.store.add_message(chat_id, role, text, status=status, meta=meta)
         await self.broadcast({"type": "message.new", "chat_id": chat_id, "message": message})
         await self.broadcast({"type": "chat.update", "chat": self.store.get_chat(chat_id)})
-        if push and role == "bot":
+        if push and self._notifiable(message):
             self.schedule_push(chat_id, message["id"], final=status == "final")
         return message
 
@@ -1357,7 +1360,7 @@ class Hub:
         if message is None:
             return None
         await self.broadcast({"type": "message.update", "chat_id": message["chat_id"], "message": message})
-        if message["role"] == "bot":
+        if self._notifiable(message):
             self.schedule_push(message["chat_id"], message_id, final=final)
         return message
 
@@ -1706,6 +1709,8 @@ class Hub:
         meta = dict(message["meta"])
         meta["picker"] = {**meta["picker"], **change}
         updated = self.store.update_message(message_id, text if text is not None else message["text"], meta=meta)
+        if updated is None:
+            return None
         await self.broadcast({"type": "message.update", "chat_id": updated["chat_id"], "message": updated})
         return updated
 
@@ -1725,12 +1730,15 @@ class Hub:
         message = self.store.get_message(entry["message_id"])
         if message is None or not self.can_see(device, self.store.get_chat(entry["chat_id"])):
             return _error(404, "no such picker")
+        if entry.get("busy"):
+            return _error(409, "This choice is being applied. Wait a moment.")
         picker = message["meta"]["picker"]
         kind = entry["kind"]
         if kind == "model":
-            provider, model = str(body.get("provider") or ""), str(body.get("model") or "")
+            provider, model = str(body.get("provider") or "").strip(), str(body.get("model") or "").strip()
             allowed = {(p.get("slug"), m) for p in picker.get("providers") or [] for m in p.get("models") or []}
-            if (provider, model) not in allowed:
+            custom = any(p.get("slug") == provider and p.get("custom_models") for p in picker.get("providers") or [])
+            if (provider, model) not in allowed and not (custom and model and len(model) <= 512 and not any(c.isspace() or ord(c) < 32 for c in model)):
                 return _error(400, "pick one of the models offered")
             args, label = (entry["chat_id"], model, provider), model
         else:
@@ -1739,12 +1747,29 @@ class Hub:
             if value not in choices:
                 return _error(400, "pick one of the options offered")
             args, label = ((entry["chat_id"], value) if kind == "choice" else (value,)), choices[value]
-        self._pickers.pop(picker_id, None)  # one answer per card
+        entry["busy"] = True  # retain it while applying, so another device cannot expire this card
+        previous = self.chat_model(entry["chat_id"]) if kind == "model" and self.chat_model is not None else None
         try:
             reply = await entry["callback"](*args)
-        except Exception:
+        except Exception as exc:
             logger.warning("[winglet] picker callback failed", exc_info=True)
-            reply = "That didn't work. Try the command again."
+            # Leave the card answerable after a failure, without racing a second tap
+            # while the callback is running. Do not show a successful selection.
+            entry["busy"] = False
+            refused = self.hermes is not None and isinstance(exc, self.hermes.HermesRefused)
+            return _error(400 if refused else 502, str(exc) if refused else "That didn't work. Try again.")
+        # Hermes callbacks return user-facing error text as well as confirmations.
+        if kind == "model" and self.chat_model is not None:
+            actual = self.chat_model(entry["chat_id"])
+            actual_model = str((actual or {}).get("model") or "")
+            actual_provider = str((actual or {}).get("provider") or "")
+            same_model = actual_model == model or (actual_model.split("/")[-1] == model.split("/")[-1]
+                                                    and ("/" not in actual_model or "/" not in model))
+            same_provider = not actual_provider or actual_provider == provider or (actual_provider == "custom" and provider.startswith("custom:"))
+            if not actual_model or (actual == previous and not (same_model and same_provider)):
+                entry["busy"] = False
+                return _error(400, str(reply or "The model was not changed. Try again."))
+        self._pickers.pop(picker_id, None)  # one successful answer per card
         updated = await self._close_picker(entry["message_id"], str(reply or message["text"]), status="done",
                                            selected=label, by=device["name"])
         self.audit("picker", device, f"{kind}: {label}")
@@ -1783,7 +1808,7 @@ class Hub:
     async def h_models(self, request: web.Request) -> web.Response:
         self._require(request)
         data = await self._call(self._need_hermes().model_options)
-        data["providers"] = [p for p in data["providers"] if p["authenticated"] and p["models"]]
+        data["providers"] = [p for p in data["providers"] if p["authenticated"]]
         return _json(data)
 
     async def h_model_default(self, request: web.Request) -> web.Response:
@@ -2779,13 +2804,23 @@ class Hub:
 
     # -- push ------------------------------------------------------------------------------
 
+    @staticmethod
+    def _notifiable(message: Dict[str, Any]) -> bool:
+        from .message_policy import is_tool_progress
+        meta = message.get("meta") or {}
+        return (message.get("role") == "bot" and message.get("status") == "final"
+                and meta.get("notify") is not False
+                and not any(meta.get(k) for k in ("hidden", "picker", "activity", "status_key", "inbox_id", "routine"))
+                and (bool(meta.get("attachments")) or not is_tool_progress(message.get("text") or "")))
+
     def schedule_push(self, chat_id: str, message_id: str, *, final: bool) -> None:
         """Debounced per chat so a streamed reply produces one notification with the final text."""
+        if not final:
+            return
         task = self._push_tasks.pop(chat_id, None)
         if task is not None:
             task.cancel()
-        delay = 0.3 if final else PUSH_DEBOUNCE_SECONDS
-        self._push_tasks[chat_id] = asyncio.ensure_future(self._delayed_push(chat_id, message_id, delay))
+        self._push_tasks[chat_id] = asyncio.ensure_future(self._delayed_push(chat_id, message_id, PUSH_DEBOUNCE_SECONDS))
 
     async def _delayed_push(self, chat_id: str, message_id: str, delay: float) -> None:
         try:
@@ -2793,18 +2828,21 @@ class Hub:
         except asyncio.CancelledError:
             return
         self._push_tasks.pop(chat_id, None)
-        if self.live_clients():
-            return
         message = self.store.get_message(message_id)
-        if message is None or not message["text"].strip():
+        if message is None or not self._notifiable(message) or not (message["text"].strip() or message.get("meta", {}).get("attachments")):
             return
+        if message_id in self._pushed_messages:
+            return
+        self._pushed_messages[message_id] = None
+        if len(self._pushed_messages) > 512:
+            self._pushed_messages.pop(next(iter(self._pushed_messages)))
         chat = self.store.get_chat(chat_id) or {"title": chat_id}
         with self._bot_context(chat.get("bot") or None):
             bot = self.bot()["title"]
         title = bot if chat_id != HOME_CHAT_ID else f"{bot} · Update"
         if chat.get("kind") == "chat" and chat.get("title") not in ("", "General"):
             title = f"{bot} · {chat['title']}"
-        await self.push_now({"title": title, "body": _clip(message["text"], 180), "url": self.chat_path(chat_id),
+        await self.push_now({"title": title, "body": _clip(message["text"], 180) or "Sent an attachment", "url": self.chat_path(chat_id),
                              "kind": "message", "chat_id": chat_id}, tag=f"chat-{chat_id}")
 
     def chat_path(self, chat_id: str) -> str:
@@ -2827,9 +2865,12 @@ class Hub:
         note = {**note, "tag": tag, "server_id": self.server_id()}
         chat = self.store.get_chat(str(note.get("chat_id") or "")) if note.get("chat_id") else None
         wanted: Dict[str, bool] = {}
+        foreground = {meta["device"]["id"] for ws, meta in self._sockets.items()
+                      if not ws.closed and meta.get("visible", True) and meta.get("device")}
         for device_key in {sub["device_id"] for sub in subs}:
             wanted[device_key] = (_push_for(self.store.get_device(device_key), chat, note)
-                                  and _wants_push(self.store.get_push_prefs(device_key), note))
+                                  and _wants_push(self.store.get_push_prefs(device_key), note)
+                                  and not (note.get("kind") == "message" and device_key in foreground))
         subs = [sub for sub in subs if wanted[sub["device_id"]] and sub["kind"] in ("webpush", "ntfy")]
         pem = self.vapid_private_key() if any(sub["kind"] == "webpush" for sub in subs) else ""
 

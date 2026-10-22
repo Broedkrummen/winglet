@@ -375,8 +375,25 @@ class WingletAdapter(BasePlatformAdapter):
         if hub is None or hub.store.get_chat(str(chat_id)) is None:
             return SendResult(success=False, error="Winglet is not running")
         offered = [{"slug": str(p.get("slug") or ""), "name": str(p.get("name") or p.get("slug") or ""),
-                    "models": [str(m) for m in (p.get("models") or [])][:50]}
-                   for p in providers or [] if p.get("models")]
+                    "models": [str(m) for m in (p.get("models") or [])], "custom_models": True}
+                   for p in providers or [] if p.get("slug")]
+        # Hermes's chat picker supplies only a preview (currently 50 models). Its shared
+        # inventory has the complete cached catalog, including configured custom endpoints.
+        try:
+            chat = hub.store.get_chat(str(chat_id)) or {}
+            with hub._bot_context(chat.get("bot") or None):
+                catalog = await asyncio.to_thread(hermes_api.model_options)
+            by_slug = {p["slug"]: p for p in offered}
+            for p in catalog.get("providers") or []:
+                if not p.get("authenticated"):
+                    continue
+                slug = p["slug"]
+                previous = by_slug.get(slug, {})
+                by_slug[slug] = {"slug": slug, "name": p.get("name") or slug, "custom_models": True,
+                                 "models": list(dict.fromkeys([*(previous.get("models") or []), *(p.get("models") or [])]))}
+            offered = list(by_slug.values())
+        except Exception:
+            logger.debug("[%s] full model inventory unavailable; using Hermes's preview", self.name, exc_info=True)
         if not offered:
             return SendResult(success=False, error="No models")
         message = await hub.post_picker(

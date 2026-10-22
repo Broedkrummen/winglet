@@ -6,6 +6,7 @@ import { AgentFace } from '../components/AgentFace';
 import { Activity, Copy, KeyRound, Monitor, QrCode as QrIcon, RefreshCw, ShieldCheck, Smartphone, Trash2, UserPlus } from '../components/icons';
 import { QrCode } from '../components/QrCode';
 import { Screen } from '../components/Screen';
+import { withSelectedServer } from '../components/ServerScreen';
 import { Sheet, SheetAction } from '../components/Sheet';
 import { Button, Card, Field, ListGroup, ListRow, LoadError, SectionHeader, Segmented, Skeleton } from '../components/ui';
 import { agoText } from '../lib/agent';
@@ -16,7 +17,9 @@ import { makeStyles, useTheme } from '../lib/themeContext';
 import type { Device, Role, Server } from '../lib/types';
 
 /** Who can use this bot: this phone's role and verification, every paired device, and adding one. */
-export default function DevicesScreen() {
+export default withSelectedServer(DevicesScreen);
+
+function DevicesScreen() {
   const servers = useApp((st) => st.servers);
   const selection = useApp((st) => st.selection);
   const server = servers.find((x) => x.id === selection.serverId) ?? servers[0];

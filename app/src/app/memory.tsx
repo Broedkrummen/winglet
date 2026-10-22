@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import { BookUser, NotebookPen, Plus } from '../components/icons';
 import { Screen } from '../components/Screen';
+import { withSelectedServer } from '../components/ServerScreen';
 import { Sheet } from '../components/Sheet';
 import { Button, Card, ConfirmButton, Field, LoadError, SectionHeader, Skeleton, Tap } from '../components/ui';
 import { api, signedApi } from '../lib/api';
@@ -17,7 +18,9 @@ const TITLES: Record<Target, { title: string; note: string }> = {
 };
 
 /** What the agent remembers between chats, with the same limits and safety checks Hermes applies. */
-export default function MemoryScreen() {
+export default withSelectedServer(MemoryScreen);
+
+function MemoryScreen() {
   const s = useStyles();
   const server = useApp((st) => st.servers.find((x) => x.id === st.selection.serverId) ?? st.servers[0]);
   const [data, setData] = useState<Store | null>(null);
@@ -109,7 +112,7 @@ function EditSheet({ edit, onClose, onSaved }: { edit: { target: Target; entry?:
 
   if (!e) return null;
   return (
-    <Sheet visible={!!edit} onClose={onClose} title={e.entry ? 'Edit memory' : `Add to ${TITLES[e.target].title.toLowerCase()}`}>
+    <Sheet visible={!!edit} onClose={onClose} title={e.entry ? 'Edit memory' : `Add to ${TITLES[e.target].title.toLowerCase()}`} scrollable>
       <View style={{ gap: 14, paddingHorizontal: 4 }}>
         <Field value={text} onChangeText={setText} multiline style={{ minHeight: 100, textAlignVertical: 'top' }} autoFocus={!e.entry}
           placeholder={e.target === 'user' ? 'Prefers short answers in the morning' : 'The home server runs Ubuntu 24.04'} />

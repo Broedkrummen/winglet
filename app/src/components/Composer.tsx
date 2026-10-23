@@ -6,6 +6,7 @@ import Animated, {
   cancelAnimation, FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withRepeat, withSequence, withTiming, ZoomIn,
 } from 'react-native-reanimated';
 import { attachFiles, canSend, removeFile, retryFile, sendDraft } from '../lib/attach';
+import { stopTask } from '../lib/actions';
 import { loadCommands, matchCommands, type Command } from '../lib/commands';
 import { focusRegisteredComposer, registerComposer } from '../lib/composerFocus';
 import { haptic } from '../lib/haptics';
@@ -22,6 +23,7 @@ import { Glass } from './Glass';
 import { ModelButton } from './ModelSheet';
 import { ArrowUp, Camera, FileText, ImagePlus, Mic, Plus, RotateCcw, Square, X } from './icons';
 import { Sheet, SheetAction } from './Sheet';
+import { TaskProgress } from './TaskProgress';
 import { Chip, Tap, Toggle } from './ui';
 
 const MIN_INPUT = 41;
@@ -156,6 +158,11 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
     try {
       const destination = prepareChat ? await prepareChat() : chatId;
       if (!destination) return;
+      if ((value ?? text).trim() === '/stop' && !files.length) {
+        const stopped = await stopTask(server, destination);
+        if (stopped && value === undefined && useApp.getState().drafts[draftKey(server.id, destination)] === text) setText('');
+        return;
+      }
       onBeforeSend?.(destination);
       if (value !== undefined) {
         haptic.light();
@@ -216,6 +223,7 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
           </ScrollView>
         </Glass>
       ) : null}
+      {!prepareChat ? <TaskProgress key={key} server={server} chatId={chatId} busy={busy} /> : null}
       {showBusyModes ? (
         <Animated.View entering={FadeIn.duration(160)} exiting={FadeOut.duration(120)} style={s.modes} accessibilityLabel="While it works">
           <Text style={s.modesLabel}>While it works:</Text>

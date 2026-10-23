@@ -236,6 +236,8 @@ App (private `node_modules` from `package-lock.json`):
 - `npx expo export --platform web` — passed.
 - `npx expo export --platform android --output-dir dist-android` — passed (JS bundle only,
   **not** a native build).
+- PR CI run `40039484513` — all four jobs passed: Plugin tests (ubuntu), Plugin tests
+  (windows), Plugin tests with Hermes, App typecheck + web build.
 
 Web UI evidence (Chrome, disposable fixture backend on the assigned preview port; synthetic
 data only):

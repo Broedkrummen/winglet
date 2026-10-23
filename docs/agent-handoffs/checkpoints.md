@@ -22,9 +22,10 @@ Hermes keeps *filesystem* checkpoints, not agent transcripts:
   restore: it always takes a `pre-rollback snapshot` first, and with `safe=True` it
   leaves files the user hand-edited after Hermes last wrote them alone (agent-write
   ledger), reporting `restored_files`, `skipped_user_edits`, `skipped_oversize`,
-  `failed_deletes`. `enable` comes from `checkpoints.enabled` in `config.yaml`; a
-  container `terminal.backend` refuses host checkpoints
-  (`unsupported_backend_reason`).
+  `failed_deletes`. A full restore (`safe=False`) reports no per-file list; Winglet
+  says "Restored the folder" rather than inventing one. `enable` comes from
+  `checkpoints.enabled` in `config.yaml`; a container `terminal.backend` refuses host
+  checkpoints (`unsupported_backend_reason`).
 - The TUI/Desktop `rollback.restore` RPC additionally rewinds the *TUI session
   history* in memory (`history_removed`). That is dashboard-session behaviour, not
   the checkpoint store. Winglet's chats are messaging sessions with their own store
@@ -132,9 +133,12 @@ durable, and clients never queue a restore offline).
 - `plugin/adapter.py` — one line installing the service.
 - `plugin/hermes_api.py` — all Hermes imports for list/diff/restore/workspace.
 - `plugin/checkpoints.py` — new; parsing, revisions, idempotency, refusal rules.
-- `app/src/features/checkpoints/*` — new screen, detail sheet, pure helpers.
-- `app/src/components/ChatMenu.tsx`, `app/src/app/(tabs)/agent.tsx` — entry points.
-- `app/src/lib/types.ts`, `app/src/components/icons.ts` — types and one icon.
+- `app/src/features/checkpoints/*` — new screen, detail sheet, API calls, pure helpers.
+- `app/src/app/checkpoints.tsx` — the route; no other route files changed.
+- `app/src/components/ChatMenu.tsx`, `app/src/components/ChatView.tsx`,
+  `app/src/app/(tabs)/agent.tsx` — feature-gated owner entry points.
+- `app/src/components/icons.ts` — one icon (`FileDiff`). No `types.ts` change: the
+  feature's wire types live in `app/src/features/checkpoints/types.ts`.
 
 ## UI plan
 
@@ -160,9 +164,11 @@ Entry points: **Chat → ⋯ → Workspace checkpoints** (owner, feature-gated),
   a progress state; on completion the *actual* result with restored / left alone /
   too large / couldn't remove lists, or the failure and recovery pointer to the
   safety snapshot. Stale/busy refusals appear inline with "Look again".
-- **Mobile vs wide.** Phone: bottom sheet, chips, diff ~44vh, 44–48 px targets.
-  ≥900 px: centred 760 px dialog, file column + diff pane. Light/dark tokens only,
-  reduced motion respected, no document-level horizontal overflow.
+- **Mobile vs wide.** Phone: a full-height sheet for reading a diff (chips, a
+  ~40% viewport diff well, footer pinned at the bottom); confirming and results are
+  compact bottom sheets. ≥900 px: a centred 820 px dialog with a file column and a
+  430 px diff pane. Light/dark tokens only, reduced motion respected, no
+  document-level horizontal overflow.
 
 ## Reference comparison (Herald 95ca999)
 
@@ -185,12 +191,179 @@ its data path is the real Python checkpoint manager, so only behaviour, hierarch
 and wording patterns were ported. MIT notice:
 `third_party/notices/herald-checkpoints.md`.
 
-## Validation (to be completed and recorded below)
+## Implementation summary
 
-- pytest: routing, member/owner refusal, signature requirement, unsupported state,
-  stale revision, busy refusal, idempotent replay, failure reporting, path/hash
-  rejection, persistence of the list after a restart, real Hermes manager
-  integration (skipped when Hermes is absent).
-- app: `node --test` for helpers (diff parsing, effect counts, time labels, safe-mode
-  copy), `tsc`, web export, Android export.
-- Browser preview at 320/390/tablet/1440 in light and dark with synthetic fixtures.
+- `plugin/checkpoints.py` (new): bounded diff parsing (adds/removes/renames/binary,
+  quoted paths), preview revisions, effect counts, restore outcome wording, an
+  in-memory idempotent operation registry, and all refusals. No Hermes imports.
+- `plugin/hermes_api.py`: the only Hermes imports — the real
+  `CheckpointManager` (config, workspace via the bot's terminal scope, list, diff,
+  restore, container refusal) plus capability probes.
+- `plugin/hub.py`: 3 routes, `ROUTE_POLICY` (`owner`, `owner`, `owner_signed`),
+  capability booleans, owner-only `checkpoint.*` events, `busy_chats()`, audit and
+  broadcast. `plugin/adapter.py` installs the service when Hermes keeps checkpoints.
+- `app/src/features/checkpoints/`: the screen, the detail/confirm/result sheet, the
+  API calls and pure formatting helpers; `app/src/app/checkpoints.tsx` is the route.
+  Entry points are Chat → ⋯ → **Workspace checkpoints** and Agent → Server →
+  **Checkpoints**.
+- `app/src/components/icons.ts` gains `FileDiff`; `ChatMenu`, `ChatView` and the
+  Agent tab pass the feature-gated entry only to owners.
+- No database schema, migration, protocol bump or new dependency.
+
+## Validation — actual results
+
+Status: **implemented**, **automated checks passed**, **native build not run**,
+**MOBILE VALIDATION PENDING**.
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Plugin suite (no Hermes) | `python -m pytest -q --ignore=tests/test_checkpoints_hermes.py` | **331 passed, 16 skipped** |
+| Checkpoint tests | `python -m pytest tests/test_checkpoints.py -q` | **30 passed** |
+| Real Hermes manager | `PythonPATH=<hermes checkout> pytest tests/test_checkpoints_hermes.py -q` | **4 passed** (real snapshots, safe restore, service round trip) |
+| App tests | `npm test` | **278 passed** (10 new checkpoint tests) |
+| TypeScript | `npm run typecheck` | passed |
+| Web export | `npx expo export --platform web` | passed |
+| Android bundle | `npx expo export --platform android --output-dir dist-android` | passed (HBC bundle) |
+
+The real-Hermes tests skip cleanly in the plugin-only CI job (no Hermes import) and
+run in CI's Hermes job. Locally they were run against a source checkout of Hermes, not
+the CI pin; the API used (`list_checkpoints`, `diff`, `restore(..., safe=)`,
+`unsupported_backend_reason`) exists at both the pinned commit and the checkout used.
+
+### Browser checks (isolated Playwright session, disposable fixture)
+
+The app was exported and served by a synthetic fixture on port 8303 (no Hermes, no
+personal data). Verified flows and layout:
+
+- 1440×900 light: timeline with Today/Yesterday/weekday grouping, workspace card,
+  snapshot counts, Safety badge; detail sheet with file column, bounded monospace
+  diff, coverage banner, Done/Restore.
+- 390×844 light and dark: full-height diff sheet, file chips, compact confirm sheet
+  (folder, effect sentences, safe toggle, safety note), success result with restored
+  and left-alone lists + single Undo row, failure result with recovery pointer,
+  stale-preview inline error + "Look again", busy banner, off/empty/unsupported/error
+  states.
+- 320×568 dark: timeline and wrap; no document-level horizontal overflow
+  (`document.documentElement.scrollWidth === innerWidth` at 320 and 390). The diff
+  well scrolls sideways for long lines by design.
+- Chat → ⋯ → Workspace checkpoints opens the screen; Undo opens the safety snapshot.
+- No uncaught page errors in the flows exercised; the only console error was the
+  intentional 502 from the "error" fixture mode.
+
+Screenshots (synthetic fixture, no tokens or personal chats):
+
+- `docs/agent-handoffs/checkpoints/timeline-light.png`
+- `docs/agent-handoffs/checkpoints/detail-light.png`
+- `docs/agent-handoffs/checkpoints/detail-dark-phone.png`
+- `docs/agent-handoffs/checkpoints/confirm-phone.png`
+- `docs/agent-handoffs/checkpoints/result-phone.png`
+
+## Privacy, permissions and compatibility
+
+- Owners only: a checkpoint names files and restoring changes them. Members never see
+  the routes or `checkpoint.*` events, and every restore is a signed, verified-device
+  action; the bearer token alone cannot restore.
+- No path is accepted from the client: the hash must be hex and must name a checkpoint
+  Hermes already listed for the bot's own workspace. Workspace resolution comes from
+  Hermes's terminal scope, so a caller cannot steer it.
+- The event is namespaced and additive; older apps ignore it. The feature is three new
+  booleans (`checkpoints`, `checkpoint_diff`, `checkpoint_restore`), all false on a
+  server without the real manager; the app hides the entry and the restore button.
+  Old servers and old apps keep working; no protocol bump.
+- No offline replay: restores use the signed HTTP transport directly, never the
+  message outbox, and require a live server. A retried request carries the same
+  operation id and returns the recorded result instead of restoring twice.
+- Audit rows record `checkpoint.restore` with success, failure or refusal.
+
+## Known limitations / unresolved risks
+
+- All chats of a bot share the gateway's terminal folder; snapshots are listed per
+  workspace, not per chat. Nested project folders keep their own refs and are not
+  listed on this screen.
+- Checkpoints cover files only. Chat transcript rewind is not part of Hermes's
+  checkpoint store and is deliberately not offered; the branch/rewind agent owns
+  transcript revisions.
+- A preview is capped at 40,000 characters and 400 files. Files past the cap are
+  still listed with counts but have no diff lines.
+- There is no filesystem lock against an agent writing during a restore: the server
+  refuses while any chat is typing, re-checks the revision and busy state inside the
+  restore lock, and Hermes takes a safety snapshot first. A write that lands between
+  the final check and the checkout is still possible, as it is for Hermes's own
+  `/rollback`.
+- Operation ids live in memory for 15 minutes; a server restart forgets them. Clients
+  never queue restores, so this only affects an in-flight retry.
+- Another device's `checkpoint.restored` event is emitted but this app does not
+  subscribe to it yet; the list refreshes on focus, pull-to-refresh and after a local
+  restore.
+- Long diff lines scroll sideways; on desktop browsers the horizontal scrollbar is an
+  overlay and may be visible only while scrolling.
+
+## MOBILE VALIDATION PENDING
+
+**Status:** code implemented; automated/plugin/app/build checks passed; **native build
+not run** in this phase; **device validation deferred to the Codex orchestrator**.
+
+### Integration build needed
+
+- Branch `codex/major-03-checkpoints`, HEAD as handed off, merged by Codex into
+  `codex/major-features` (no other agent's changes required).
+- A signed Android build (Codex owns signing and installation) with the plugin at the
+  same commit. No new native modules, permissions or config plugins; a standard
+  `expo export` / EAS build is enough.
+- Server: Hermes from CI's pin with the Winglet plugin at the same commit.
+
+### Safe local fixture (server side)
+
+1. Use a disposable profile/home (not the user's real chats):
+   `HERMES_HOME=/tmp/winglet-cp-home`, `terminal.cwd=/tmp/winglet-cp-work`.
+2. In `config.yaml`: `checkpoints: {enabled: true, max_snapshots: 20}` and
+   `terminal: {cwd: /tmp/winglet-cp-work}`. Restart the gateway.
+3. In a chat, ask the agent to create `notes.txt` with three lines, then append a
+   fourth line. Two snapshots should appear ("before write_file notes.txt", …).
+4. Optional second file: create `bin.dat` with random bytes and change it, for the
+   binary path.
+
+### Steps and expected outcomes
+
+1. Pair the build; Chat → ⋯ → **Workspace checkpoints**.
+   Expect: timeline, the exact `~/...` folder, "Files only" note, 1 snapshot per
+   change, newest first; owner-only entry visible, absent for a member account.
+2. Open the newest snapshot. Expect: file chips (phone) / column (wide), monospace
+   diff with green additions and red removals, file counts, "Files only … never
+   changes your conversations".
+3. Tap **Restore this point**; **Cancel**. Expect: no change to the file; the list
+   and snapshot stay.
+4. Start a long reply in another chat, then open a snapshot. Expect: the busy banner
+   ("A reply is running in …") and no Restore button; the server refuses a restore
+   while typing.
+5. Restore with safe mode on after editing the file yourself. Expect: a progress
+   state (no toast), then a result listing the restored file(s) and the file left
+   alone; the edited file keeps the user's content.
+6. Confirm the server: the file content matches the snapshot for Hermes-written
+   files; the list now starts with "pre-rollback snapshot (restoring to …)".
+7. Tap **Undo this restore**; expect the safety snapshot opens; restoring it puts the
+   agent's changes back.
+8. Stale: open a preview, edit the file on the server, tap Restore. Expect: "The
+   folder changed since you looked…" with **Look again**; nothing restored.
+9. Failure: `chmod -R a-w /tmp/winglet-cp-work` (restore, then revert) and restore.
+   Expect: "Couldn't restore", the actual error, a recovery note naming the safety
+   snapshot, and the Undo row.
+10. Config off: set `checkpoints.enabled: false`, restart, reopen the screen.
+    Expect: "Checkpoints are off" with the config hint and no Restore.
+11. Container backend (`terminal.backend: docker`): expect the honest refusal from
+    Hermes, no restore.
+12. Form factors: 320 and 390 px phones, tablet and ~1440 px desktop; light/dark;
+    Android font scale 1.3; TalkBack labels; 44–48 dp targets; Android back closes
+    the sheet (except mid-restore, where it deliberately waits for the outcome).
+    Expect no clipped controls or document-level horizontal scrolling.
+
+### Checks that genuinely need physical hardware
+
+- Safe-area/notch and gesture-bar padding on the phone sheet.
+- Real touch scrolling of the diff (both axes) and the feel of the 38–48 dp targets.
+- TalkBack reading order for the timeline, file chips and result lists.
+- Android hardware back during a restore and the modal's behaviour after the app is
+  backgrounded mid-request.
+- Native performance with a 300+ line diff and a 400-file preview.
+Everything else (states, copy, authorization, stale/busy/failure) is reproducible in
+an emulator or the browser fixture.

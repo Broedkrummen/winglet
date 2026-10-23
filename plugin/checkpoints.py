@@ -497,6 +497,10 @@ class CheckpointService:
                                    str(result.get("stat") or ""), str(result.get("diff") or ""))
             if current != expected:
                 raise CheckpointStale("The folder changed since you looked. Check what will be restored, then try again.")
+            # Re-check inside the lock: a reply may have started while the preview was confirmed.
+            busy = self.busy_chats()
+            if busy:
+                raise CheckpointBusy(f"A reply is running in {busy[0]}. Restoring waits until it finishes.", busy=busy)
 
             self._operations[operation] = {"state": "running", "at": self._clock(), "result": {}}
             try:

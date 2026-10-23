@@ -22,6 +22,15 @@ test('filters use the same activity as the badges and let expired work leave Run
   assert.equal(chatActivityLabel(chatActivity(activity, 'chat', 120)), null);
 });
 
+test('members are not asked for owner approvals, and waiting for an owner is not running', () => {
+  const activity = { me: { role: 'member' as const }, typing: { chat: 120 },
+    inbox: { approval: request('approval', 'chat', 'pending', 'approval') } };
+  assert.deepEqual(chatActivity(activity, 'chat', 100), { pending: 0, running: false });
+  assert.equal(matchesChatFilter('needs-you', chatActivity(activity, 'chat', 100)), false);
+  assert.equal(chatActivity({ ...activity, me: { role: 'owner' } }, 'chat', 100).pending, 1);
+  assert.equal(chatActivity({ ...activity, inbox: { question: request('question', 'chat') } }, 'chat', 100).pending, 1);
+});
+
 test('the same chat ID on another bot cannot pick up a request or working indicator', () => {
   const first = { inbox: { q: request('q', 'general') }, typing: { general: 120 } };
   assert.equal(matchesChatFilter('needs-you', chatActivity(first, 'general', 100)), true);

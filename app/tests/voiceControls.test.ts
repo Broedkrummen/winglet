@@ -21,7 +21,10 @@ function load(file: string, names: string[]) {
     '../lib/motion': { useReducedMotion: () => true },
     '../lib/mainBot': { useMainBot: () => ({ id: 'bot', bot: { title: 'Bot' } }) },
     '../lib/pets': { petTones: () => undefined },
-    '../lib/store': { useApp: (select: any) => select({ runtime: { bot: {} } }) },
+    '../lib/store': { draftKey: (bot: string, chat: string) => `${bot}:${chat}`,
+      useApp: (select: any) => select({ drafts: {}, draftFiles: {}, replyTo: {}, runtime: { bot: { status: 'online' } } }) },
+    '../lib/prefs': { usePrefs: (select: any) => select({ prefs: { busyMode: 'steer' } }) },
+    '../lib/attach': { canSend: () => false },
   };
   const exports: any = {};
   const source = readFileSync(new URL(`../src/components/${file}`, import.meta.url), 'utf8') + `\nexport { ${names.join(', ')} };`;
@@ -37,4 +40,17 @@ test('an interrupted microphone gesture cancels instead of delivering the record
   h.callbacks.onFinalize({ translationX: 0 }, true);
   h.callbacks.onFinalize({ translationX: -100 }, true);
   assert.deepEqual(h.finishes, [true, false, true]);
+});
+
+test('a running task keeps Stop in the task strip without exposing an unscoped voice send', () => {
+  const h = load('Composer.tsx', ['VoiceButton']);
+  const props = { server: { id: 'bot' }, chatId: 'chat', bottomInset: 0, target: { current: null }, onHeight: () => {}, placeholder: 'Message' };
+  const nodes = (node: any): any[] => !node || typeof node !== 'object' ? []
+    : [node, ...[node.props?.children].flat(Infinity).flatMap(nodes)];
+  const idle = nodes(h.exports.Composer({ ...props, busy: false }));
+  assert.equal(idle.filter((node) => node.type === h.exports.VoiceButton).length, 1);
+  const working = nodes(h.exports.Composer({ ...props, busy: true }));
+  assert.equal(working.filter((node) => node.type === h.exports.VoiceButton).length, 0);
+  const send = working.find((node) => node.props?.accessibilityLabel === 'Send');
+  assert.equal(send?.props.disabled, true);
 });

@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, Text, View } from 'react-native';
 import { stopTask } from '../lib/actions';
 import { currentTaskActivity } from '../lib/messages';
-import { useApp } from '../lib/store';
+import { isOwner, useApp } from '../lib/store';
 import { plainText } from '../lib/text';
 import { makeStyles, useTheme } from '../lib/themeContext';
 import type { Server } from '../lib/types';
@@ -18,6 +18,7 @@ export function TaskProgress({ server, chatId, busy }: { server: Server; chatId:
   const t = useTheme();
   const s = useStyles();
   const online = useApp((st) => st.network && st.runtime[server.id]?.status === 'online');
+  const owner = useApp((st) => isOwner(st.runtime[server.id]));
   const messages = useApp((st) => st.runtime[server.id]?.messages[chatId] ?? EMPTY);
   const inbox = useApp((st) => st.runtime[server.id]?.inbox);
   const pending = Object.values(inbox ?? {}).filter((item) => item.chat_id === chatId && item.status === 'pending' && item.kind !== 'result')
@@ -28,7 +29,7 @@ export function TaskProgress({ server, chatId, busy }: { server: Server; chatId:
   if (!busy && !pending) return null;
   const steps = currentTaskActivity(messages);
   const latest = steps[steps.length - 1];
-  const title = pending ? pending.kind === 'approval' ? 'Approval needed' : 'A question for you'
+  const title = pending ? pending.kind === 'approval' ? owner ? 'Approval needed' : 'Waiting for an owner' : 'A question for you'
     : !online ? 'Waiting for connection' : 'Working on your request';
   const detail = pending ? pending.title : latest ? plainText(latest.text).split('\n')[0] : 'Updates will appear here as your bot works.';
   const openRequest = () => {

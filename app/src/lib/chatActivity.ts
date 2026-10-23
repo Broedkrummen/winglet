@@ -1,13 +1,14 @@
 import type { DraftFile, InboxItem } from './types';
 
 export type ChatFilter = 'all' | 'running' | 'needs-you';
-export type ChatActivity = { typing?: Record<string, number>; inbox?: Record<string, InboxItem> };
+export type ChatActivity = { typing?: Record<string, number>; inbox?: Record<string, InboxItem>; me?: { role: 'owner' | 'member' } };
 
 /** A request takes precedence over work: waiting for an answer is not a running task. */
 export function chatActivity(activity: ChatActivity | undefined, chatId: string, now = Date.now()) {
-  const pending = Object.values(activity?.inbox ?? {}).filter((item) =>
-    item.chat_id === chatId && item.status === 'pending' && item.kind !== 'result').length;
-  return { pending, running: !pending && (activity?.typing?.[chatId] ?? 0) > now };
+  const waiting = Object.values(activity?.inbox ?? {}).filter((item) =>
+    item.chat_id === chatId && item.status === 'pending' && item.kind !== 'result');
+  const pending = waiting.filter((item) => item.kind !== 'approval' || activity?.me?.role !== 'member').length;
+  return { pending, running: !waiting.length && (activity?.typing?.[chatId] ?? 0) > now };
 }
 
 export function matchesChatFilter(filter: ChatFilter, state: ReturnType<typeof chatActivity>): boolean {

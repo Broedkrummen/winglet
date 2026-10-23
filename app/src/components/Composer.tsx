@@ -277,7 +277,7 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
           ) : <View style={{ width: 8 }} />}
           <ModelButton server={server} chatId={chatId} variant="composer" prepareChat={prepareChat} />
           <View style={{ flex: 1 }} />
-          {!text.trim() && !files.length && voice ? (
+          {!busy && !text.trim() && !files.length && voice ? (
             <VoiceButton server={server} chatId={chatId} onSent={onSent} prepareChat={prepareChat} onBeforeSend={onBeforeSend} />
           ) : (
             <Tap key="send" feedback="none" accessibilityLabel={preparing ? 'Starting chat' : uploading ? 'Waiting for uploads' : 'Send'} accessibilityState={{ disabled: !ready || preparing }}

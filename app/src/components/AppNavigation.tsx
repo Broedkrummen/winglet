@@ -154,6 +154,7 @@ function Sidebar({ onClose, drawer = false }: { onClose: () => void; drawer?: bo
   const [filter, setFilter] = useState<ChatFilter>('all');
   const typing = useApp(useShallow((st) => Object.fromEntries(st.servers.map((bot) => [bot.id, st.runtime[bot.id]?.typing ?? NO_TYPING]))));
   const inbox = useApp(useShallow((st) => Object.fromEntries(st.servers.map((bot) => [bot.id, st.runtime[bot.id]?.inbox ?? NO_INBOX]))));
+  const roles = useApp(useShallow((st) => Object.fromEntries(st.servers.map((bot) => [bot.id, st.runtime[bot.id]?.me?.role ?? 'owner']))));
   const drafts = useApp((st) => st.drafts);
   const draftFiles = useApp((st) => st.draftFiles);
   const replyTo = useApp((st) => st.replyTo);
@@ -169,7 +170,7 @@ function Sidebar({ onClose, drawer = false }: { onClose: () => void; drawer?: bo
     })));
     return sidebarChats(servers, chats, prefs.pinnedChats, filter === 'all' ? prefs.archivedChats : [], query, previews);
   }, [servers, chats, prefs.pinnedChats, prefs.archivedChats, query, filter, drafts, draftFiles, replyTo]);
-  const stateOf = (botId: string, chatId: string) => chatActivity({ typing: typing[botId], inbox: inbox[botId] }, chatId, now);
+  const stateOf = (botId: string, chatId: string) => chatActivity({ typing: typing[botId], inbox: inbox[botId], me: { role: roles[botId] } }, chatId, now);
   const rows = all.filter(({ server: bot, chat }) => matchesChatFilter(filter, stateOf(bot.id, chat.id)));
   const counts = servers.reduce((total, bot) => {
     for (const chat of Object.values(chats[bot.id] ?? {})) {

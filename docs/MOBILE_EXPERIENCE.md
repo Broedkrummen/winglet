@@ -13,6 +13,7 @@ They are implemented independently in Winglet's existing components.
 | Drafts | Text, completed attachments and reply context flush when the app backgrounds. Draft previews and search work across chats and bots. |
 | Current work | Activity stays above the composer; details use the actual current turn. Pending requests open the relevant Inbox item. |
 | Stop | A guarded live control remains available while composing a follow-up. It never joins the offline outbox. |
+| Task permissions | Member accounts see owner approvals as waiting for an owner; Needs you includes requests they can answer. Voice recording waits until the current task finishes, retaining the text composer's explicit busy-send modes. |
 | Model access | Starred models and eight recent successful choices retain exact provider/model IDs. Starring does not select a model. Unavailable providers stay out of shortcuts. |
 | Delivery recovery | Failed bubbles show the refusal and expose Retry, Edit and Discard. Retry preserves delivery identity and attachments. Editing cannot overwrite another draft. |
 | Acknowledgement races | A failed HTTP response cannot fail or pause a send already confirmed over the socket. A stale retry cannot resend an acknowledged message. |
@@ -57,7 +58,7 @@ checks, cancellation/reconnect behavior and meaningful integration tests.
 
 ## Validation
 
-- App suite: **267 passed**, including delivery races, stale Inbox reads, scoped exports, model shortcuts,
+- App suite: **269 passed**, including delivery races, stale Inbox reads, scoped exports, model shortcuts,
   draft flushing, cache migration, tampering, missing keys and ordered removal.
 - TypeScript typecheck passed.
 - Production web export and Android export with Hermes bytecode passed.

@@ -150,7 +150,7 @@ function CheckpointsScreen() {
           </View>
         ) : null}
         {body()}
-        {data?.supported && data.enabled && data.checkpoints.length ? (
+        {data?.supported && data.enabled && data.can_restore && data.checkpoints.length ? (
           <Text style={s.footnote}>
             Restoring puts the folder back as it was at that snapshot. Hermes keeps a safety snapshot first,
             so an undo is another checkpoint. A snapshot covers files only; chat messages, memory and skills stay as they are.

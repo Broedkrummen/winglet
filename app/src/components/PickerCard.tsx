@@ -3,12 +3,13 @@ import { ActivityIndicator, Pressable, Text, TextInput, View } from 'react-nativ
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { api, ApiError } from '../lib/api';
 import { haptic } from '../lib/haptics';
-import { isCurrentModel, modelName, modelProviders, shortModel } from '../lib/modelOptions';
+import { availableSavedModels, isCurrentModel, modelName, modelProviders, recentModels, savedModelKey, shortModel, toggleSavedModel, type SavedModel } from '../lib/modelOptions';
 import { useReducedMotion } from '../lib/motion';
+import { usePrefs } from '../lib/prefs';
 import { isOwner, useApp } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
 import type { Message, Picker, Server } from '../lib/types';
-import { Check, ChevronDown, Clock, Cpu, Search, ShieldQuestion, SlidersHorizontal, X } from './icons';
+import { Check, ChevronDown, Clock, Cpu, Search, ShieldQuestion, SlidersHorizontal, Star, X } from './icons';
 import { Markdown } from './Markdown';
 import { Button, Chip, Field } from './ui';
 
@@ -33,6 +34,8 @@ export function PickerCard({ server, message, presentation = 'card', onChosen }:
   const picker = shown.meta.picker as Picker;
   const sheet = presentation === 'sheet';
   const owner = useApp((st) => isOwner(st.runtime[server.id]));
+  const favorites = usePrefs((st) => st.prefs.favoriteModels);
+  const recent = usePrefs((st) => st.prefs.recentModels);
   const [busy, setBusy] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -57,6 +60,10 @@ export function PickerCard({ server, message, presentation = 'card', onChosen }:
     try {
       const result = await api<{ message: Message }>(server, `/api/pickers/${picker.id}/select`, { method: 'POST', body: JSON.stringify({ ...body, message_id: message.id }) });
       if (result.message) setAnswer(result.message);
+      if (picker.kind === 'model' && body.provider && body.model) {
+        const prefs = usePrefs.getState();
+        prefs.update({ recentModels: recentModels(prefs.prefs.recentModels, { provider: body.provider, model: body.model }) });
+      }
       accepted = true;
       haptic.success();
       onChosen?.();
@@ -77,6 +84,41 @@ export function PickerCard({ server, message, presentation = 'card', onChosen }:
   const q = query.trim().toLowerCase();
   const providers = useMemo(() => modelProviders(picker, q), [picker.providers, picker.current_model, picker.current_provider, q]);
   const total = (picker.providers ?? []).reduce((n, p) => n + p.models.length, 0);
+  const favoriteKeys = new Set(favorites.map(savedModelKey));
+  const star = (provider: string, model: string) => {
+    const value = { provider, model };
+    const selected = favoriteKeys.has(savedModelKey(value));
+    return <Pressable accessibilityRole="button" accessibilityLabel={`${selected ? 'Unstar' : 'Star'} ${model} from ${provider}`}
+      accessibilityState={{ selected }} hitSlop={2} onPress={(event) => {
+        event.stopPropagation();
+        const state = usePrefs.getState();
+        state.update({ favoriteModels: toggleSavedModel(state.prefs.favoriteModels, value) });
+        haptic.selection();
+      }} style={s.star}>
+      <Star size={17} color={selected ? t.colors.accent : t.colors.textTertiary} fill={selected ? t.colors.accent : 'none'} />
+    </Pressable>;
+  };
+  const savedSection = (title: string, saved: SavedModel[]) => {
+    const entries = availableSavedModels(saved, picker);
+    if (!sheet || q || !entries.length) return null;
+    return <View style={{ gap: 4 }}>
+      <Text style={s.provider}>{title}</Text>
+      {entries.map((entry) => {
+        const key = `${entry.provider}/${entry.model}`;
+        const current = isCurrentModel(picker, entry.provider, entry.model);
+        return <View key={savedModelKey(entry)} style={[s.savedRow, current && s.currentRow]}>
+          <Pressable accessibilityRole="radio" accessibilityState={{ checked: current, disabled: !!busy }} disabled={!!busy}
+            accessibilityLabel={`${modelName(entry.model)}, ${entry.model}, ${entry.providerName}${current ? ', current model' : ''}`}
+            onPress={() => choose(key, { provider: entry.provider, model: entry.model })} style={[s.modelRow, { flex: 1, minWidth: 0 }]}>
+            <View style={s.modelText}><Text style={s.modelName} numberOfLines={1}>{modelName(entry.model)}</Text>
+              <Text style={s.modelId} numberOfLines={1}>{entry.providerName} · {entry.model}</Text></View>
+            {busy === key ? <ActivityIndicator size="small" color={t.colors.accent} /> : current ? <Check size={16} color={t.colors.accent} /> : null}
+          </Pressable>
+          {star(entry.provider, entry.model)}
+        </View>;
+      })}
+    </View>;
+  };
 
   return (
     <Animated.View entering={reduced ? undefined : FadeIn.duration(180)} style={[s.card, sheet && s.sheetCard, open && picker.kind === 'confirm' && { borderColor: t.colors.warning }]}>
@@ -117,6 +159,8 @@ export function PickerCard({ server, message, presentation = 'card', onChosen }:
               {query ? <Pressable onPress={() => setQuery('')} accessibilityRole="button" accessibilityLabel="Clear model search" hitSlop={8} style={s.clear}><X size={16} color={t.colors.textSecondary} /></Pressable> : null}
             </View>
           ) : null}
+          {savedSection('Starred', favorites)}
+          {savedSection('Recent', recent.filter((entry) => !favoriteKeys.has(savedModelKey(entry))))}
           {providers.map((p) => {
             const all = expanded[p.slug] || !!q;
             const limit = sheet ? 4 : SHOWN_PER_PROVIDER;
@@ -133,16 +177,16 @@ export function PickerCard({ server, message, presentation = 'card', onChosen }:
                     const name = modelName(m);
                     const showId = !!q || (names.get(name) ?? 0) > 1;
                     return (
-                      sheet ? <Pressable key={key} accessibilityRole="radio" accessibilityState={{ checked: current, disabled: !!busy, busy: busy === key }}
+                      sheet ? <View key={key} style={[s.savedRow, current && s.currentRow]}><Pressable accessibilityRole="radio" accessibilityState={{ checked: current, disabled: !!busy, busy: busy === key }}
                         accessibilityLabel={`${name}, ${m}, ${p.name}${current ? ', current model' : ''}`} disabled={!!busy}
                         onPress={() => choose(key, { provider: p.slug, model: m })}
-                        style={({ pressed }) => [s.modelRow, current && s.currentRow, pressed && { backgroundColor: t.colors.pressed }, !!busy && busy !== key && { opacity: 0.5 }]}>
+                        style={({ pressed }) => [s.modelRow, { flex: 1, minWidth: 0 }, pressed && { backgroundColor: t.colors.pressed }, !!busy && busy !== key && { opacity: 0.5 }]}>
                         <View style={s.modelText}>
                           <Text style={s.modelName}>{name}</Text>
                           {showId ? <Text style={s.modelId} numberOfLines={1}>{m}</Text> : null}
                         </View>
                         {busy === key ? <ActivityIndicator color={t.colors.accent} /> : <View style={[s.radio, current && s.radioOn]}>{current ? <Check size={13} color={t.colors.onAccent} strokeWidth={3} /> : null}</View>}
-                      </Pressable> : <Chip key={key} label={shortModel(m)} selected={current} accessibilityLabel={`${m} from ${p.name}${current ? ', current' : ''}`}
+                      </Pressable>{star(p.slug, m)}</View> : <Chip key={key} label={shortModel(m)} selected={current} accessibilityLabel={`${m} from ${p.name}${current ? ', current' : ''}`}
                         icon={busy === key ? <ActivityIndicator size="small" color={t.colors.accent} /> : current ? <Check size={14} color={t.colors.onAccentSoft} /> : undefined}
                         onPress={() => !busy && choose(key, { provider: p.slug, model: m })} />
                     );
@@ -204,6 +248,8 @@ export function PickerCard({ server, message, presentation = 'card', onChosen }:
 const useStyles = makeStyles((t) => ({
   sheetCard: { padding: 0, borderWidth: 0, backgroundColor: 'transparent', maxWidth: undefined, marginTop: 0 },
   modelRows: { gap: 2 },
+  savedRow: { flexDirection: 'row', alignItems: 'center', borderRadius: t.radius.sm },
+  star: { minHeight: 44, width: 42, alignItems: 'center', justifyContent: 'center' },
   settingRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, paddingVertical: 8, minHeight: 44, borderRadius: t.radius.sm },
   modelRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, paddingVertical: 8, minHeight: 44, borderRadius: t.radius.sm },
   currentRow: { backgroundColor: t.colors.accentSoft },

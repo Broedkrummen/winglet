@@ -18,6 +18,10 @@ function harness(request: (...args: any[]) => Promise<any>) {
   const timers: (() => void)[] = [];
   const toasts: any[] = [];
   let now = 1000;
+  let prefs: any = { favoriteModels: [], recentModels: [] };
+  const prefsState = () => ({ prefs, update: (patch: any) => { prefs = { ...prefs, ...patch }; } });
+  const usePrefs: any = (select: any) => select(prefsState());
+  usePrefs.getState = prefsState;
   const jsx = (type: any, props: any) => ({ type, props });
   const app: any = (select: any) => select({ runtime: { bot: {} } });
   app.getState = () => ({ toast: (t: any) => toasts.push(t) });
@@ -31,6 +35,7 @@ function harness(request: (...args: any[]) => Promise<any>) {
     'react-native': { Pressable: 'Pressable', View: 'View', Text: 'Text', TextInput: 'TextInput', ActivityIndicator: 'Spinner' },
     'react-native-reanimated': { __esModule: true, default: { View: 'Animated.View' } },
     '../lib/modelOptions': models,
+    '../lib/prefs': { usePrefs },
     '../lib/motion': { useReducedMotion: () => true },
     '../lib/api': { api: request, ApiError: class extends Error {} },
     '../lib/store': { useApp: app, isOwner: () => true },
@@ -44,7 +49,7 @@ function harness(request: (...args: any[]) => Promise<any>) {
   const props = { server: { id: 'bot' }, message, presentation: 'sheet' };
   const render = () => { cursor = 0; return exports.PickerCard(props); };
   const choices = () => find(render(), (n) => n.props?.accessibilityRole === 'radio');
-  return { render, message, choices, toasts, at: (time: number) => { now = time; }, timers };
+  return { render, message, choices, toasts, at: (time: number) => { now = time; }, timers, prefs: () => structuredClone(prefs) };
 }
 
 test('rapid model taps submit only once, and the HTTP response confirms before the socket catches up', async () => {
@@ -115,4 +120,27 @@ test('a custom model uses the selected provider and its exact ID', async () => {
   const button = find(h.render(), (n) => n.props?.title === 'Use custom model')[0];
   await button.props.onPress();
   assert.deepEqual(body, { provider: 'provider', model: 'vendor/new-model:free', message_id: 'm' });
+});
+
+test('starring a model updates the quick section without choosing it or submitting a request', async () => {
+  let calls = 0;
+  let stopped = false;
+  const h = harness(async () => { calls++; return {}; });
+  const button = find(h.render(), (n) => n.props?.accessibilityLabel === 'Star second from provider')[0];
+  button.props.onPress({ stopPropagation: () => { stopped = true; } });
+  assert.equal(stopped, true);
+  assert.deepEqual(h.prefs().favoriteModels, [{ provider: 'provider', model: 'second' }]);
+  assert.ok(JSON.stringify(h.render()).includes('Starred'));
+  assert.equal(calls, 0);
+  find(h.render(), (n) => n.props?.accessibilityLabel === 'Unstar second from provider')[0].props.onPress({ stopPropagation() {} });
+  assert.deepEqual(h.prefs().favoriteModels, []);
+});
+
+test('only successful model choices enter recents, with the exact provider and model IDs', async () => {
+  const success = harness(async () => ({}));
+  await success.choices()[1].props.onPress();
+  assert.deepEqual(success.prefs().recentModels, [{ provider: 'provider', model: 'second' }]);
+  const failure = harness(async () => { throw new Error('Model unavailable'); });
+  await failure.choices()[1].props.onPress();
+  assert.deepEqual(failure.prefs().recentModels, []);
 });

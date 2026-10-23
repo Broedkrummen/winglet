@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { activeModel, isCurrentModel, modelName, modelProviders, shortModel } from '../src/lib/modelOptions.ts';
+import { activeModel, availableSavedModels, isCurrentModel, modelName, modelProviders, recentModels, savedModelKey, shortModel, toggleSavedModel } from '../src/lib/modelOptions.ts';
 import type { Picker } from '../src/lib/types.ts';
 
 const picker: Picker = {
@@ -58,4 +58,30 @@ test('the active model and provider stay together when a chat uses a fallback', 
 test('models beyond the old server cap are searchable and selectable by exact ID', () => {
   const providers = modelProviders({ ...picker, providers: [{ slug: 'router', name: 'OpenRouter', models: Array.from({ length: 500 }, (_, i) => `vendor/model-${i}`) }] }, 'model-499');
   assert.deepEqual(providers[0].models, ['vendor/model-499']);
+});
+
+test('favorite identity preserves providers, vendor IDs and ambiguous separators', () => {
+  const first = { provider: 'router', model: 'vendor-a/custom' };
+  const other = { provider: 'router', model: 'vendor-b/custom' };
+  const saved = toggleSavedModel([first], other);
+  assert.deepEqual(saved, [first, other]);
+  assert.deepEqual(toggleSavedModel(saved, first), [other]);
+  assert.notEqual(savedModelKey({ provider: 'a/b', model: 'c' }), savedModelKey({ provider: 'a', model: 'b/c' }));
+});
+
+test('recents are deduplicated, newest first, bounded and never mutate the previous list', () => {
+  const initial = Array.from({ length: 12 }, (_, i) => ({ provider: 'router', model: `model-${i}` }));
+  const result = recentModels(initial, initial[5]);
+  assert.equal(result.length, 8);
+  assert.equal(result[0].model, 'model-5');
+  assert.equal(result.filter((entry) => entry.model === 'model-5').length, 1);
+  assert.equal(initial.length, 12);
+});
+
+test('saved models are offered only through available providers and supported exact IDs', () => {
+  const saved = [{ provider: 'absent', model: 'not-configured' }, { provider: 'router', model: 'not-in-catalog' },
+    { provider: 'router', model: 'z-ai/glm-5.3-flash' }, { provider: 'router', model: 'z-ai/glm-5.3-flash' }];
+  assert.deepEqual(availableSavedModels(saved, picker).map((entry) => entry.model), ['z-ai/glm-5.3-flash']);
+  const custom = { ...picker, providers: picker.providers!.map((p) => ({ ...p, custom_models: true })) };
+  assert.deepEqual(availableSavedModels(saved, custom).map((entry) => entry.model), ['not-in-catalog', 'z-ai/glm-5.3-flash']);
 });

@@ -592,3 +592,50 @@ test('the composer restores its saved reply context after restart', async () => 
   await h.store.getState().init();
   assert.equal(JSON.stringify(h.store.getState().replyTo['s:general']), JSON.stringify(reply));
 });
+
+test('an acknowledged send with a lost HTTP response does not pause the following message', async () => {
+  const h = harness();
+  await h.connect(); await h.hello();
+  const sent: any[] = [];
+  h.setRequest(async (_, route, init) => {
+    if (!init?.method) return { messages: [], deleted_ids: [] };
+    const body = JSON.parse(init.body);
+    sent.push(body);
+    const message = { ...msg(sent.length), role: 'user', text: body.text, meta: { client_id: body.client_id } };
+    if (sent.length === 1) {
+      h.event({ type: 'message.new', chat_id: 'general', message });
+      throw new ApiError('HTTP response lost after acceptance', 0);
+    }
+    return { message };
+  });
+  await h.store.getState().sendMessage('s', 'general', 'Accepted first');
+  await h.store.getState().sendMessage('s', 'general', 'Send next');
+  assert.equal(sent.length, 2);
+  assert.equal(h.outbox().length, 0);
+  assert.equal(h.messages().length, 2);
+  assert.ok(h.messages().every((m: any) => m.status === 'final'));
+  await h.store.getState().sendMessage('s', 'general', 'Accepted first', sent[0].client_id);
+  assert.equal(sent.length, 2, 'a stale Retry callback cannot resubmit an accepted prompt');
+});
+
+test('server refusal details survive a restart and a retry reuses the files, reply and delivery ID', async () => {
+  const h = harness();
+  await h.connect(); await h.hello();
+  const attachments = [{ id: 'upload', url: '/media/upload', name: 'file.pdf' }];
+  const replyTo = { id: 'quoted', role: 'bot', text: 'The question' };
+  h.setRequest(async () => { throw new ApiError('The attachment expired. Attach it again.', 400); });
+  await h.store.getState().sendMessage('s', 'general', 'Read this', { attachments, replyTo });
+  assert.equal(h.messages()[0].meta.delivery_error, 'The attachment expired. Attach it again.');
+  assert.equal(h.cache.get('outbox:s')[0].failure, 'The attachment expired. Attach it again.');
+  const clientId = h.outbox()[0].client_id;
+  let payload: any;
+  h.setRequest(async (_, _route, init) => {
+    payload = JSON.parse(init.body);
+    return { message: { ...msg(1), role: 'user', meta: { client_id: payload.client_id } } };
+  });
+  await h.store.getState().sendMessage('s', 'general', 'Read this', clientId);
+  assert.equal(payload.client_id, clientId);
+  assert.equal(payload.reply_to, 'quoted');
+  assert.equal(JSON.stringify(payload.attachments), JSON.stringify(['upload']));
+  assert.equal(h.outbox().length, 0);
+});

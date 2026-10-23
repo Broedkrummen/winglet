@@ -32,6 +32,7 @@ export type ConnDetail = {
 
 export type OutboxEntry = {
   client_id: string; chat_id: string; text: string; created_at: number; failed?: boolean;
+  failure?: string;
   attachments?: Attachment[]; reply_to?: ReplyRef;
 };
 
@@ -234,14 +235,18 @@ export const useApp = create<AppState>((set, get) => {
       upsertMessage(serverId, entry.chat_id, data.message);
       updateOutbox(serverId, (o) => o.filter((x) => x.client_id !== entry.client_id));
     } catch (e) {
+      // A socket acknowledgement may have removed this send while HTTP was still in flight.
+      // Its later failure must not pause unrelated messages or put the accepted send back in the outbox.
+      if (!get().runtime[serverId]?.outbox.some((o) => o.client_id === entry.client_id)) return;
       if (isNetworkError(e)) {
         // Lost on the way (maybe after the server stored it): resend with the same id later.
         sendPaused.add(serverId);
         setLocalStatus(serverId, entry.chat_id, entry.client_id, 'queued');
         setTimeout(() => { if (get().runtime[serverId]?.status === 'online') flushOutbox(serverId); }, 5000);
       } else {
-        updateOutbox(serverId, (o) => o.map((x) => (x.client_id === entry.client_id ? { ...x, failed: true } : x)));
-        patch(serverId, (s) => ({ messages: { ...s.messages, [entry.chat_id]: markFailed(s.messages[entry.chat_id] ?? [], entry.client_id) } }));
+        const failure = (e as Error).message || 'The server refused this message.';
+        updateOutbox(serverId, (o) => o.map((x) => (x.client_id === entry.client_id ? { ...x, failed: true, failure } : x)));
+        patch(serverId, (s) => ({ messages: { ...s.messages, [entry.chat_id]: markFailed(s.messages[entry.chat_id] ?? [], entry.client_id, failure) } }));
       }
     }
   };
@@ -263,6 +268,7 @@ export const useApp = create<AppState>((set, get) => {
   const localMessage = (entry: OutboxEntry): Message => ({
     id: entry.client_id, chat_id: entry.chat_id, role: 'user', text: entry.text, status: entry.failed ? 'failed' : 'queued',
     meta: { client_id: entry.client_id, ...(entry.attachments?.length ? { attachments: entry.attachments } : {}),
+      ...(entry.failure ? { delivery_error: entry.failure } : {}),
       ...(entry.reply_to ? { reply_to: entry.reply_to } : {}) },
     created_at: entry.created_at, updated_at: entry.created_at,
   });
@@ -671,10 +677,12 @@ export const useApp = create<AppState>((set, get) => {
       const retryClientId = o.retryClientId;
       const server = get().servers.find((s) => s.id === serverId);
       if (!server || (!text.trim() && !o.attachments?.length && !retryClientId)) return;
+      if (retryClientId && get().runtime[serverId]?.messages[chatId]?.some((m) =>
+        !isLocal(m) && m.meta?.client_id === retryClientId)) return;
       // A retry reuses the original id so the server can tell it already has the message.
       const clientId = retryClientId ?? `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
       const existing = get().runtime[serverId]?.outbox.find((x) => x.client_id === clientId);
-      const entry: OutboxEntry = existing ? { ...existing, failed: false }
+      const entry: OutboxEntry = existing ? { ...existing, failed: false, failure: undefined }
         : { client_id: clientId, chat_id: chatId, text: text.trim(), created_at: Date.now() / 1000,
           ...(o.attachments?.length ? { attachments: o.attachments } : {}), ...(o.replyTo ? { reply_to: o.replyTo } : {}) };
       updateOutbox(serverId, (o) => [...o.filter((x) => x.client_id !== clientId), entry]);

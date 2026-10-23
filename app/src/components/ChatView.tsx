@@ -233,11 +233,18 @@ export function ChatView({ server, chatId, showBack, embedded, landing }: { serv
  */
 function editAgain(server: Server, m: Message, failed: boolean) {
   const st = useApp.getState();
+  const key = `${server.id}:${m.chat_id}`;
+  if ((st.drafts[key]?.trim() && st.drafts[key] !== m.text)
+    || (st.replyTo[key] && st.replyTo[key].id !== m.meta?.reply_to?.id)) {
+    st.toast({ serverId: server.id, title: 'You have an unsent draft', body: 'Send or clear your current draft before editing this message.' });
+    focusComposer(server.id, m.chat_id);
+    return false;
+  }
   st.setDraft(server.id, m.chat_id, m.text);
   const uploads = failed ? ((m.meta?.attachments ?? []) as Upload[]).filter((u) => u.id) : [];
   if (uploads.length) {
     st.updateDraftFiles(server.id, m.chat_id, (files) => [
-      ...files.filter((f) => !uploads.some((u) => u.id === f.localId)),
+      ...files.filter((f) => !uploads.some((u) => u.id === f.upload?.id || u.id === f.localId)),
       ...uploads.map((u): DraftFile => ({
         localId: u.id, name: u.name, mime: u.mime, kind: u.kind, size: u.size, progress: 1, status: 'ready', upload: u,
         previewUri: u.kind === 'image' ? mediaUrl(server, u.url) : undefined,
@@ -246,6 +253,7 @@ function editAgain(server: Server, m: Message, failed: boolean) {
   }
   if (m.meta?.reply_to) st.setReplyTo(server.id, m.chat_id, m.meta.reply_to);
   focusComposer(server.id, m.chat_id);
+  return true;
 }
 
 /** What a screen reader says for a message: who, when, and what it says. */
@@ -784,12 +792,15 @@ function FailedActions({ server, message, right }: { server: Server; message: Me
   const discard = useApp((st) => st.discardMessage);
   const clientId = message.meta?.client_id ?? message.id;
   return (
-    <View style={[s.state, right && s.stateRight]} accessibilityLiveRegion="polite">
+    <View style={[s.deliveryFailure, right && { alignItems: 'flex-end' }]} accessibilityLiveRegion="polite">
+      <View style={[s.state, right && s.stateRight]}>
       <RotateCcw size={13} color={t.colors.danger} />
       <Text style={[s.stateText, { color: t.colors.danger }]}>Not delivered</Text>
-      <Text accessibilityRole="button" style={s.stateAction} onPress={() => sendMessage(server.id, message.chat_id, message.text, clientId)}>Retry</Text>
-      <Text accessibilityRole="button" style={s.stateAction} onPress={() => { editAgain(server, message, true); discard(server.id, message.chat_id, clientId); }}>Edit</Text>
-      <Text accessibilityRole="button" style={s.stateAction} onPress={() => discard(server.id, message.chat_id, clientId)}>Delete</Text>
+      <Tap accessibilityLabel="Retry this message" style={s.stateAction} onPress={() => sendMessage(server.id, message.chat_id, message.text, clientId)}><Text style={s.stateActionText}>Retry</Text></Tap>
+      <Tap accessibilityLabel="Edit this failed message" style={s.stateAction} onPress={() => { if (editAgain(server, message, true)) discard(server.id, message.chat_id, clientId); }}><Text style={s.stateActionText}>Edit</Text></Tap>
+      <Tap accessibilityLabel="Delete this failed message" style={s.stateAction} onPress={() => discard(server.id, message.chat_id, clientId)}><Text style={s.stateActionText}>Delete</Text></Tap>
+      </View>
+      {message.meta?.delivery_error ? <Text style={[s.stateText, { maxWidth: 440 }]}>{message.meta.delivery_error}</Text> : null}
     </View>
   );
 }
@@ -931,7 +942,9 @@ const useStyles = makeStyles((t) => ({
   state: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 5, marginTop: 5 },
   stateRight: { justifyContent: 'flex-end' },
   stateText: { ...t.type.caption, color: t.colors.textSecondary },
-  stateAction: { ...t.type.caption, fontFamily: t.fonts.semibold, color: t.colors.accent, paddingHorizontal: 6, paddingVertical: 6 },
+  deliveryFailure: { gap: 2, paddingHorizontal: 4 },
+  stateAction: { minHeight: 44, paddingHorizontal: 8, justifyContent: 'center' },
+  stateActionText: { ...t.type.caption, fontFamily: t.fonts.semibold, color: t.colors.accent },
   activity: { paddingHorizontal: 16, marginTop: 8, alignItems: 'flex-start' },
   activityPill: {
     flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, minHeight: 30, borderRadius: t.radius.pill,

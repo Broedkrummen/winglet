@@ -7,6 +7,10 @@ Assignment 04 — branch `codex/major-04-execution`, worktree
 This document is the execution agent's contract and handoff. Other agents may rely on the capability
 keys, route and event names below; they must not redefine them.
 
+Feature commits on `b71d93b`: `34a7dea` (contract/notice), `1128b62` (event model), `7253207`
+(server hooks and route), `3d83fae` (store wiring), `8706f46` (task sheet), followed by this handoff
+update. The branch was built and tested from the isolated worktree, not the shared checkout.
+
 ## Implementation summary
 
 Winglet no longer infers the current task from Hermes's prose progress lines. The plugin folds
@@ -287,11 +291,12 @@ deferred to Codex**.
 
 ## Known merge surface
 
-At handoff, re-check `origin/codex/major-features`: shared-file conflicts are most likely in
-`plugin/hub.py` (`features()`, `ROUTE_POLICY`, routes, chat delete) and `app/src/lib/store.ts`
-(`ServerState`, `handleEvent`, `loadTask`). The feature is additive; resolve by keeping both features'
-keys and cases. `TaskProgress.tsx` may conflict with another agent's control work; keep the baseline
-strip semantics and this sheet.
+At handoff, `origin/codex/major-features` was fetched and still sits at `b71d93b`; this branch is 5
+commits ahead and 0 behind, so there is no current conflict. When the other major-feature branches
+land, shared-file conflicts are most likely in `plugin/hub.py` (`features()`, `ROUTE_POLICY`, routes,
+chat delete) and `app/src/lib/store.ts` (`ServerState`, `handleEvent`, `loadTask`). The feature is
+additive; resolve by keeping both features' keys and cases. `TaskProgress.tsx` may conflict with
+another agent's control work; keep the baseline strip semantics and this sheet.
 
 ## For Codex orchestrator review
 

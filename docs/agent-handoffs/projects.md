@@ -213,6 +213,10 @@ commands were run in the isolated worktree, never the shared checkout.
 | Web export | `npx expo export --platform web` | **passed**; exported `dist` (web entry 3.4 MB + 45 KB) |
 | Android bundle export | `npx expo export --platform android --output-dir dist-android` | **passed**; Hermes bytecode 5.8 MB |
 
+GitHub Actions on PR #46 also passed all four jobs: Plugin tests (Ubuntu) 29 s, Plugin tests
+(Windows) 1 m 2 s, Plugin tests with Hermes 1 m 7 s, and App typecheck + web build 1 m 59 s
+(run `40040933743`).
+
 The project tests cover additive schema and ungrouped existing chats; signed/unsigned policy and
 hello snapshot; rename/reorder/archive/delete with chats preserved; duplicate/blank names; stale
 project revisions with the current snapshot; reorder races; create/move idempotency and key reuse;
@@ -419,8 +423,8 @@ The fixture is disposable and must stay outside the repository:
   snapshot and `project.sync`; additive SQLite tables; search `project_id`; no protocol bump; no
   changes to `plugin/store.py` or Hermes APIs.
 - **Checks passed:** 13/13 project pytest, 314 passed / 16 skipped full pytest, 281/281 Node tests,
-  typecheck, web export, Android bundle export, rendered web checks at 1440/1024/820/390/320 in
-  light/dark with no document overflow.
+  typecheck, web export, Android bundle export, all four PR CI jobs, and rendered web checks at
+  1440/1024/820/390/320 in light/dark with no document overflow.
 - **Checks not run:** native Android build, emulator/device testing, audio/permission/keyboard/
   safe-area/notification tests, live Hermes routine execution.
 - **Outstanding:** MOBILE VALIDATION PENDING as above; optional future drag-and-drop and

@@ -162,7 +162,13 @@ function Sidebar({ onClose, drawer = false }: { onClose: () => void; drawer?: bo
   const glassTarget = useRef<View>(null);
   const reducedTransparency = useReducedTransparency();
   // Actionable chats remain findable even if they were archived on this device.
-  const all = useMemo(() => sidebarChats(servers, chats, prefs.pinnedChats, filter === 'all' ? prefs.archivedChats : [], query), [servers, chats, prefs.pinnedChats, prefs.archivedChats, query, filter]);
+  const all = useMemo(() => {
+    const previews = Object.fromEntries(servers.flatMap((bot) => Object.values(chats[bot.id] ?? {}).map((chat) => {
+      const key = `${bot.id}:${chat.id}`;
+      return [chatKey(bot.id, chat.id), draftPreview(drafts[key], draftFiles[key], !!replyTo[key])];
+    })));
+    return sidebarChats(servers, chats, prefs.pinnedChats, filter === 'all' ? prefs.archivedChats : [], query, previews);
+  }, [servers, chats, prefs.pinnedChats, prefs.archivedChats, query, filter, drafts, draftFiles, replyTo]);
   const stateOf = (botId: string, chatId: string) => chatActivity({ typing: typing[botId], inbox: inbox[botId] }, chatId, now);
   const rows = all.filter(({ server: bot, chat }) => matchesChatFilter(filter, stateOf(bot.id, chat.id)));
   const counts = servers.reduce((total, bot) => {

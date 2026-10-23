@@ -74,8 +74,14 @@ checks, cancellation/reconnect behavior and meaningful integration tests.
   the model picker showed the current DeepSeek entry in Starred without changing the model.
   A live counting request was stopped from the task strip; Hermes acknowledged the stop and the
   working indicator cleared.
+- Standalone Android: the [artifact build](https://github.com/VIKASRP24/winglet/actions/runs/39956595821)
+  produced signed ARM64 and ARMv7 APKs from `ae77a54`. Signature checks passed; the downloaded ZIP
+  matched GitHub's SHA-256 digest. The ARM64 APK updated the installed app normally, retaining its
+  signing identity and both bot pairings. With Metro stopped and USB forwarding removed, it restored
+  a new encrypted draft after process termination and received a fresh `WINGLET_APK_OK` through
+  DeepSeek. The synthetic unsent draft was cleared after verification.
 
-The Android export checks JavaScript and Hermes bytecode; it is not a newly signed APK. Physical
-iPhone behavior, real push delivery, prolonged offline operation and the remaining backend features
-still need their own validation. The live checks used a separate QA conversation and did not update
-the remote Hermes installation or change its provider configuration.
+Physical iPhone behavior, real push delivery, prolonged offline operation and the remaining backend
+features still need their own validation. The live checks used a separate QA conversation and did not
+update the remote Hermes installation or change its provider configuration. The APK is a signed
+branch build; the artifact workflow did not publish a release.

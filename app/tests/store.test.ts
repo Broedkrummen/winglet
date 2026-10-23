@@ -64,6 +64,7 @@ function harness(os = 'web') {
     return exports;
   }
   const helpers = compile('../src/lib/messages.ts', {});
+  const taskModel = compile('../src/features/execution/model.ts', {});
   const { useApp: store } = compile('../src/lib/store.ts', {
     zustand: { create: (fn: any) => createStore(fn) },
     'zustand/react/shallow': { useShallow: (fn: any) => fn },
@@ -77,6 +78,7 @@ function harness(os = 'web') {
       cacheRemove: async (prefix: string) => { for (const k of [...cache.keys()]) if (k.startsWith(prefix)) cache.delete(k); },
     },
     './verify': { NEEDS_VERIFY: 'Verify this phone to do that.' },
+    '../features/execution/model': taskModel,
     './sounds': { sound: { reply: () => played.push('reply'), needsYou: () => played.push('needsYou'), tap: () => {}, sent: () => {} } },
     './storage': { getJSON: async (key: string, fallback: any) => (key === 'winglet.servers' && persisted) || fallback,
       setJSON: async (key: string, value: any) => { if (key === 'winglet.servers') persisted = value; } },

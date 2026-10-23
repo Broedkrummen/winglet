@@ -298,6 +298,26 @@ Screenshots (synthetic fixture, no tokens or personal chats):
 - Long diff lines scroll sideways; on desktop browsers the horizontal scrollbar is an
   overlay and may be visible only while scrolling.
 
+## Dependencies and review entry points
+
+No new runtime dependency. Hermes already needs `git` for checkpoints; Winglet uses the
+manager in the gateway process.
+
+Read in this order:
+
+1. `plugin/checkpoints.py` — the security and correctness core: hash validation,
+   bounded parsing, revisions, refusals, idempotency, outcome wording. Its tests are
+   `tests/test_checkpoints.py` (fake Hermes) and `tests/test_checkpoints_hermes.py`
+   (real manager).
+2. `plugin/hermes_api.py` → "workspace checkpoints" — every Hermes import, the
+   config/workspace resolution, and the container refusal.
+3. `plugin/hub.py` — the three routes, `ROUTE_POLICY`, capabilities, audit, event
+   visibility, `busy_chats()`.
+4. `app/src/features/checkpoints/CheckpointSheet.tsx` and `CheckpointsScreen.tsx` —
+   the timeline, diff well, confirmation and result states.
+5. `app/src/features/checkpoints/format.ts` + `app/tests/checkpoints.test.ts` — the
+   wording and gating that must stay honest.
+
 ## MOBILE VALIDATION PENDING
 
 **Status:** code implemented; automated/plugin/app/build checks passed; **native build

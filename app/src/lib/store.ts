@@ -103,6 +103,8 @@ type AppState = {
   setDraft: (serverId: string, chatId: string, text: string) => void;
   respond: (serverId: string, itemId: string, reply: { choice?: string; answer?: string | string[] }) => Promise<void>;
   createChat: (serverId: string, title?: string) => Promise<Chat | undefined>;
+  /** Add or replace a chat the server just made (a branch) and leave its history to load. */
+  upsertChat: (serverId: string, chat: Chat) => void;
   renameChat: (serverId: string, chatId: string, title: string) => Promise<void>;
   deleteChat: (serverId: string, chatId: string) => Promise<void>;
   toast: (t: Omit<Toast, 'id'>) => void;
@@ -765,6 +767,10 @@ export const useApp = create<AppState>((set, get) => {
       const data = await api<{ chat: Chat }>(server, '/api/chats', { method: 'POST', body: JSON.stringify({ title }) });
       patch(serverId, (s) => ({ chats: { ...s.chats, [data.chat.id]: data.chat }, loaded: { ...s.loaded, [data.chat.id]: true } }));
       return data.chat;
+    },
+
+    upsertChat: (serverId, chat) => {
+      patch(serverId, (s) => ({ chats: { ...s.chats, [chat.id]: chat }, loaded: { ...s.loaded, [chat.id]: false } }));
     },
 
     renameChat: async (serverId, chatId, title) => {

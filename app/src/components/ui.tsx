@@ -377,7 +377,7 @@ const useStyles = makeStyles((t) => ({
     flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, height: 46, borderRadius: t.radius.pill,
     backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border,
   },
-  searchInput: { flex: 1, ...t.type.body, color: t.colors.text, ...({ outlineStyle: 'none' } as object) },
+  searchInput: { flex: 1, minWidth: 0, ...t.type.body, color: t.colors.text, ...({ outlineStyle: 'none' } as object) },
   searchClear: { width: 20, height: 20, borderRadius: 10, backgroundColor: t.colors.textTertiary, alignItems: 'center', justifyContent: 'center' },
   buttonShell: { borderRadius: t.radius.pill, overflow: 'hidden' },
   buttonInner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 20 },

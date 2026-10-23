@@ -192,8 +192,9 @@ App:
   reset, unconfirmed children/tools at turn end, snapshot ordering, plan revisions, plan tree cycles and
   cancelled steps, active-first subagents and nesting, unconfirmed state after staleness, strip
   visibility for running/terminal/pending/expired states, elapsed/duration formatting, identity
-  fallback, hostile-server bounds, unfinished plan labels.
-- Full app suite: **283 passed, 0 failed**.
+  fallback, hostile-server bounds, unfinished plan labels. `store.test.ts` also checks that task events
+  stay per chat, a stale refetch cannot undo a live tool fact, and a fresh `hello` clears the snapshots.
+- Full app suite: **284 passed, 0 failed**.
 - `npx tsc --noEmit`: passed.
 - `npx expo export --platform web`: passed (27 assets).
 - `npx expo export --platform android --output-dir dist-android`: passed; Hermes bytecode
@@ -262,7 +263,7 @@ modifications, full MIT text). Upstream file-specific headers were checked; no a
 
 ## MOBILE VALIDATION PENDING
 
-Status labels: **code implemented**; **automated/build checks passed** (pytest 323, app 283, typecheck,
+Status labels: **code implemented**; **automated/build checks passed** (pytest 323, app 284, typecheck,
 web and Android bundle exports); **native build not run** in this agent phase; **mobile validation
 deferred to Codex**.
 

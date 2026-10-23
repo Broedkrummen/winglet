@@ -417,6 +417,7 @@ export const useApp = create<AppState>((set, get) => {
 
   /** The latest pet request per bot. */
   const petLoads = new Map<string, number>();
+  const inboxLoads = new Map<string, number>();
 
   /** Load what this phone remembers about a bot, so it opens instantly and works offline. */
   const hydrateServer = async (serverId: string) => {
@@ -662,11 +663,20 @@ export const useApp = create<AppState>((set, get) => {
     loadInbox: async (serverId) => {
       const server = get().servers.find((s) => s.id === serverId);
       if (!server) return;
+      const load = (inboxLoads.get(serverId) ?? 0) + 1;
+      inboxLoads.set(serverId, load);
+      const before = get().runtime[serverId]?.inbox;
       try {
         const data = await api<{ items: InboxItem[]; pending: number }>(server, '/api/inbox');
+        if (inboxLoads.get(serverId) !== load || get().servers.find((s) => s.id === serverId) !== server) return;
         const inbox: Record<string, InboxItem> = {};
         for (const item of data.items) inbox[item.id] = item;
-        patch(serverId, () => ({ inbox, pending: data.pending }));
+        patch(serverId, (s) => {
+          // A question may have arrived or been answered while the HTTP snapshot was on its way.
+          // Keep precisely those live changes, including equal-timestamp transitions.
+          for (const [id, item] of Object.entries(s.inbox)) if (before?.[id] !== item) inbox[id] = item;
+          return { inbox, pending: Object.values(inbox).filter((item) => item.status === 'pending' && item.kind !== 'result').length };
+        });
       } catch {
         // offline: keep what we have
       }

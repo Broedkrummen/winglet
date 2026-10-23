@@ -639,3 +639,35 @@ test('server refusal details survive a restart and a retry reuses the files, rep
   assert.equal(JSON.stringify(payload.attachments), JSON.stringify(['upload']));
   assert.equal(h.outbox().length, 0);
 });
+
+test('an inbox snapshot cannot revive an answered request or hide a question received in flight', async () => {
+  const h = harness();
+  await h.connect(); await h.hello();
+  const question = { id: 'q', kind: 'question', status: 'pending', chat_id: 'general', updated_at: 1 };
+  h.event({ type: 'inbox.new', item: question, pending: 1 });
+  let resolve!: (value: any) => void;
+  h.setRequest(() => new Promise((done) => { resolve = done; }));
+  const loading = h.store.getState().loadInbox('s');
+  h.event({ type: 'inbox.update', item: { ...question, status: 'resolved' }, pending: 0 });
+  h.event({ type: 'inbox.new', item: { ...question, id: 'new' }, pending: 1 });
+  resolve({ items: [question], pending: 1 });
+  await loading;
+  assert.equal(h.store.getState().runtime.s.inbox.q.status, 'resolved');
+  assert.equal(h.store.getState().runtime.s.inbox.new.status, 'pending');
+  assert.equal(h.store.getState().runtime.s.pending, 1);
+});
+
+test('overlapping inbox loads apply only the latest requested snapshot', async () => {
+  const h = harness();
+  await h.connect(); await h.hello();
+  const resolve: ((value: any) => void)[] = [];
+  h.setRequest(() => new Promise((done) => resolve.push(done)));
+  const first = h.store.getState().loadInbox('s');
+  const second = h.store.getState().loadInbox('s');
+  resolve[1]({ items: [], pending: 0 });
+  await second;
+  resolve[0]({ items: [{ id: 'stale', kind: 'question', status: 'pending' }], pending: 1 });
+  await first;
+  assert.equal(h.store.getState().runtime.s.pending, 0);
+  assert.equal(Object.keys(h.store.getState().runtime.s.inbox).length, 0);
+});

@@ -3,12 +3,13 @@ import { useShallow } from 'zustand/react/shallow';
 import { Platform } from 'react-native';
 import { RecoveryCoordinator } from './recovery';
 import { sound } from './sounds';
-import { api, ApiError, wsUrl } from './api';
+import { api, ApiError, signedApi, wsUrl } from './api';
 import { cacheGet, cacheRemove, cacheSet } from './cache';
 import { isNotifiable, markFailed, mergeMessages } from './messages';
 import { getJSON, setJSON } from './storage';
 import { NEEDS_VERIFY } from './verify';
-import type { Attachment, BotRow, Chat, ConnStatus, DraftFile, InboxItem, Job, Me, Message, PauseState, PetSheet, ReplyRef, Server, ServerInfo } from './types';
+import type { Attachment, BotRow, Chat, ConnStatus, DraftFile, InboxItem, Job, Me, Message, PauseState, PetSheet, Project, ProjectSnapshot, ReplyRef, Server, ServerInfo } from './types';
+import { applyOrder, EMPTY_PROJECTS, readSnapshot } from '../features/projects/logic';
 
 const SERVERS_KEY = 'winglet.servers';
 const SELECTION_KEY = 'winglet.selection';
@@ -61,6 +62,8 @@ export type ServerState = {
   job?: Job;
   /** The agent's pet, its animated face: null when it has none, undefined until known. */
   pet?: PetSheet | null;
+  /** Server-persisted folders for this bot's chats; undefined on a server without the feature. */
+  projects?: ProjectSnapshot;
 };
 
 type Selection = { serverId?: string; chatId?: string };
@@ -105,6 +108,17 @@ type AppState = {
   createChat: (serverId: string, title?: string) => Promise<Chat | undefined>;
   renameChat: (serverId: string, chatId: string, title: string) => Promise<void>;
   deleteChat: (serverId: string, chatId: string) => Promise<void>;
+  /** Read the server's project snapshot again (after a conflict, or opening the Projects screen). */
+  loadProjects: (serverId: string) => Promise<void>;
+  createProject: (serverId: string, name: string) => Promise<Project | undefined>;
+  renameProject: (serverId: string, projectId: string, name: string) => Promise<boolean>;
+  setProjectArchived: (serverId: string, projectId: string, archived: boolean) => Promise<boolean>;
+  reorderProjects: (serverId: string, ids: string[]) => Promise<boolean>;
+  deleteProject: (serverId: string, projectId: string) => Promise<boolean>;
+  /** Move an accessible chat into a project, or out of every project with null. */
+  moveChatToProject: (serverId: string, chatId: string, projectId: string | null) => Promise<boolean>;
+  /** Start a chat inside a project; it is a normal chat with its own Hermes session. */
+  createChatInProject: (serverId: string, projectId: string, title?: string) => Promise<Chat | undefined>;
   toast: (t: Omit<Toast, 'id'>) => void;
   dismissToast: (id: string) => void;
   clearCache: () => Promise<void>;
@@ -168,6 +182,32 @@ export const useApp = create<AppState>((set, get) => {
     }));
 
   const saveOutbox = (serverId: string) => cacheSet(`outbox:${serverId}`, get().runtime[serverId]?.outbox ?? []);
+
+  /** Keep project structure with the chat cache so it is readable while the bot is unreachable. */
+  const setProjects = (serverId: string, snapshot: ProjectSnapshot) => {
+    patch(serverId, () => ({ projects: snapshot }));
+    cacheSet(`projects:${serverId}`, snapshot);
+  };
+
+  const requestId = (what: string) =>
+    `project-${what}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+
+  /** A project change needs a live, feature-capable bot. It never joins the offline outbox. */
+  const projectServer = (serverId: string): Server => {
+    const state = get();
+    const server = state.servers.find((s) => s.id === serverId);
+    const runtime = state.runtime[serverId];
+    if (!server) throw new Error('Pair a bot first.');
+    if (!runtime?.info?.features?.projects) throw new Error("This server can't store projects yet. Update Winglet on the server.");
+    if (!state.network || runtime.status !== 'online') throw new Error('Connect to your bot to change projects.');
+    return server;
+  };
+
+  /** A 409 carries the server's current snapshot: adopt it so the UI rolls back to the truth. */
+  const projectFailure = (serverId: string, error: unknown): Error => {
+    if (error instanceof ApiError && error.data?.projects) setProjects(serverId, readSnapshot(error.data.projects));
+    return error instanceof Error ? error : new Error('The change did not go through.');
+  };
 
   const updateOutbox = (serverId: string, fn: (o: OutboxEntry[]) => OutboxEntry[]) => {
     patch(serverId, (s) => ({ outbox: fn(s.outbox) }));
@@ -287,11 +327,13 @@ export const useApp = create<AppState>((set, get) => {
         };
         const compat = info.min_app_protocol > APP_PROTOCOL ? 'update-app' as const
           : info.protocol < MIN_SERVER_PROTOCOL ? 'update-server' as const : undefined;
+        const projects = ev.projects ? readSnapshot(ev.projects) : undefined;
         patch(serverId, () => ({ status: 'online', chats, typing, pending: ev.pending ?? 0, loaded: {}, info, compat,
-          me: ev.me as Me | undefined, paused: (ev.paused ?? null) as PauseState }));
+          me: ev.me as Me | undefined, paused: (ev.paused ?? null) as PauseState, projects }));
         // From now on, send the token in the socket's first frame rather than the URL.
         if (server && info.features.ws_auth && !server.wsAuth) get().updateServer(serverId, { wsAuth: true });
         cacheSet(`chats:${serverId}`, chats);
+        if (projects) cacheSet(`projects:${serverId}`, projects);
         if (server && ev.bot && JSON.stringify(ev.bot) !== JSON.stringify(server.bot)) {
           set((state) => ({ servers: state.servers.map((s) => (s.id === serverId ? { ...s, bot: ev.bot } : s)) }));
           persist();
@@ -350,6 +392,9 @@ export const useApp = create<AppState>((set, get) => {
         break;
       case 'chat.delete':
         forgetChat(serverId, ev.chat_id);
+        break;
+      case 'project.sync':
+        if (ev.projects) setProjects(serverId, readSnapshot(ev.projects));
         break;
       case 'typing':
         patch(serverId, (s) => {
@@ -421,11 +466,12 @@ export const useApp = create<AppState>((set, get) => {
 
   /** Load what this phone remembers about a bot, so it opens instantly and works offline. */
   const hydrateServer = async (serverId: string) => {
-    const [chats, inbox, outbox, pet] = await Promise.all([
+    const [chats, inbox, outbox, pet, projects] = await Promise.all([
       cacheGet<Record<string, Chat>>(`chats:${serverId}`, {}),
       cacheGet<InboxItem[]>(`inbox:${serverId}`, []),
       cacheGet<OutboxEntry[]>(`outbox:${serverId}`, []),
       cacheGet<PetSheet | null>(`pet:${serverId}`, null),
+      cacheGet<ProjectSnapshot | undefined>(`projects:${serverId}`, undefined),
     ]);
     patch(serverId, (s) => {
       const messages = { ...s.messages };
@@ -443,6 +489,7 @@ export const useApp = create<AppState>((set, get) => {
         outbox: [...s.outbox, ...outbox.filter((o) => !s.outbox.some((x) => x.client_id === o.client_id))],
         messages,
         pet: s.pet === undefined ? pet : s.pet,
+        projects: s.projects === undefined ? (projects ? readSnapshot(projects) : undefined) : s.projects,
       };
     });
   };
@@ -562,7 +609,7 @@ export const useApp = create<AppState>((set, get) => {
         const visibleChat = state.visibleChat?.serverId === serverId ? undefined : state.visibleChat;
         return { servers, runtime, selection, drafts, draftFiles, replyTo, visibleChat };
       });
-      for (const prefix of [`chats:${serverId}`, `inbox:${serverId}`, `outbox:${serverId}`, `msgs:${serverId}:`, `pet:${serverId}`]) cacheRemove(prefix);
+      for (const prefix of [`chats:${serverId}`, `inbox:${serverId}`, `outbox:${serverId}`, `msgs:${serverId}:`, `pet:${serverId}`, `projects:${serverId}`]) cacheRemove(prefix);
       await persist();
       await setJSON(SELECTION_KEY, get().selection);
     },
@@ -783,12 +830,150 @@ export const useApp = create<AppState>((set, get) => {
       forgetChat(serverId, chatId);
     },
 
+    loadProjects: async (serverId) => {
+      const server = get().servers.find((s) => s.id === serverId);
+      if (!server || !get().runtime[serverId]?.info?.features?.projects) return;
+      try {
+        const data = await api<{ projects: unknown }>(server, '/api/projects');
+        setProjects(serverId, readSnapshot(data.projects));
+      } catch {
+        // Keep the cached structure; the next hello or project.sync repairs it.
+      }
+    },
+
+    createProject: async (serverId, name) => {
+      const server = projectServer(serverId);
+      const data = await signedApi<{ project: Project; projects?: unknown }>(server, 'POST', '/api/projects',
+        { name, client_id: requestId('create') }).catch((e) => { throw projectFailure(serverId, e); });
+      if (data.projects) setProjects(serverId, readSnapshot(data.projects));
+      return data.project;
+    },
+
+    renameProject: async (serverId, projectId, name) => {
+      const server = projectServer(serverId);
+      const previous = get().runtime[serverId]?.projects;
+      const project = previous?.projects.find((p) => p.id === projectId);
+      if (!previous || !project) throw new Error('This project is no longer here.');
+      setProjects(serverId, { ...previous,
+        projects: previous.projects.map((p) => (p.id === projectId ? { ...p, name } : p)) });
+      try {
+        const data = await signedApi<{ projects?: unknown }>(server, 'PATCH',
+          `/api/projects/${encodeURIComponent(projectId)}`,
+          { name, revision: project.revision, client_id: requestId('rename') });
+        if (data.projects) setProjects(serverId, readSnapshot(data.projects));
+        return true;
+      } catch (e) {
+        setProjects(serverId, previous);
+        throw projectFailure(serverId, e);
+      }
+    },
+
+    setProjectArchived: async (serverId, projectId, archived) => {
+      const server = projectServer(serverId);
+      const previous = get().runtime[serverId]?.projects;
+      const project = previous?.projects.find((p) => p.id === projectId);
+      if (!previous || !project) throw new Error('This project is no longer here.');
+      setProjects(serverId, { ...previous,
+        projects: previous.projects.map((p) => (p.id === projectId ? { ...p, archived } : p)) });
+      try {
+        const data = await signedApi<{ projects?: unknown }>(server, 'PATCH',
+          `/api/projects/${encodeURIComponent(projectId)}`,
+          { archived, revision: project.revision, client_id: requestId(archived ? 'archive' : 'restore') });
+        if (data.projects) setProjects(serverId, readSnapshot(data.projects));
+        return true;
+      } catch (e) {
+        setProjects(serverId, previous);
+        throw projectFailure(serverId, e);
+      }
+    },
+
+    reorderProjects: async (serverId, ids) => {
+      const server = projectServer(serverId);
+      const previous = get().runtime[serverId]?.projects;
+      if (!previous) throw new Error('Projects are not loaded yet.');
+      setProjects(serverId, applyOrder(previous, ids));
+      try {
+        const data = await signedApi<{ projects?: unknown }>(server, 'PUT', '/api/projects/order',
+          { ids, layout_revision: previous.layout_revision, client_id: requestId('order') });
+        if (data.projects) setProjects(serverId, readSnapshot(data.projects));
+        return true;
+      } catch (e) {
+        setProjects(serverId, previous);
+        throw projectFailure(serverId, e);
+      }
+    },
+
+    deleteProject: async (serverId, projectId) => {
+      const server = projectServer(serverId);
+      const previous = get().runtime[serverId]?.projects;
+      const project = previous?.projects.find((p) => p.id === projectId);
+      if (!previous || !project) throw new Error('This project is no longer here.');
+      setProjects(serverId, { ...previous, projects: previous.projects.filter((p) => p.id !== projectId),
+        threads: previous.threads.filter((t) => t.project_id !== projectId) });
+      try {
+        const data = await signedApi<{ projects?: unknown }>(server, 'DELETE',
+          `/api/projects/${encodeURIComponent(projectId)}`,
+          { revision: project.revision, client_id: requestId('delete') });
+        if (data.projects) setProjects(serverId, readSnapshot(data.projects));
+        return true;
+      } catch (e) {
+        setProjects(serverId, previous);
+        throw projectFailure(serverId, e);
+      }
+    },
+
+    moveChatToProject: async (serverId, chatId, projectId) => {
+      const server = projectServer(serverId);
+      const previous = get().runtime[serverId]?.projects ?? EMPTY_PROJECTS;
+      const target = projectId ? previous.projects.find((p) => p.id === projectId) : undefined;
+      if (projectId && !target) throw new Error('That project is no longer here.');
+      if (target?.archived) throw new Error('Restore this project before moving a chat into it.');
+      const thread = previous.threads.find((t) => t.chat_id === chatId);
+      if ((thread?.project_id ?? null) === projectId) return true;
+      const source = thread ? previous.projects.find((p) => p.id === thread.project_id) : undefined;
+      // Optimistic place at the end; the server's snapshot replaces this immediately on success.
+      const position = Math.max(0, ...previous.threads.filter((t) => t.project_id === projectId).map((t) => t.position)) + 1000;
+      setProjects(serverId, { ...previous,
+        threads: [...previous.threads.filter((t) => t.chat_id !== chatId),
+          ...(projectId ? [{ chat_id: chatId, project_id: projectId, position }] : [])] });
+      try {
+        const data = projectId
+          ? await signedApi<{ projects?: unknown }>(server, 'POST',
+            `/api/projects/${encodeURIComponent(projectId)}/chats/${encodeURIComponent(chatId)}`,
+            { revision: target!.revision, ...(source ? { from_project_id: source.id, from_revision: source.revision } : {}),
+              client_id: requestId('move') })
+          : await signedApi<{ projects?: unknown }>(server, 'DELETE',
+            `/api/projects/${encodeURIComponent(source!.id)}/chats/${encodeURIComponent(chatId)}`,
+            { revision: source!.revision, client_id: requestId('remove') });
+        if (data.projects) setProjects(serverId, readSnapshot(data.projects));
+        return true;
+      } catch (e) {
+        setProjects(serverId, previous);
+        throw projectFailure(serverId, e);
+      }
+    },
+
+    createChatInProject: async (serverId, projectId, title) => {
+      const server = projectServer(serverId);
+      const project = get().runtime[serverId]?.projects?.projects.find((p) => p.id === projectId);
+      if (!project) throw new Error('This project is no longer here.');
+      if (project.archived) throw new Error('Restore this project before starting a chat in it.');
+      const data = await signedApi<{ chat: Chat; projects?: unknown }>(server, 'POST',
+        `/api/projects/${encodeURIComponent(projectId)}/chats`,
+        { ...(title ? { title } : {}), revision: project.revision, client_id: requestId('chat') })
+        .catch((e) => { throw projectFailure(serverId, e); });
+      if (data.projects) setProjects(serverId, readSnapshot(data.projects));
+      patch(serverId, (s) => ({ chats: { ...s.chats, [data.chat.id]: data.chat },
+        loaded: { ...s.loaded, [data.chat.id]: true } }));
+      return data.chat;
+    },
+
     toast,
 
     dismissToast: (id) => set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) })),
 
     clearCache: async () => {
-      for (const prefix of ['msgs:', 'chats:', 'inbox:']) await cacheRemove(prefix);
+      for (const prefix of ['msgs:', 'chats:', 'inbox:', 'projects:']) await cacheRemove(prefix);
     },
   };
 });

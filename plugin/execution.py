@@ -159,6 +159,8 @@ def _activity_status(value: Any) -> str:
         return TOOL_COMPLETED
     if status in ("error", "failed", "failure", "timeout"):
         return TOOL_FAILED
+    if status in ("running", "started", "in_progress"):
+        return TOOL_RUNNING
     return TOOL_UNKNOWN
 
 
@@ -213,6 +215,15 @@ class _Subagent:
             return
         self.activity.append(line)
         del self.activity[:-MAX_ACTIVITY]
+
+    def finish_activity(self, name: Any, status: Any) -> None:
+        """Settle the running row for this tool instead of adding a second, detail-less copy."""
+        label = redact(name, 80) or "tool"
+        for row in reversed(self.activity):
+            if row["name"] == label and row["status"] == TOOL_RUNNING:
+                row["status"] = _activity_status(status)
+                return
+        self.add_activity(label, "", status)
 
     def payload(self) -> Dict[str, Any]:
         return {"id": self.id, "parent_id": self.parent_id, "goal": self.goal, "role": self.role,
@@ -391,7 +402,7 @@ class Tracker:
                 return
             if child is not None:
                 task, sub = child
-                sub.add_activity(tool_name or "tool", "", status)
+                sub.finish_activity(tool_name or "tool", status)
                 task.updated_at = now
                 events = self._update_events(task, {"kind": "subagent.updated", "subagent": sub.payload()})
             else:

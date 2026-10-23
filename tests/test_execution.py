@@ -132,6 +132,18 @@ def test_nested_subagents_and_their_tool_activity():
     assert any((event.get("event") or {}).get("kind") == "subagent.started" for event in published)
 
 
+def test_a_child_tool_settles_one_activity_row():
+    tracker, _, _ = make_tracker()
+    tracker.turn_started("s1", "t1")
+    tracker.subagent_started("s1", "c1", "sa1", goal="Read the report", parent_turn_id="t1")
+    tracker.tool_started("c1", "read_file", "call-1", {"path": "/tmp/report.md"}, turn_id="t1")
+    tracker.tool_finished("c1", "read_file", "call-1", turn_id="t1", status="ok")
+    activity = tracker.snapshot("general")["subagents"][0]["activity"]
+    assert len(activity) == 1
+    assert activity[0]["name"] == "read_file" and activity[0]["status"] == "completed"
+    assert activity[0]["detail"] == "/tmp/report.md"
+
+
 def test_completion_before_start_is_one_honest_row():
     tracker, _, _ = make_tracker()
     tracker.turn_started("s1", "t1")

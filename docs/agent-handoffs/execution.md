@@ -171,15 +171,15 @@ process/checkpoint namespaces, and the global replay envelope.
 
 Plugin (`pytest`, private venv, `--basetemp` inside the worktree):
 
-- `tests/test_execution.py`: **18 passed**. Covers structured turn/plan/tools/outcome; a new turn
+- `tests/test_execution.py`: **19 passed**. Covers structured turn/plan/tools/outcome; a new turn
   clearing stale subtasks, carrying the plan as a non-live "Last plan", and ignoring late events for the
-  old turn; nested subagents and child tool activity; completion-before-start; repeated events; the first
-  terminal fact winning (stop vs later completion) and unresolved children/tools becoming `unknown`;
-  stale plan revisions; unknown statuses; non-Winglet sessions producing nothing; redaction and bounds;
-  list caps; capabilities; reset; hook registration/refusal; the HTTP route off without a tracker; a
-  paired device reading a snapshot; a member refused another member's chat while an owner can read it;
-  the route's policy entry.
-- Full suite: **319 passed, 16 skipped** (skips are the pre-existing optional Hermes/platform cases).
+  old turn; nested subagents and child tool activity (one settled row per child tool); completion-before-
+  start; repeated events; the first terminal fact winning (stop vs later completion) and unresolved
+  children/tools becoming `unknown`; stale plan revisions; unknown statuses; non-Winglet sessions
+  producing nothing; redaction and bounds; list caps; capabilities; reset; hook registration/refusal; the
+  HTTP route off without a tracker; a paired device reading a snapshot; a member refused another
+  member's chat while an owner can read it; the route's policy entry.
+- Full suite: **320 passed, 16 skipped** (skips are the pre-existing optional Hermes/platform cases).
   `tests/route policy` coverage and trust tests pass with the new route.
 
 App:
@@ -258,7 +258,7 @@ modifications, full MIT text). Upstream file-specific headers were checked; no a
 
 ## MOBILE VALIDATION PENDING
 
-Status labels: **code implemented**; **automated/build checks passed** (pytest 319, app 283, typecheck,
+Status labels: **code implemented**; **automated/build checks passed** (pytest 320, app 283, typecheck,
 web and Android bundle exports); **native build not run** in this agent phase; **mobile validation
 deferred to Codex**.
 

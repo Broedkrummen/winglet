@@ -18,7 +18,9 @@ type State = {
   check: (force?: boolean) => Promise<void>;
 };
 
-export const appUpdateSupported = Platform.OS === 'android';
+// Development builds can have a different package and signing key. A public release cannot safely
+// promise an in-place upgrade of that build; it is updated through the development workflow.
+export const appUpdateSupported = Platform.OS === 'android' && (typeof __DEV__ === 'undefined' || !__DEV__);
 
 /** Whether a newer Android app is out on GitHub Releases. */
 export const useAppUpdate = create<State>((set, get) => ({

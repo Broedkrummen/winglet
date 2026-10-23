@@ -25,7 +25,7 @@ function harness(over: Record<string, any> = {}) {
   };
   vm.runInNewContext(ts.transpileModule(readFileSync(new URL('../src/lib/appUpdateCheck.ts', import.meta.url), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-  }).outputText, { exports, require: (name: string) => modules[name], AbortController,
+  }).outputText, { exports, require: (name: string) => modules[name], AbortController, __DEV__: over.development ?? false,
     setTimeout: (fn: () => void, ms: number) => { assert.equal(ms, 15_000); timeout = fn; return 1; },
     clearTimeout: () => { cleared = true; },
     fetch: (...args: any[]) => { calls++; return over.fetch ? over.fetch(...args) : Promise.resolve({ ok: true, json: async () => [] }); },
@@ -89,4 +89,11 @@ test('the web app never checks GitHub', async () => {
   const h = harness({ platform: 'web' });
   await h.state.check(true);
   assert.equal(h.calls(), 0);
+});
+
+test('a development build never offers a public release as an in-place update', async () => {
+  const h = harness({ development: true });
+  await h.state.check(true);
+  assert.equal(h.calls(), 0);
+  assert.equal(h.state.update, null);
 });

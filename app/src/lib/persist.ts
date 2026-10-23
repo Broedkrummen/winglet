@@ -7,7 +7,8 @@ const CACHED_INBOX = 100;
 
 /**
  * Write chats, recent messages, the inbox and drafts to the on-device cache as they change, batched
- * once a second. Only server-confirmed messages are cached; the outbox persists itself.
+ * once a second and immediately when the app leaves the foreground. Only server-confirmed messages
+ * are cached; the outbox persists itself.
  */
 export function attachPersistence(): () => void {
   let prev = useApp.getState();
@@ -15,6 +16,7 @@ export function attachPersistence(): () => void {
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   const flush = () => {
+    if (timer) clearTimeout(timer);
     timer = undefined;
     const state = useApp.getState();
     for (const key of dirty) {
@@ -29,6 +31,10 @@ export function attachPersistence(): () => void {
         cacheSet('draftFiles', ready);
         continue;
       }
+      if (key === 'replyTo') {
+        cacheSet('replyTo', state.replyTo);
+        continue;
+      }
       const [kind, serverId, chatId] = key.split('|');
       const rt = state.runtime[serverId];
       if (!rt) continue; // removed meanwhile; removeServer clears its cache
@@ -41,9 +47,10 @@ export function attachPersistence(): () => void {
     dirty.clear();
   };
 
-  return useApp.subscribe((state) => {
+  const unsubscribe = useApp.subscribe((state) => {
     if (state.drafts !== prev.drafts) dirty.add('drafts');
     if (state.draftFiles !== prev.draftFiles) dirty.add('draftFiles');
+    if (state.replyTo !== prev.replyTo) dirty.add('replyTo');
     for (const [serverId, rt] of Object.entries(state.runtime)) {
       const before = prev.runtime[serverId];
       if (!before || rt === before) continue;
@@ -55,9 +62,18 @@ export function attachPersistence(): () => void {
         }
       }
     }
+    const backgrounding = prev.foreground && !state.foreground;
     prev = state;
-    if (dirty.size && !timer) timer = setTimeout(flush, 1000);
+    if (backgrounding || (!state.foreground && dirty.size)) flush();
+    else if (dirty.size && !timer) timer = setTimeout(flush, 1000);
   });
+  // pagehide also covers closing a browser tab before visibilitychange has reached the store.
+  globalThis.addEventListener?.('pagehide', flush);
+  return () => {
+    unsubscribe();
+    globalThis.removeEventListener?.('pagehide', flush);
+    flush();
+  };
 }
 
 export function cacheable(list: Message[]): Message[] {

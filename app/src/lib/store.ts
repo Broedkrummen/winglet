@@ -136,6 +136,7 @@ const isLocal = (m: Message) => m.status === 'pending' || m.status === 'queued' 
 export const useApp = create<AppState>((set, get) => {
   const patch = (serverId: string, fn: (s: ServerState) => Partial<ServerState>) =>
     set((state) => {
+      if (!state.servers.some((server) => server.id === serverId)) return state;
       const current = state.runtime[serverId] ?? emptyRuntime();
       return { runtime: { ...state.runtime, [serverId]: { ...current, ...fn(current) } } };
     });
@@ -197,6 +198,13 @@ export const useApp = create<AppState>((set, get) => {
       const { [chatId]: _loaded, ...loaded } = s.loaded;
       const { [chatId]: _typing, ...typing } = s.typing;
       return { chats, messages, deleted, loaded, typing, outbox: s.outbox.filter((o) => o.chat_id !== chatId) };
+    });
+    const key = draftKey(serverId, chatId);
+    set((state) => {
+      const { [key]: _draft, ...drafts } = state.drafts;
+      const { [key]: _files, ...draftFiles } = state.draftFiles;
+      const { [key]: _reply, ...replyTo } = state.replyTo;
+      return { drafts, draftFiles, replyTo };
     });
     saveOutbox(serverId);
     cacheRemove(`msgs:${serverId}:${chatId}`);
@@ -450,9 +458,10 @@ export const useApp = create<AppState>((set, get) => {
       const selection = await getJSON<Selection>(SELECTION_KEY, {});
       const drafts = await cacheGet<Record<string, string>>('drafts', {});
       const draftFiles = await cacheGet<Record<string, DraftFile[]>>('draftFiles', {});
+      const replyTo = await cacheGet<Record<string, ReplyRef>>('replyTo', {});
       const runtime: Record<string, ServerState> = {};
       for (const s of servers) runtime[s.id] = emptyRuntime();
-      set({ servers, runtime, drafts, draftFiles, selection: selection.serverId ? selection : { serverId: servers[0]?.id }, ready: true });
+      set({ servers, runtime, drafts, draftFiles, replyTo, selection: selection.serverId ? selection : { serverId: servers[0]?.id }, ready: true });
       await Promise.all(servers.map((s) => hydrateServer(s.id)));
       servers.forEach(connect);
     },
@@ -541,10 +550,14 @@ export const useApp = create<AppState>((set, get) => {
         const servers = state.servers.filter((s) => s.id !== serverId);
         const selection = state.selection.serverId === serverId ? { serverId: servers[0]?.id } : state.selection;
         const drafts = Object.fromEntries(Object.entries(state.drafts).filter(([k]) => !k.startsWith(`${serverId}:`)));
-        return { servers, runtime, selection, drafts };
+        const draftFiles = Object.fromEntries(Object.entries(state.draftFiles).filter(([k]) => !k.startsWith(`${serverId}:`)));
+        const replyTo = Object.fromEntries(Object.entries(state.replyTo).filter(([k]) => !k.startsWith(`${serverId}:`)));
+        const visibleChat = state.visibleChat?.serverId === serverId ? undefined : state.visibleChat;
+        return { servers, runtime, selection, drafts, draftFiles, replyTo, visibleChat };
       });
       for (const prefix of [`chats:${serverId}`, `inbox:${serverId}`, `outbox:${serverId}`, `msgs:${serverId}:`, `pet:${serverId}`]) cacheRemove(prefix);
       await persist();
+      await setJSON(SELECTION_KEY, get().selection);
     },
 
     select: (serverId, chatId) => {

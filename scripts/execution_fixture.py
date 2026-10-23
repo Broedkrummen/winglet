@@ -117,7 +117,9 @@ async def run(args: argparse.Namespace) -> None:
     async def finish(_request):
         live["on"] = False
         await hub.set_typing("general", False)
-        tracker.turn_finished("ms-general", "turn-42", outcome="Summarised the changes; the subject line still needs a retry.")
+        current = tracker.snapshot("general") or {}
+        tracker.turn_finished("ms-general", current.get("turn_id"),
+                              outcome="Summarised the changes; the subject line still needs a retry.")
         return web.json_response({"ok": True}, headers={"Access-Control-Allow-Origin": "*"})
 
     async def pending(_request):
@@ -129,9 +131,16 @@ async def run(args: argparse.Namespace) -> None:
                                     "session_key": "fixture", "request_id": "fixture-1"})
         return web.json_response({"ok": True, "id": item["id"]}, headers={"Access-Control-Allow-Origin": "*"})
 
+    async def next_turn(_request):
+        tracker.turn_started("ms-general", "turn-43")
+        live["on"] = True
+        asyncio.ensure_future(typing())
+        return web.json_response({"ok": True}, headers={"Access-Control-Allow-Origin": "*"})
+
     control = web.Application()
     control.router.add_get("/finish", finish)
     control.router.add_get("/pending", pending)
+    control.router.add_get("/next-turn", next_turn)
     control_runner = web.AppRunner(control)
     await control_runner.setup()
     await web.TCPSite(control_runner, "127.0.0.1", args.control_port).start()
@@ -140,7 +149,7 @@ async def run(args: argparse.Namespace) -> None:
     shown = "10.0.2.2" if args.bind == "0.0.0.0" else args.bind
     print(f"web app:  http://{shown}:{args.port}/", flush=True)
     print(f"pair:     http://{shown}:{args.port}/#pair={code}&fp={hub.keys.fingerprint}", flush=True)
-    print(f"controls: http://127.0.0.1:{args.control_port}/finish  |  /pending", flush=True)
+    print(f"controls: http://127.0.0.1:{args.control_port}/finish  |  /pending  |  /next-turn", flush=True)
     try:
         await asyncio.Event().wait()
     finally:

@@ -86,16 +86,25 @@ def test_a_turn_keeps_its_plan_tools_and_outcome_structured():
 def test_a_new_turn_does_not_inherit_stale_subtasks_or_tools():
     tracker, _, _ = make_tracker()
     tracker.turn_started("s1", "t1")
+    tracker.plan_updated("s1", todos(("Old plan", "completed", None), revision=3), turn_id="t1")
     tracker.subagent_started("s1", "c1", "sa1", goal="Old research", parent_turn_id="t1")
     tracker.tool_started("s1", "web_search", "old", {"query": "old"}, turn_id="t1")
     tracker.turn_started("s1", "t2")
     snap = tracker.snapshot("general")
     assert snap["turn_id"] == "t2" and snap["subagents"] == [] and snap["tools"] == []
+    # The plan belongs to the conversation rather than the turn. It stays readable, but no longer live.
+    assert snap["plan"]["revision"] == 3 and snap["plan"]["live"] is False
+    assert snap["plan"]["items"][0]["content"] == "Old plan"
     # A late stop for the previous turn cannot attach itself to the new one.
     tracker.subagent_finished("s1", child_session_id="c1", status="completed", summary="stale", parent_turn_id="t1")
     tracker.tool_finished("s1", "web_search", "old", turn_id="t1", status="ok")
     assert tracker.snapshot("general")["subagents"] == []
     assert tracker.snapshot("general")["tools"] == []
+    # A plan update in the new turn becomes live again without resurrecting the old todos.
+    tracker.plan_updated("s1", todos(("New plan", "pending", None), revision=4), turn_id="t2")
+    snap = tracker.snapshot("general")
+    assert snap["plan"]["revision"] == 4 and snap["plan"]["live"] is True
+    assert snap["plan"]["items"][0]["content"] == "New plan"
 
 
 def test_nested_subagents_and_their_tool_activity():

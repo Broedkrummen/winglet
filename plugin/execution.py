@@ -317,8 +317,12 @@ class Tracker:
                 return
             index = self._turn_counters.get(chat_id, 0) + 1
             self._turn_counters[chat_id] = index
+            previous = self._tasks.get(chat_id)
             task = _Task(chat_id, bot, self._turn_id(turn_id), index, now)
-            # A new turn starts clean: no stale plan step, tool or subagent survives into it.
+            # A new turn starts clean: no stale tool or subagent survives into it. The plan is the
+            # session's own list, so it carries over as a "last plan" until this turn writes a new one.
+            if previous is not None and previous.plan is not None:
+                task.plan = previous.plan
             self._tasks[chat_id] = task
             self._trim_chats()
             task.seq += 1

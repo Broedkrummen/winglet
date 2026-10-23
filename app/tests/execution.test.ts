@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   applyEvent, applySnapshot, durationLabel, elapsedLabel, emptyTask, MAX_SUBAGENTS, MAX_TOOLS, orderedSubagents,
-  planProgress, planStateLabel, planTree, stateLabel, subagentChildren, taskState, turnKey, isTerminal,
+  planProgress, planStateLabel, planTree, stateLabel, stripVisible, subagentChildren, taskState, turnKey, isTerminal,
 } from '../src/features/execution/model.ts';
 import type { SubagentSnapshot, TaskEnvelope, TaskSnapshot, ToolSnapshot } from '../src/features/execution/model.ts';
 
@@ -158,4 +158,16 @@ test('a hostile server cannot grow the app: lists stay bounded', () => {
   assert.equal(task.tools.length, MAX_TOOLS);
   assert.equal(task.tools.at(-1)?.id, `t${MAX_TOOLS + 9}`);
   assert.equal(task.subagents.length, MAX_SUBAGENTS);
+});
+
+test('the strip is shown while working, while a request waits, and briefly for an unresolved end', () => {
+  const now = 1_000_000;
+  const running = snapshot({ updated_at: 980 });
+  assert.equal(stripVisible(running, true, false, true, now), true, 'busy keeps it even after a reconnect');
+  assert.equal(stripVisible(undefined, false, true, true, now), true, 'a pending request always has a strip');
+  assert.equal(stripVisible(running, false, false, false, now), true, 'a fresh running snapshot says Not confirmed');
+  assert.equal(stripVisible(running, false, false, false, now + 30_000), false, 'a stale one does not linger forever');
+  assert.equal(stripVisible(snapshot({ state: 'completed', ended_at: 995 }), false, false, false, now), true);
+  assert.equal(stripVisible(snapshot({ state: 'completed', ended_at: 995 }), false, false, true, now), false, 'expired');
+  assert.equal(stripVisible(emptyTask('general'), false, false, false, now), false, 'no turn yet');
 });

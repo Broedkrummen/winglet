@@ -8,7 +8,7 @@ import { plainText } from '../lib/text';
 import { makeStyles, useTheme } from '../lib/themeContext';
 import type { Server } from '../lib/types';
 import { TaskDetail, TaskStopButton, useTaskClock } from '../features/execution/TaskDetail';
-import { isTerminal, planProgress, taskState } from '../features/execution/model';
+import { planProgress, stripVisible, taskState } from '../features/execution/model';
 import { Ban, CheckCircle2, ChevronDown, CircleHelp, ShieldQuestion, Square, XCircle } from './icons';
 import { Sheet } from './Sheet';
 import { Button, Tap } from './ui';
@@ -36,7 +36,6 @@ export function TaskProgress({ server, chatId, busy }: { server: Server; chatId:
   const [lingerExpired, setLingerExpired] = useState(false);
   const now = useTaskClock(!!busy && !pending);
   const state = taskState(snapshot, busy, now);
-  const lingering = !busy && !pending && !!snapshot && isTerminal(snapshot.state) && !lingerExpired;
 
   // Load the bounded snapshot when the chat opens, when work starts, and after a reconnect.
   useEffect(() => { if (featureOn) loadTask(server.id, chatId); }, [featureOn, server.id, chatId, loadTask]);
@@ -47,20 +46,25 @@ export function TaskProgress({ server, chatId, busy }: { server: Server; chatId:
 
   useEffect(() => {
     setLingerExpired(false);
-    if (!snapshot || snapshot.state === 'running' || snapshot.ended_at == null) return;
-    const left = snapshot.ended_at * 1000 + LINGER_MS - Date.now();
+    if (busy || pending || !snapshot) return;
+    // A finished task lingers a minute; a running one gets the same window after its last fact so a
+    // missing end can still say "Not confirmed" rather than disappearing.
+    const since = snapshot.state === 'running' ? snapshot.updated_at : snapshot.ended_at;
+    if (since == null) { setLingerExpired(snapshot.state !== 'running'); return; }
+    const left = since * 1000 + LINGER_MS - Date.now();
     if (left <= 0) { setLingerExpired(true); return; }
     const timer = setTimeout(() => setLingerExpired(true), left);
     return () => clearTimeout(timer);
-  }, [snapshot?.turn_index, snapshot?.state, snapshot?.ended_at]);
+  }, [busy, pending?.id, snapshot?.turn_index, snapshot?.state, snapshot?.ended_at, snapshot?.updated_at]);
 
-  if (!busy && !pending && !lingering) return null;
+  if (!stripVisible(snapshot, busy, !!pending, lingerExpired)) return null;
   const steps = currentTaskActivity(messages);
   const legacy = steps.map((step) => ({ id: step.id, text: step.text }));
   const latest = steps[steps.length - 1];
   const structured = featureOn && snapshot && snapshot.turn_index > 0
     && !!(snapshot.plan?.items.length || snapshot.tools.length || snapshot.subagents.length);
   const progress = planProgress(snapshot?.plan);
+  const planCurrent = snapshot?.plan?.live === false ? null : progress.current;
   const activeSub = snapshot?.subagents.find((sub) => sub.status === 'running');
   const activeTool = snapshot?.tools.find((tool) => tool.status === 'running') ?? snapshot?.tools.at(-1);
   const headline = snapshot?.outcome?.summary ?? snapshot?.reason ?? null;
@@ -68,11 +72,11 @@ export function TaskProgress({ server, chatId, busy }: { server: Server; chatId:
   const title = pending ? pending.kind === 'approval' ? owner ? 'Approval needed' : 'Waiting for an owner' : 'A question for you'
     : !online ? 'Waiting for connection'
       : state === 'completed' ? 'Task completed' : state === 'cancelled' ? 'Task stopped' : state === 'failed' ? 'Task failed'
-        : busy ? 'Working on your request' : 'Task finished';
+        : busy ? 'Working on your request' : 'Task not confirmed';
   const detail = pending ? (pending.body.trim().split('\n')[0] || pending.title)
-    : headline ?? progress.current?.content ?? activeSub?.goal ?? activeTool?.preview ?? activeTool?.name
+    : headline ?? planCurrent?.content ?? activeSub?.goal ?? activeTool?.preview ?? activeTool?.name
       ?? (latest ? plainText(latest.text).split('\n')[0] : null)
-      ?? (busy ? 'Updates will appear here as your bot works.' : 'Tap for what this task did.');
+      ?? (busy ? 'Updates will appear here as your bot works.' : 'This turn has not reported how it ended.');
   const terminalIcon = !online || pending ? null : busy ? null
     : state === 'completed' ? <CheckCircle2 size={19} color={t.colors.success} />
       : state === 'failed' ? <XCircle size={19} color={t.colors.danger} />

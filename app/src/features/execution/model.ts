@@ -225,6 +225,20 @@ export function taskState(snapshot: TaskSnapshot | undefined, busy: boolean, now
   return snapshot.state;
 }
 
+/**
+ * Whether the strip belongs on screen: while work is running, while a request waits, or briefly after
+ * the turn ends. A running snapshot in an idle chat is shown too, so a turn that never reported an end
+ * can say "Not confirmed" instead of vanishing.
+ */
+export function stripVisible(snapshot: TaskSnapshot | undefined, busy: boolean, pending: boolean, expired: boolean,
+  now = Date.now()): boolean {
+  if (busy || pending) return true;
+  if (!snapshot || snapshot.turn_index === 0 || expired) return false;
+  if (isTerminal(snapshot.state)) return true;
+  if (snapshot.state === 'running') return now - snapshot.updated_at * 1000 < UNCONFIRMED_MS;
+  return false;
+}
+
 export const stateLabel = (state: TaskState | null): string => ({
   running: 'Working', completed: 'Completed', failed: 'Failed', cancelled: 'Stopped',
   unknown: 'Not confirmed',

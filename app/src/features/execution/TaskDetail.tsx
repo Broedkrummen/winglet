@@ -240,7 +240,8 @@ export function TaskDetail({ snapshot, capabilities, legacy, busy, online, now }
             <View style={[s.barFill, { width: `${Math.round(progress.fraction * 100)}%` }]} />
           </View>
           {planTree(plan).map(({ item, depth }) => (
-            <PlanRow key={item.id} content={item.content} status={item.status} depth={depth} live={live} />
+            <PlanRow key={item.id} content={item.content} status={item.status} depth={depth}
+              live={live && plan.live !== false} />
           ))}
           {!plan.live ? <Text style={s.note}>The agent has not written a plan for the current turn.</Text> : null}
         </Section>

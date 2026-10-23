@@ -179,7 +179,10 @@ Plugin (`pytest`, private venv, `--basetemp` inside the worktree):
   producing nothing; redaction and bounds; list caps; capabilities; reset; hook registration/refusal; the
   HTTP route off without a tracker; a paired device reading a snapshot; a member refused another
   member's chat while an owner can read it; the route's policy entry.
-- Full suite: **320 passed, 16 skipped** (skips are the pre-existing optional Hermes/platform cases).
+- `tests/test_execution_adapter.py`: **3 passed** — a Winglet session maps to its own chat and bot; a
+  Telegram origin, a mismatched profile, a removed chat or no entry produces nothing; a stopped turn is
+  found by its gateway session key.
+- Full suite: **323 passed, 16 skipped** (skips are the pre-existing optional Hermes/platform cases).
   `tests/route policy` coverage and trust tests pass with the new route.
 
 App:
@@ -254,11 +257,11 @@ modifications, full MIT text). Upstream file-specific headers were checked; no a
 4. `app/src/features/execution/model.ts` — ordering rules and reducer.
 5. `app/src/features/execution/TaskDetail.tsx` and `TaskProgress.tsx` — information hierarchy, states,
    accessibility.
-6. `tests/test_execution.py`, `app/tests/execution.test.ts`.
+6. `tests/test_execution.py`, `tests/test_execution_adapter.py`, `app/tests/execution.test.ts`.
 
 ## MOBILE VALIDATION PENDING
 
-Status labels: **code implemented**; **automated/build checks passed** (pytest 320, app 283, typecheck,
+Status labels: **code implemented**; **automated/build checks passed** (pytest 323, app 283, typecheck,
 web and Android bundle exports); **native build not run** in this agent phase; **mobile validation
 deferred to Codex**.
 

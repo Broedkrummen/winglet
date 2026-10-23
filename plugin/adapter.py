@@ -28,7 +28,7 @@ from gateway.platforms._shared import extra_or_secret, get_scoped_secret, seed_e
 from gateway.platforms.base import BasePlatformAdapter, ExecApprovalPrompt, SendResult
 from gateway.platforms.event import MessageEvent, MessageType
 
-from . import bridge, cli, hermes_api, teamwork
+from . import bridge, checkpoints, cli, hermes_api, teamwork
 from .dependencies import missing_dependencies
 from .store import Store
 
@@ -225,6 +225,9 @@ class WingletAdapter(BasePlatformAdapter):
             hub.hermes_version = hermes_api.hermes_version
             hub.commands_provider = hermes_api.list_commands
             hub.hermes = hermes_api
+            # Hermes's own workspace snapshots, only where this Hermes keeps them.
+            hub.checkpoints = (checkpoints.CheckpointService(hermes_api, busy=hub.busy_chats)
+                               if hermes_api.checkpoints_available() else None)
             hub.chat_model = self._chat_model
             # The app only offers goals when this Hermes has them (features.goals).
             hub.chat_goal = self._chat_goal if hermes_api.goals_available() else None

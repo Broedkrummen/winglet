@@ -696,6 +696,192 @@ def chat_goal(runner, session_key: str) -> Optional[dict]:
             "created_at": state.created_at, "last_turn_at": state.last_turn_at}
 
 
+# -- workspace checkpoints --------------------------------------------------------------------
+#
+# Hermes snapshots the folder a bot works in just before the agent changes files (its own
+# /rollback, tools/checkpoint_manager.py). These read and restore those snapshots; they never
+# touch the transcript. A snapshot belongs to one folder and one Hermes profile.
+
+
+def checkpoints_available() -> bool:
+    """Whether this Hermes keeps filesystem checkpoints at all."""
+    try:
+        from tools.checkpoint_manager import CheckpointManager  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+def checkpoint_restore_available() -> bool:
+    """Whether it can also put them back (a list-only Hermes keeps the restore button hidden)."""
+    try:
+        from tools.checkpoint_manager import CheckpointManager
+    except Exception:
+        return False
+    return callable(getattr(CheckpointManager, "restore", None))
+
+
+def _checkpoint_dir() -> str:
+    """The folder this bot works in: Hermes's own terminal scope, never a caller-supplied path."""
+    import os
+    from pathlib import Path
+
+    raw = ""
+    try:
+        from gateway.run import _terminal_scope_cwd
+    except ImportError:
+        _terminal_scope_cwd = None
+    if _terminal_scope_cwd is not None:
+        # Raises rather than borrowing the launch profile's folder when a refusal scope is active.
+        raw = _terminal_scope_cwd("") or ""
+    else:
+        try:
+            from tools.terminal_scope import terminal_env
+            raw = terminal_env("TERMINAL_CWD", "") or ""
+        except Exception:
+            raw = os.environ.get("TERMINAL_CWD", "") or ""
+    path = Path(raw).expanduser() if raw else Path.cwd()
+    try:
+        return str(path.resolve(strict=False))
+    except OSError:
+        return str(path)
+
+
+def _display_path(path: str) -> str:
+    """A folder for the screen: its home is shown as ``~``, never the server's whole path."""
+    try:
+        from pathlib import Path
+        home = str(Path.home())
+        text = str(path)
+        if text == home:
+            return "~"
+        if text.startswith(home + ("\\" if "\\" in home else "/")):
+            return "~" + text[len(home):]
+        return text
+    except Exception:
+        return str(path)
+
+
+def _checkpoint_manager():
+    """Hermes's manager for this profile's checkpoint settings, or None if it has none."""
+    try:
+        from tools.checkpoint_manager import CheckpointManager
+    except Exception:
+        return None
+    try:
+        from hermes_cli.config import DEFAULT_CONFIG, load_config
+        config = load_config() or {}
+    except Exception as exc:
+        raise HermesUnavailable("checkpoint settings unavailable") from exc
+    section = config.get("checkpoints") if isinstance(config, dict) else None
+    if isinstance(section, bool):
+        section = {"enabled": section}
+    if not isinstance(section, dict):
+        section = {}
+    defaults = DEFAULT_CONFIG.get("checkpoints") if isinstance(DEFAULT_CONFIG, dict) else {}
+    defaults = defaults if isinstance(defaults, dict) else {}
+
+    def pick(name, fallback):
+        value = section.get(name, defaults.get(name, fallback))
+        return value
+
+    def number(name, fallback):
+        try:
+            return int(pick(name, fallback))
+        except (TypeError, ValueError):
+            return fallback
+
+    return CheckpointManager(enabled=bool(pick("enabled", False)), max_snapshots=number("max_snapshots", 20),
+                             max_total_size_mb=number("max_total_size_mb", 500),
+                             max_file_size_mb=number("max_file_size_mb", 10))
+
+
+def _checkpoint_epoch(value) -> float:
+    from datetime import datetime
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _checkpoint_workspace(manager) -> str:
+    """The folder Hermes checkpoints for this bot: its project-marker resolution, or the cwd."""
+    directory = _checkpoint_dir()
+    try:
+        return str(manager.get_working_dir_for_path(directory))
+    except Exception:
+        logger.debug("[winglet] checkpoint folder resolution failed", exc_info=True)
+        return directory
+
+
+@_scoped
+def checkpoints_state() -> dict:
+    """{supported, enabled, reason, can_restore, workspace}: what this bot can do with checkpoints."""
+    import os
+
+    manager = _checkpoint_manager()
+    if manager is None:
+        return {"supported": False, "enabled": False, "can_restore": False,
+                "reason": "This Hermes version doesn't keep checkpoints.", "workspace": {"path": "", "name": ""}}
+    directory = _checkpoint_workspace(manager)
+    reason = ""
+    try:
+        # Refused for a container terminal: the paths belong inside the container, not this host.
+        reason = str(manager.unsupported_backend_reason() or "")
+    except Exception:
+        reason = ""
+    enabled = bool(manager.enabled) and not reason
+    if not manager.enabled:
+        reason = ""
+    return {"supported": True, "enabled": enabled, "reason": reason,
+            "can_restore": callable(getattr(manager, "restore", None)),
+            "workspace": {"path": _display_path(directory), "name": os.path.basename(directory.rstrip("/\\")) or directory}}
+
+
+@_scoped
+def list_checkpoints() -> list:
+    """The workspace's snapshots, newest first, in one shape whatever Hermes calls the fields."""
+    manager = _checkpoint_manager()
+    if manager is None:
+        raise HermesUnavailable("checkpoints unavailable")
+    directory = _checkpoint_workspace(manager)
+    rows = []
+    for entry in manager.list_checkpoints(directory) or []:
+        if not isinstance(entry, dict):
+            continue
+        digest = str(entry.get("hash") or "")
+        rows.append({"hash": digest, "short": str(entry.get("short_hash") or digest[:8]),
+                     "at": _checkpoint_epoch(entry.get("timestamp")),
+                     "label": str(entry.get("reason") or "Checkpoint"),
+                     "files": int(entry.get("files_changed") or 0),
+                     "insertions": int(entry.get("insertions") or 0),
+                     "deletions": int(entry.get("deletions") or 0)})
+    return rows
+
+
+@_scoped
+def checkpoint_diff(commit_hash: str) -> dict:
+    """What changed in the workspace since a checkpoint: {success, stat, diff} or {success: False, error}."""
+    manager = _checkpoint_manager()
+    if manager is None:
+        raise HermesUnavailable("checkpoints unavailable")
+    directory = _checkpoint_workspace(manager)
+    result = manager.diff(directory, commit_hash)
+    return dict(result) if isinstance(result, dict) else {"success": False, "error": "Couldn't read the changes."}
+
+
+@_scoped
+def restore_checkpoint(commit_hash: str, safe: bool = True) -> dict:
+    """Put the workspace files back as they were at a checkpoint, Hermes's own safe restore when
+    asked: files the owner edited themselves since are left alone."""
+    manager = _checkpoint_manager()
+    if manager is None:
+        raise HermesUnavailable("checkpoints unavailable")
+    directory = _checkpoint_workspace(manager)
+    result = manager.restore(directory, commit_hash, safe=bool(safe))
+    return dict(result) if isinstance(result, dict) else {"success": False, "error": "The restore failed."}
+
+
 # -- abilities: skills, toolsets, MCP servers ------------------------------------------------
 #
 # The same functions behind the Skills, Tools and MCP pages of Hermes's dashboard. Toolsets are

@@ -8,8 +8,9 @@ This document is the execution agent's contract and handoff. Other agents may re
 keys, route and event names below; they must not redefine them.
 
 Feature commits on `b71d93b`: `34a7dea` (contract/notice), `1128b62` (event model), `7253207`
-(server hooks and route), `3d83fae` (store wiring), `8706f46` (task sheet), followed by this handoff
-update. The branch was built and tested from the isolated worktree, not the shared checkout.
+(server hooks and route), `3d83fae` (store wiring), `8706f46` (task sheet), `cbe2994` (last plan across
+turns), `091f30b` (unconfirmed strip and non-live plan), followed by this handoff update. The branch was
+built and tested from the isolated worktree, not the shared checkout.
 
 ## Implementation summary
 
@@ -61,8 +62,9 @@ Frontend:
   folded, outcome, honest notes, and the whole-task Stop.
 - `app/src/components/TaskProgress.tsx` — keeps the compact strip and one immediate Stop; header reads
   the active plan step/subagent/tool; loads the snapshot on open, work start and reconnect; a finished
-  turn's strip lingers for 60 s so its outcome is reachable (Winglet has no transcript delegation cards);
-  the sheet no longer closes the moment the turn ends, so the outcome can be read.
+  turn's strip lingers for 60 s so its outcome is reachable (Winglet has no transcript delegation cards),
+  and an unresolved running snapshot says "Task not confirmed" instead of vanishing; the sheet no longer
+  closes the moment the turn ends, so the outcome can be read.
 - `app/src/lib/store.ts` — `tasks` per chat, `task.snapshot` / `task.event` handling, `loadTask` with a
   2 s throttle, reset on a new socket hello, cleanup on chat removal.
 - `app/src/lib/types.ts` re-exports the feature's snapshot types.
@@ -129,8 +131,9 @@ plan item `pending|in_progress|completed|cancelled`. `unwatched`/`unknown` are n
 
 ### Ordering and identity
 
-- A new turn replaces the previous plan, tools and subagents; hooks carrying an older `turn_id` are
-  ignored, so stale children cannot attach to the new turn.
+- A new turn starts with no tools or subagents from the last one; hooks carrying an older `turn_id` are
+  ignored, so stale children cannot attach to the new turn. The plan belongs to the conversation, so a
+  carried plan stays readable as "Last plan" (`live: false`) until the new turn writes its own.
 - Tool identity is `tool_call_id`; subagent identity is `child_subagent_id` (with the child session id
   as a secondary key, so a stop arriving before its start still lands on one row). Array positions are
   never used as identities.
@@ -169,22 +172,24 @@ process/checkpoint namespaces, and the global replay envelope.
 Plugin (`pytest`, private venv, `--basetemp` inside the worktree):
 
 - `tests/test_execution.py`: **18 passed**. Covers structured turn/plan/tools/outcome; a new turn
-  clearing stale subtasks and late events for the old turn being ignored; nested subagents and child tool
-  activity; completion-before-start; repeated events; the first terminal fact winning (stop vs later
-  completion) and unresolved children/tools becoming `unknown`; stale plan revisions; unknown statuses;
-  non-Winglet sessions producing nothing; redaction and bounds; list caps; capabilities; reset; hook
-  registration/refusal; the HTTP route off without a tracker; a paired device reading a snapshot; a
-  member refused another member's chat while an owner can read it; the route's policy entry.
+  clearing stale subtasks, carrying the plan as a non-live "Last plan", and ignoring late events for the
+  old turn; nested subagents and child tool activity; completion-before-start; repeated events; the first
+  terminal fact winning (stop vs later completion) and unresolved children/tools becoming `unknown`;
+  stale plan revisions; unknown statuses; non-Winglet sessions producing nothing; redaction and bounds;
+  list caps; capabilities; reset; hook registration/refusal; the HTTP route off without a tracker; a
+  paired device reading a snapshot; a member refused another member's chat while an owner can read it;
+  the route's policy entry.
 - Full suite: **319 passed, 16 skipped** (skips are the pre-existing optional Hermes/platform cases).
   `tests/route policy` coverage and trust tests pass with the new route.
 
 App:
 
-- `app/tests/execution.test.ts`: **13 passed** — live event folding and duplicate/late events, new-turn
+- `app/tests/execution.test.ts`: **14 passed** — live event folding and duplicate/late events, new-turn
   reset, unconfirmed children/tools at turn end, snapshot ordering, plan revisions, plan tree cycles and
-  cancelled steps, active-first subagents and nesting, unconfirmed state after staleness, elapsed/
-  duration formatting, identity fallback, hostile-server bounds, unfinished plan labels.
-- Full app suite: **282 passed, 0 failed**.
+  cancelled steps, active-first subagents and nesting, unconfirmed state after staleness, strip
+  visibility for running/terminal/pending/expired states, elapsed/duration formatting, identity
+  fallback, hostile-server bounds, unfinished plan labels.
+- Full app suite: **283 passed, 0 failed**.
 - `npx tsc --noEmit`: passed.
 - `npx expo export --platform web`: passed (27 assets).
 - `npx expo export --platform android --output-dir dist-android`: passed; Hermes bytecode
@@ -199,11 +204,14 @@ Web UI evidence (synthetic fixture, no user data; committed under `output/playwr
 - `execution-sheet-1440-light.png` — desktop centred dialog and sidebar.
 - `execution-outcome-390-light.png` — finished turn: plan steps left in progress read "Unfinished", the
   unresolved tool shows as finished, the parent subagent says "Not confirmed", Outcome visible.
+- `execution-last-plan-390-light.png` — a new turn with the carried plan labelled "Last plan", unused
+  steps dashed, no stale subagents or tools.
 - `execution-pending-approval-390-light.png` — approval strip with the command, distinct shield icon and
   text rather than colour alone.
 
 All measurements showed `document.documentElement.scrollWidth - innerWidth === 0` at 320, 390 and 1440;
-no console errors in the tested flows. The fixture never calls a provider.
+no console errors in the tested flows. The last-plan state was re-checked at 390 px after the final
+change. The fixture never calls a provider.
 
 ## Reference comparison (Herald, `95ca999…`)
 
@@ -250,7 +258,7 @@ modifications, full MIT text). Upstream file-specific headers were checked; no a
 
 ## MOBILE VALIDATION PENDING
 
-Status labels: **code implemented**; **automated/build checks passed** (pytest 319, app 282, typecheck,
+Status labels: **code implemented**; **automated/build checks passed** (pytest 319, app 283, typecheck,
 web and Android bundle exports); **native build not run** in this agent phase; **mobile validation
 deferred to Codex**.
 
@@ -282,8 +290,9 @@ deferred to Codex**.
      "Waiting for an owner" instead.
   7. Rotate, background/foreground, and kill/relaunch: no crash; the task sheet re-fetches the snapshot
      on reconnect; no stale children appear in a new turn.
-  8. Start a new turn (or restart the fixture) and confirm the previous plan/tools/subagents do not
-     leak into it.
+  8. `GET /127.0.0.1:9305/next-turn`. Expect tools and subagents to clear while the previous plan is
+     labelled "Last plan", not live, with unused steps dashed rather than spinning. Restart the fixture
+     to confirm a fresh chat starts empty.
 - **Physical hardware only:** real Hermes with delegation (validates the pinned hook payloads),
   multi-profile bot isolation with a member device, TalkBack/font-scale rendering, process death of a
   real server, and Android keyboard/safe-area behaviour over the sheet.

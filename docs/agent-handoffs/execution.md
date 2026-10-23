@@ -9,8 +9,9 @@ keys, route and event names below; they must not redefine them.
 
 Feature commits on `b71d93b`: `34a7dea` (contract/notice), `1128b62` (event model), `7253207`
 (server hooks and route), `3d83fae` (store wiring), `8706f46` (task sheet), `cbe2994` (last plan across
-turns), `091f30b` (unconfirmed strip and non-live plan), followed by this handoff update. The branch was
-built and tested from the isolated worktree, not the shared checkout.
+turns), `091f30b` (unconfirmed strip and non-live plan), `83adefc` (settled child tool rows), `0755ef6`
+(session→chat authority tests and this handoff update). The branch was built and tested from the isolated
+worktree, not the shared checkout.
 
 ## Implementation summary
 

@@ -38,6 +38,7 @@ export { default as Copy } from 'lucide-react-native/icons/copy';
 export { default as Cpu } from 'lucide-react-native/icons/cpu';
 export { default as Download } from 'lucide-react-native/icons/download';
 export { default as ExternalLink } from 'lucide-react-native/icons/external-link';
+export { default as FileDiff } from 'lucide-react-native/icons/file-diff';
 export { default as FileText } from 'lucide-react-native/icons/file-text';
 export { default as Fingerprint } from 'lucide-react-native/icons/fingerprint-pattern';
 export { default as Gauge } from 'lucide-react-native/icons/gauge';

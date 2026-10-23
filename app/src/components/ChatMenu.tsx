@@ -8,7 +8,7 @@ import { mutedUntil, pushPrefsKey, usePushPrefs } from '../lib/pushPrefs';
 import { homeChat, useApp } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
 import type { Server } from '../lib/types';
-import { Activity, Archive, ArchiveRestore, Bell, BellOff, Download, Images, Pencil, Pin, PinOff, Target, Trash2 } from './icons';
+import { Activity, Archive, ArchiveRestore, Bell, BellOff, Download, FileDiff, Images, Pencil, Pin, PinOff, Target, Trash2 } from './icons';
 import { Sheet, SheetAction } from './Sheet';
 import { Button, Field } from './ui';
 
@@ -25,10 +25,10 @@ const MUTE_OPTIONS: { label: string; seconds: number }[] = [
  * What you can do to a chat, the same from the chat itself and from the list: rename, mute, export, delete,
  * and where it's open its goal and files.
  */
-export function ChatMenu({ server, chatId, title, visible, onClose, onGoal, hasGoal, onFiles, onDeleted, onArchived }: {
+export function ChatMenu({ server, chatId, title, visible, onClose, onGoal, hasGoal, onFiles, onCheckpoints, onDeleted, onArchived }: {
   server: Server; chatId: string; title: string; visible: boolean; onClose: () => void;
-  /** Only where the chat is open: its goal and its files live in that screen. */
-  onGoal?: () => void; hasGoal?: boolean; onFiles?: () => void;
+  /** Only where the chat is open: its goal, files and workspace snapshots live in that screen. */
+  onGoal?: () => void; hasGoal?: boolean; onFiles?: () => void; onCheckpoints?: () => void;
   /** Where to go once the chat is gone: the chat's own screen has nowhere left to show, a list does. */
   onDeleted?: () => void;
   onArchived?: () => void;
@@ -84,6 +84,8 @@ export function ChatMenu({ server, chatId, title, visible, onClose, onGoal, hasG
           {side && !archived ? <SheetAction icon={<Archive size={20} color={t.colors.text} />} label="Archive chat" onPress={() => organize('archive')} /> : null}
           {onGoal ? <SheetAction icon={<Target size={20} color={t.colors.text} />} label={hasGoal ? 'Goal' : 'Set a goal'} onPress={() => { close(); onGoal(); }} /> : null}
           {onFiles ? <SheetAction icon={<Images size={20} color={t.colors.text} />} label="Files and photos" onPress={() => { close(); onFiles(); }} /> : null}
+          {onCheckpoints ? <SheetAction icon={<FileDiff size={20} color={t.colors.text} />} label="Workspace checkpoints"
+            onPress={() => { close(); onCheckpoints(); }} /> : null}
           {side ? <SheetAction icon={<Pencil size={20} color={t.colors.text} />} label="Rename" onPress={() => { setName(chat?.title ?? ''); setMode('rename'); }} /> : null}
           {features?.mute ? (until !== undefined ? (
             <SheetAction icon={<Bell size={20} color={t.colors.text} />} label={`Unmute${until ? ` (muted until ${clockTime(until)})` : ''}`} onPress={() => mute(null)} />

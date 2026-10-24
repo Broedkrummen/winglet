@@ -12,6 +12,7 @@ import pytest
 pytest.importorskip("tools.checkpoint_manager", reason="needs a real Hermes checkout")
 pytest.importorskip("hermes_cli.config", reason="needs a real Hermes checkout")
 
+from tools import checkpoint_manager  # noqa: E402
 from tools.checkpoint_manager import CheckpointManager  # noqa: E402
 
 from plugin import hermes_api  # noqa: E402
@@ -112,3 +113,66 @@ def test_the_service_round_trip_uses_the_reviewed_revision(workspace):
 
     asyncio.run(go())
     assert (workspace / "backup.sh").read_text(encoding="utf-8") == "echo done\n"
+
+
+@pytest.mark.parametrize("ledger_state", ["missing", "empty", "unreadable", "corrupt"])
+def test_safe_restore_refuses_unusable_write_history_without_touching_personal_files(workspace, ledger_state):
+    manager = snapshot(workspace)
+    target = hermes_api.list_checkpoints()[0]["hash"]
+    personal = workspace / "backup.sh"
+    personal.write_text('echo "my personal edit"\n', encoding="utf-8")
+    ledger = checkpoint_manager._ledger_path(
+        checkpoint_manager._store_path(), manager._ledger_key(str(workspace)))
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    if ledger_state == "empty":
+        ledger.write_text("{}", encoding="utf-8")
+    elif ledger_state == "unreadable":
+        # Reading a directory raises OSError on Windows and Unix, without relying on
+        # chmod (which a root CI process could bypass).
+        ledger.mkdir()
+    elif ledger_state == "corrupt":
+        ledger.write_text("{broken", encoding="utf-8")
+    else:
+        assert not ledger.exists()
+
+    before = hermes_api.list_checkpoints()
+    result = hermes_api.restore_checkpoint(target, safe=True)
+    assert result["success"] is False
+    assert "file-write history is unavailable" in result["error"]
+    assert "Also revert files I edited myself" in result["error"]
+    assert personal.read_text(encoding="utf-8") == 'echo "my personal edit"\n'
+    assert hermes_api.list_checkpoints() == before  # refused before a safety snapshot/mutation
+
+    # The owner can still explicitly choose the existing full-restore option.
+    result = hermes_api.restore_checkpoint(target, safe=False)
+    assert result["success"] is True
+    assert personal.read_text(encoding="utf-8") == "echo done\n"
+
+
+def test_safe_restore_requires_a_supported_planner_but_full_restore_still_works(workspace, monkeypatch):
+    manager = snapshot(workspace)
+    target = hermes_api.list_checkpoints()[0]["hash"]
+    personal = workspace / "backup.sh"
+    personal.write_text("personal edit\n", encoding="utf-8")
+    monkeypatch.setattr(manager, "_safe_restore_plan", None)
+    monkeypatch.setattr(hermes_api, "_checkpoint_manager", lambda: manager)
+
+    result = hermes_api.restore_checkpoint(target, safe=True)
+    assert result["success"] is False
+    assert "file-write history is unavailable" in result["error"]
+    assert personal.read_text(encoding="utf-8") == "personal edit\n"
+    assert hermes_api.restore_checkpoint(target, safe=False)["success"] is True
+    assert personal.read_text(encoding="utf-8") == "echo done\n"
+
+
+def test_safe_restore_with_write_history_still_restores_agent_changes(workspace):
+    manager = snapshot(workspace)
+    target = hermes_api.list_checkpoints()[0]["hash"]
+    changed = workspace / "backup.sh"
+    changed.write_text("agent edit\n", encoding="utf-8")
+    manager.record_agent_write(str(changed))
+
+    result = hermes_api.restore_checkpoint(target, safe=True)
+    assert result["success"] is True
+    assert result["restored_files"] == ["backup.sh"]
+    assert changed.read_text(encoding="utf-8") == "echo done\n"

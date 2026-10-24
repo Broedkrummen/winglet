@@ -878,6 +878,30 @@ def restore_checkpoint(commit_hash: str, safe: bool = True) -> dict:
     if manager is None:
         raise HermesUnavailable("checkpoints unavailable")
     directory = _checkpoint_workspace(manager)
+    if safe:
+        # Hermes falls back to a full restore when its write ledger is empty. Keep the
+        # app's safe-mode promise: validate its plan inside the manager's own store lock.
+        # This manager belongs to this call; no global patch or second lock is needed.
+        planner = getattr(manager, "_safe_restore_plan", None)
+        refusal = {"success": False, "error": (
+            "Hermes can't safely distinguish your edits because its file-write history is unavailable. "
+            "Nothing was restored. To overwrite your edits too, turn on "
+            "'Also revert files I edited myself' and confirm again.")}
+        if not callable(planner):
+            return refusal
+
+        def guarded_plan(*args, **kwargs):
+            plan = planner(*args, **kwargs)
+            if isinstance(plan, dict) and plan.get("success") is False:
+                return plan
+            if (not isinstance(plan, dict) or plan.get("success") is not True
+                    or plan.get("ledger_empty")
+                    or not isinstance(plan.get("restore"), list)
+                    or not isinstance(plan.get("skipped"), list)):
+                return dict(refusal)
+            return plan
+
+        manager._safe_restore_plan = guarded_plan
     result = manager.restore(directory, commit_hash, safe=bool(safe))
     return dict(result) if isinstance(result, dict) else {"success": False, "error": "The restore failed."}
 

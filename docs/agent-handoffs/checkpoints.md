@@ -275,6 +275,39 @@ Screenshots (synthetic fixture, no tokens or personal chats):
   operation id and returns the recorded result instead of restoring twice.
 - Audit rows record `checkpoint.restore` with success, failure or refusal.
 
+## Review correction: safe restore without file-write history (2026-10-24)
+
+Hermes's pinned manager falls back to a full restore when its agent-write ledger is
+missing, empty, unreadable or invalid. That could overwrite personal edits despite
+Winglet's safe-mode confirmation. Winglet now wraps only the fresh manager instance's
+`_safe_restore_plan` and refuses unavailable or malformed safety plans before the
+manager takes a safety snapshot or changes workspace files. The guard executes inside
+Hermes's existing store lock; there is no global monkeypatch or second lock.
+
+The refusal explains that file-write history is unavailable and names the existing
+`Also revert files I edited myself` option. An owner can still explicitly select that
+full restore (`safe=False`). Valid write history continues to restore agent changes
+and preserve personal edits. HTTP/result shapes and the app protocol are unchanged.
+
+Regression coverage uses the actual Hermes manager for missing, empty, unreadable
+(a directory at the ledger path, raising `OSError` on Windows and Unix), and corrupt
+ledgers. It verifies personal content and the checkpoint list stay unchanged after
+refusal, then verifies explicit full restore succeeds. Additional real-manager tests
+cover an unavailable safe planner and a valid agent-authored restore.
+
+Validation on Windows, Python 3.12.14:
+- Focused route + real-Hermes checkpoint tests: **40 passed**.
+- Complete plugin suite without Hermes installed: **326 passed, 18 skipped**.
+- `git diff --check`: passed.
+
+The real checkpoint-manager file used locally has Git blob
+`a2081650696043bc031f78ffad11a7ba94042649`, verified equal to the file at the CI pin
+`47676981f55de91231fdeef2f0eec47e7c209e78`. The test runner sets
+`HERMES_DISABLE_LAZY_INSTALLS=1` to use installed system Git rather than bootstrap
+Hermes's separate package-manager runtime. No Android build or device validation was
+needed for this server-only correction; CI still verifies the full supported Hermes
+environment.
+
 ## Known limitations / unresolved risks
 
 - All chats of a bot share the gateway's terminal folder; snapshots are listed per

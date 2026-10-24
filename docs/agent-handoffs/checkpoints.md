@@ -343,6 +343,20 @@ project routes/transactions: **91 passed**. No focused test hung. The previous
 `c66ddcd` CI run also completed successfully, including Hermes. CI configuration was
 unchanged; this refresh receives its own exact-head checks.
 
+## Final dependency refresh after branching merge (2026-10-24)
+
+Merged integration commit `03017149185e59c9d4740e55ab1920ae54a64643`, bringing
+the reviewed branching feature together with projects, execution and checkpoints.
+The only manual conflict was the capability probe/flags in `plugin/hub.py`; retained
+both branching and checkpoint capabilities. Inspected the automatic adapter, route,
+chat-view and icon merges; all four features remain wired and the safe-restore guard
+is unchanged.
+
+Final combined validation: **399 passed, 21 skipped** plugin tests (without Hermes),
+**115 passed** focused actual pinned-Hermes/route tests across all four features,
+app typecheck passed, **317** app tests passed, and staged diff check passed.
+No CI configuration changed; the pushed final head receives fresh CI before merge.
+
 ## Known limitations / unresolved risks
 
 - All chats of a bot share the gateway's terminal folder; snapshots are listed per

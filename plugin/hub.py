@@ -154,6 +154,8 @@ ROUTE_POLICY = {
     "h_mcp_sign_in_cancel": "owner_signed",
     "h_rotate_token": "signed",
     "h_device_update": "owner_signed", "h_device_delete": "owner_signed", "h_pairing_code": "owner_signed",
+    # Branching: paired devices, scoped to a chat they can see (same rule as sending a message).
+    "h_branch_state": "device", "h_branch_create": "device", "h_branch_regenerate": "device",
 }
 
 # Slash commands a member may send: their own conversation and turn, and read-only help. Everything
@@ -282,6 +284,8 @@ class Hub:
         self.mcp_changed = False
         # Set by the adapter when it can cap every turn's final toolsets, which members' tool limits need.
         self.limits_members = False
+        # Conversation branching (installed by the adapter; None when this Hermes can't do it).
+        self.branching: Any = None
         # Hermes-side callbacks, installed by the adapter.
         self.on_user_message: Optional[InboundFn] = None
         self.on_approval: Optional[ResolveFn] = None
@@ -296,6 +300,7 @@ class Hub:
 
     def build_app(self) -> web.Application:
         app = web.Application(client_max_size=2 * 1024 * 1024, middlewares=[self._cors, self._policy])
+        app["hub"] = self
         r = app.router
         r.add_get("/api/info", self.h_info)
         r.add_post("/api/pair", self.h_pair)
@@ -410,6 +415,9 @@ class Hub:
         r.add_delete("/api/mcp/{name}", self.h_mcp_remove)
         r.add_post("/api/mcp/{name}/test", self.h_mcp_test)
         r.add_post("/api/mcp/{name}/sign-in", self.h_mcp_sign_in)
+        if self.branching is not None:
+            from .branching_routes import register_routes as _register_branch_routes
+            _register_branch_routes(app)
         r.add_get("/{tail:.*}", self.h_static)
         app.on_startup.append(self._start_janitor)
         app.on_shutdown.append(self._close_sockets)
@@ -717,6 +725,8 @@ class Hub:
     def features(self) -> Dict[str, bool]:
         """What this server can do. The app hides anything that isn't listed as true."""
         checkpoints = self.checkpoints is not None
+        branching = bool(self.branching is not None and self._has(self.branching, "available")
+                         and self.branching.available())
         return {"webpush": True, "ntfy": True, "approvals": True, "questions": True, "uploads": True, "voice": True,
                 "replies": True, "export": True, "mute": True, "status_updates": True, "roles": True,
                 "signed_actions": True, "ws_auth": True, "pickers": True, "agent": self.hermes is not None,
@@ -728,6 +738,7 @@ class Hub:
                 # Checkpoints: listing/preview, and the separate live restore this Hermes can do.
                 "checkpoints": checkpoints, "checkpoint_diff": checkpoints,
                 "checkpoint_restore": checkpoints and self.checkpoints.can_restore,
+                "chat_branching": branching, "message_editing": branching, "regeneration": branching,
                 "task_activity": self.execution is not None,
                 "connection_status": True, "projects": True}
 

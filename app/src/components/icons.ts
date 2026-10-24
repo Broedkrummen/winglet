@@ -41,6 +41,8 @@ export { default as ExternalLink } from 'lucide-react-native/icons/external-link
 export { default as FileDiff } from 'lucide-react-native/icons/file-diff';
 export { default as FileText } from 'lucide-react-native/icons/file-text';
 export { default as Fingerprint } from 'lucide-react-native/icons/fingerprint-pattern';
+export { default as Folder } from 'lucide-react-native/icons/folder';
+export { default as FolderPlus } from 'lucide-react-native/icons/folder-plus';
 export { default as Gauge } from 'lucide-react-native/icons/gauge';
 export { default as HardDrive } from 'lucide-react-native/icons/hard-drive';
 export { default as Globe } from 'lucide-react-native/icons/globe';

@@ -308,6 +308,26 @@ Hermes's separate package-manager runtime. No Android build or device validation
 needed for this server-only correction; CI still verifies the full supported Hermes
 environment.
 
+## Integration refresh after projects merge (2026-10-24)
+
+Merged integration commit `ab3a531c38fe01cdac42c8606b123f88934aae24` into
+the checkpoint feature branch so PR #45 can run CI against the merged projects work.
+Resolved `plugin/hub.py` by retaining both imports, every project's signed route
+policy, checkpoint owner/owner-signed policies, and both capability sets. Resolved
+`ChatMenu.tsx` by keeping both `Folder` and `FileDiff`; both Move to project and
+Workspace checkpoints remain available. Inspected the automatically merged routes,
+chat view, and icon exports. The safe-restore guard is unchanged.
+
+Combined validation:
+
+- Complete plugin suite without Hermes installed: **346 passed, 18 skipped**.
+- Actual pinned-Hermes checkpoint tests: **10 passed**.
+- App `npm run typecheck`: passed.
+- App `npm test`: **295 passed**.
+- Staged `git diff --check`: passed.
+
+No native build or phone/RDP validation was performed for this integration refresh.
+
 ## Known limitations / unresolved risks
 
 - All chats of a bot share the gateway's terminal folder; snapshots are listed per

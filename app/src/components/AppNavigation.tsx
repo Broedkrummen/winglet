@@ -22,6 +22,7 @@ import { alpha } from '../lib/theme';
 import type { Chat, Server } from '../lib/types';
 import { ChatMenu } from './ChatMenu';
 import { ChatFilters } from './ChatFilters';
+import { ProjectSection } from '../features/projects/ProjectSection';
 import { Glass } from './Glass';
 import { KeyboardViewport } from './KeyboardViewport';
 import { Bot, Inbox, MessageCircle, MessageSquarePlus, MessagesSquare, MoreHorizontal, PanelLeft, Pin, Settings } from './icons';
@@ -214,6 +215,7 @@ function Sidebar({ onClose, drawer = false }: { onClose: () => void; drawer?: bo
       </View>
     </View>
     <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 16 }}>
+      {server ? <View style={[s.groupCard, s.projectsCard]}><ProjectSection server={server} onNavigate={navigation.close} /></View> : null}
       <View style={s.groupCard}>
       <SearchField value={query} onChangeText={setQuery} placeholder="Search chats" style={s.historySearch} />
       <ChatFilters value={filter} counts={counts} onChange={(value) => { if (value !== 'archived') setFilter(value); }} />
@@ -301,6 +303,7 @@ const useStyles = makeStyles((t) => ({
   groupCard: { padding: 6, borderRadius: 20, backgroundColor: alpha(t.colors.surfaceRaised, t.scheme === 'dark' ? 0.68 : 0.76), borderWidth: 1, borderColor: t.colors.borderStrong,
     shadowColor: t.colors.shadow, shadowOpacity: t.scheme === 'dark' ? 0.08 : 0.025, shadowRadius: 12, shadowOffset: { width: 0, height: 4 } },
   historySearch: { margin: 6, marginBottom: 4, height: 40, backgroundColor: alpha(t.colors.surfaceSunken, 0.65), borderRadius: 13 },
+  projectsCard: { marginBottom: 10 },
   groupTitle: { ...t.type.caption, color: t.colors.textSecondary, fontFamily: t.fonts.semibold, paddingHorizontal: 12, paddingTop: 8, paddingBottom: 6 },
   navRow: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 46, paddingHorizontal: 12, borderRadius: 12 },
   navText: { ...t.type.body, color: t.colors.text, fontSize: 15 },

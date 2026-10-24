@@ -8,8 +8,9 @@ import { mutedUntil, pushPrefsKey, usePushPrefs } from '../lib/pushPrefs';
 import { homeChat, useApp } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
 import type { Server } from '../lib/types';
-import { Activity, Archive, ArchiveRestore, Bell, BellOff, Download, FileDiff, Images, Pencil, Pin, PinOff, Target, Trash2 } from './icons';
+import { Activity, Archive, ArchiveRestore, Bell, BellOff, Download, FileDiff, Folder, Images, Pencil, Pin, PinOff, Target, Trash2 } from './icons';
 import { Sheet, SheetAction } from './Sheet';
+import { ProjectPicker } from '../features/projects/MoveToProjectSheet';
 import { Button, Field } from './ui';
 
 const clockTime = (ts: number) => new Date(ts * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
@@ -44,7 +45,7 @@ export function ChatMenu({ server, chatId, title, visible, onClose, onGoal, hasG
   const key = chatKey(server.id, chatId);
   const pinned = organization.pinnedChats.includes(key);
   const archived = organization.archivedChats.includes(key);
-  const [mode, setMode] = useState<'menu' | 'rename' | 'delete' | 'mute'>('menu');
+  const [mode, setMode] = useState<'menu' | 'rename' | 'delete' | 'mute' | 'move'>('menu');
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const side = chat?.kind === 'chat' && chatId !== homeChat(useApp.getState().runtime[server.id]);
@@ -76,12 +77,15 @@ export function ChatMenu({ server, chatId, title, visible, onClose, onGoal, hasG
   };
 
   return (
-    <Sheet visible={visible} onClose={close} title={mode === 'mute' ? 'Mute notifications' : title}>
+    <Sheet visible={visible} onClose={close}
+      title={mode === 'mute' ? 'Mute notifications' : mode === 'move' ? 'Move to project' : title}>
       {mode === 'menu' ? (
         <>
           {side ? <SheetAction icon={archived ? <ArchiveRestore size={20} color={t.colors.text} /> : pinned ? <PinOff size={20} color={t.colors.text} /> : <Pin size={20} color={t.colors.text} />}
             label={archived ? 'Restore chat' : pinned ? 'Unpin chat' : 'Pin chat'} onPress={() => organize(archived ? 'restore' : pinned ? 'unpin' : 'pin')} /> : null}
           {side && !archived ? <SheetAction icon={<Archive size={20} color={t.colors.text} />} label="Archive chat" onPress={() => organize('archive')} /> : null}
+          {side && features?.projects ? <SheetAction icon={<Folder size={20} color={t.colors.text} />} label="Move to project…"
+            onPress={() => setMode('move')} /> : null}
           {onGoal ? <SheetAction icon={<Target size={20} color={t.colors.text} />} label={hasGoal ? 'Goal' : 'Set a goal'} onPress={() => { close(); onGoal(); }} /> : null}
           {onFiles ? <SheetAction icon={<Images size={20} color={t.colors.text} />} label="Files and photos" onPress={() => { close(); onFiles(); }} /> : null}
           {onCheckpoints ? <SheetAction icon={<FileDiff size={20} color={t.colors.text} />} label="Workspace checkpoints"
@@ -113,6 +117,8 @@ export function ChatMenu({ server, chatId, title, visible, onClose, onGoal, hasG
           <Text style={s.menuNote}>Approvals and questions still come through: {server.bot.title} is waiting on those.</Text>
           {MUTE_OPTIONS.map((o) => <SheetAction key={o.label} label={o.label} onPress={() => mute(o.seconds)} />)}
         </>
+      ) : mode === 'move' ? (
+        <ProjectPicker server={server} chatId={chatId} onDone={close} />
       ) : mode === 'rename' ? (
         <View style={{ gap: 14, paddingHorizontal: 4 }}>
           <Field value={name} onChangeText={setName} placeholder="Chat name" autoFocus onSubmitEditing={rename} />

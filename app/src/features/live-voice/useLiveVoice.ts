@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { AppState, Platform } from 'react-native';
 import { ApiError } from '../../lib/api';
+import { claimVoiceAudio } from '../../lib/audioMode';
 import { useLock } from '../../lib/appLock';
 import { usePrefs } from '../../lib/prefs';
 import { useApp } from '../../lib/store';
@@ -27,6 +28,7 @@ export function useLiveVoice(server: Server, chatId: string) {
   const sendPending = useRef<Promise<void> | null>(null);
   const dictationFinish = useRef<(() => void) | null>(null);
   const mounted = useRef(true);
+  const ownsAudio = useRef(false);
   const client = useRef(new VoiceClient(server, chatId)).current;
   const known = useRef(new Set<string>());
   const online = useApp((s) => s.network && s.runtime[server.id]?.status === 'online');
@@ -34,7 +36,7 @@ export function useLiveVoice(server: Server, chatId: string) {
   const locked = useLock((s) => s.locked);
   const ready = () => {
     const s = useApp.getState();
-    return mounted.current && !useLock.getState().locked && s.foreground && s.network &&
+    return mounted.current && ownsAudio.current && !useLock.getState().locked && s.foreground && s.network &&
       s.runtime[server.id]?.status === 'online' && s.servers.some((v) => v.id === server.id) &&
       (Platform.OS === 'web' ? document.visibilityState !== 'hidden' : AppState.currentState === 'active');
   };
@@ -51,16 +53,17 @@ export function useLiveVoice(server: Server, chatId: string) {
     const s = session.current;
     const cancelTurn = effects.find((e) => e.type === 'cancelTurn');
     if (cancelTurn?.type === 'cancelTurn' && s) {
-      blocking.current = true; setStopStatus('Stopping…');
       const generation = effects.some((e) => e.type === 'stopGeneration');
+      const mustWait = engine.snapshot().phase === 'interrupted';
+      if (mustWait) { blocking.current = true; setStopStatus('Stopping…'); }
       void (async () => {
         // A send already in flight must settle before Stop, otherwise it could start after Stop.
         if (generation) await sendPending.current?.catch(() => undefined);
         await client.stop(s, cancelTurn.turnId, generation);
-        if (mounted.current) setStopStatus(generation ? 'Stopped by the server' : 'Audio stopped');
-        blocking.current = false;
+        if (mustWait && mounted.current) setStopStatus(generation ? 'Stopped by the server' : 'Audio stopped');
+        if (mustWait) blocking.current = false;
       })().catch((error) => {
-        if (mounted.current) setStopStatus(`Stop unconfirmed: ${(error as Error).message} End or retry Stop.`);
+        if (mustWait && mounted.current) setStopStatus(`Stop unconfirmed: ${(error as Error).message} End or retry Stop.`);
         // Do not let a new turn start while an earlier generation might still be running.
       });
     }
@@ -154,6 +157,12 @@ export function useLiveVoice(server: Server, chatId: string) {
   useEffect(() => { reconcile(); }, [messages]);
   useEffect(() => {
     mounted.current = true;
+    const release = claimVoiceAudio();
+    if (!release) {
+      engine.captureFailed('Another recording or voice conversation is open. End it before opening this one.');
+      return () => { mounted.current = false; };
+    }
+    ownsAudio.current = true;
     process(engine.open());
     const pause = () => process(engine.suspend('background'));
     const subscription = AppState.addEventListener('change', (s) => { if (s !== 'active') pause(); });
@@ -164,7 +173,7 @@ export function useLiveVoice(server: Server, chatId: string) {
       navigator.mediaDevices?.addEventListener('devicechange', route);
     }
     return () => {
-      process(engine.end()); mounted.current = false; cancel(); disposeRecording();
+      process(engine.end()); mounted.current = false; ownsAudio.current = false; cancel(); disposeRecording(); release();
       subscription.remove();
       if (Platform.OS === 'web') { document.removeEventListener('visibilitychange', visibility); navigator.mediaDevices?.removeEventListener('devicechange', route); }
     };

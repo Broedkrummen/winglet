@@ -32,10 +32,28 @@ export function useCapture() {
         await recorder.prepareToRecordAsync(); prepared = true;
         if (signal.aborted || cancelled) throw new Error('Cancelled');
         recorder.record(); onStarted();
+        let inputUid: string | undefined;
+        let inputs: string | undefined;
+        let routeChecking = false;
+        let frames = 0;
+        try {
+          inputUid = (await recorder.getCurrentInput()).uid;
+          inputs = recorder.getAvailableInputs().map((i) => i.uid).sort().join(',');
+        } catch {} // Older OS versions cannot report the route; recorder/status errors still pause.
+
         timer = setInterval(() => {
           const s = recorder.getStatus();
           if (s.mediaServicesDidReset || !s.isRecording) { rejectRun(new Error('Microphone interrupted. Tap to speak again.')); return; }
           const n = dbToLevel(s.metering); level(n);
+          if (++frames % 5 === 0 && !routeChecking) {
+            routeChecking = true;
+            void (async () => {
+              const current = await recorder.getCurrentInput();
+              const available = recorder.getAvailableInputs().map((i) => i.uid).sort().join(',');
+              if (inputUid !== undefined && (inputUid !== current.uid || inputs !== available))
+                rejectRun(new Error('Audio route changed. Check your headphones, then tap to speak again.'));
+            })().catch(() => undefined).finally(() => { routeChecking = false; });
+          }
           if (vad.onFrame(n, s.durationMillis)) finish();
         }, 100);
         await completed;

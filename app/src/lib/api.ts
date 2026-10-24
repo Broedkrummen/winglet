@@ -33,7 +33,7 @@ export function parsePairLink(text: string): { url: string; code: string; fp?: s
 
 async function request<T>(url: string, init: RequestInit & { token?: string; timeoutMs?: number } = {}): Promise<T> {
   const headers: Record<string, string> = { Accept: 'application/json' };
-  if (init.body && !(init.body instanceof FormData)) headers['Content-Type'] = 'application/json';
+  if (init.body && !(typeof FormData !== 'undefined' && init.body instanceof FormData)) headers['Content-Type'] = 'application/json';
   if (init.token) headers.Authorization = `Bearer ${init.token}`;
   let resp: Response;
   const controller = new AbortController();

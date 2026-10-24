@@ -24,7 +24,11 @@ export function phoneHello(server: Server, send: (event: object) => void) {
       if (r.tool === 'phone_shared_note') return { note: (usePhone.getState().notes[server.id] ?? '').slice(0,2000) };
       const permission = await nativePhone!.permission(r.tool);
       if (!permission.granted || !foreground || useLock.getState().locked) throw new Error('permission');
-      return nativePhone!.execute(r.id,r.tool,r.args,r.expires_at*1000);
+      try { return await nativePhone!.execute(r.id,r.tool,r.args,r.expires_at*1000); }
+      catch (cause) {
+        const code=(cause as {code?:string})?.code;
+        throw new Error(code==='E_PHONE_PERMISSION'?'permission':code==='E_PHONE_LOCKED'?'locked':code==='E_PHONE_EXPIRED'?'expired':'unavailable');
+      }
     }, cancel: id => nativePhone?.cancel(id),
     changed: requests => usePhone.setState(s => ({ requests: [...s.requests.filter(p => p.serverId !== server.id),...requests.map(request => ({ serverId: server.id,request }))] })),
   });

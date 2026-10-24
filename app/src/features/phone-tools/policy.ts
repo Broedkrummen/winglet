@@ -69,8 +69,9 @@ export class PhonePolicy {
       if (this.pending.get(id) !== p || !this.live(id)) return;
       if (!await this.hooks.authority(p.request) || this.pending.get(id) !== p || !this.live(id)) throw new Error('revoked');
       this.hooks.send({ type: 'phone_tool.answer', id, nonce, ok: true, result });
-    } catch {
-      if (this.pending.get(id) === p && this.live(id)) this.hooks.send({ type: 'phone_tool.answer', id, nonce, ok: false, error: 'unavailable' });
+    } catch (cause) {
+      const error = cause instanceof Error && ['permission','revoked','expired','locked'].includes(cause.message) ? cause.message : 'unavailable';
+      if (this.pending.get(id) === p && this.live(id)) this.hooks.send({ type: 'phone_tool.answer', id, nonce, ok: false, error });
     } finally { this.cancel(id); }
   }
   cancel(id: string) {

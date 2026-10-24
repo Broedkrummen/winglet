@@ -19,6 +19,7 @@ function harness(os = 'web') {
   let recoveryRequest = async (_: any): Promise<any> => null;
   const timers: (() => void)[] = [];
   const played: string[] = [];
+  const phoneCalls: string[] = [];
   const sockets: string[] = [];
   const cache = new Map<string, any>();
   let persisted: any;
@@ -72,7 +73,7 @@ function harness(os = 'web') {
     'zustand/react/shallow': { useShallow: (fn: any) => fn },
     'react-native': { Platform: { OS: os } },
     './recovery': { RecoveryCoordinator: FakeCoordinator },
-    '../features/phone-tools/runtime': { phoneHello: () => {}, phoneEvent: () => {}, phoneDisconnect: () => {}, phoneVisibility: () => {} },
+    '../features/phone-tools/runtime': { phoneHello: () => phoneCalls.push('hello'), phoneEvent: () => phoneCalls.push('event'), phoneDisconnect: () => phoneCalls.push('disconnect'), phoneVisibility: () => phoneCalls.push('visibility') },
     './messages': helpers,
     '../features/projects/logic': projectHelpers,
     './api': { api: (...args: any[]) => request(...args), ApiError, wsUrl: (s: any) => s.url,
@@ -91,7 +92,7 @@ function harness(os = 'web') {
   });
   const tick = () => new Promise(resolve => setImmediate(resolve));
   return {
-    store, cache, played, taskModel, setRequest: (fn: typeof request) => { request = fn; },
+    store, cache, played, phoneCalls, taskModel, setRequest: (fn: typeof request) => { request = fn; },
     setRecovery: (fn: typeof recoveryRequest) => { recoveryRequest = fn; },
     disconnect: () => { socket.readyState = 3; socket.onclose?.({ code: 1006 }); },
     retry: () => timers.shift()?.(), timers, sockets, persisted: () => persisted, socket: () => socket, tick,
@@ -869,4 +870,12 @@ test('overlapping project reads only apply the latest requested snapshot', async
   resolves[0]({ projects: projectSnapshot('Old', 2, 2) });
   await first;
   assert.equal(h.store.getState().runtime.s.projects?.projects[0].name, 'Latest');
+});
+
+test('phone bridge starts only with capability, receives scoped events and closes with the connection',async()=>{
+ const h=harness('android');await h.connect();await h.hello();assert.equal(h.phoneCalls.includes('hello'),false);
+ h.event({type:'hello',chats:[],features:{phone_tools:true}});await h.tick();assert.equal(h.phoneCalls.includes('hello'),true);
+ h.event({type:'phone_tool.cancel',id:'synthetic'});assert.equal(h.phoneCalls.at(-1),'event');
+ h.store.getState().setForeground(false);assert.equal(h.phoneCalls.includes('visibility'),true);
+ await h.store.getState().removeServer('s');assert.equal(h.phoneCalls.includes('disconnect'),true);
 });

@@ -208,3 +208,21 @@ def test_restart_schema_idempotent_and_no_pending_cache(tmp_path):
         assert s._one('SELECT count(*) AS n FROM phone_tool_grants')['n']==0
         assert not s._one("SELECT name FROM sqlite_master WHERE name='phone_tool_results'")
         s.close()
+
+
+@pytest.mark.parametrize('action',['all','tool'])
+async def test_revoke_withdraws_authority_before_awaiting_socket_cancel(env,action):
+    e=env;await enable(e)
+    task,r=await start(e)
+    reached=asyncio.Event();release=asyncio.Event()
+    original=e.ws.send_json
+    async def blocked(event):
+        if event['type']=='phone_tool.cancel':
+            reached.set();await release.wait()
+        await original(event)
+    e.ws.send_json=blocked
+    revoke=asyncio.create_task(e.bridge.revoke(e.device['id']) if action=='all' else e.bridge.update(e.device,'',{'tool':'phone_status','enabled':False}))
+    await asyncio.wait_for(reached.wait(),1)
+    assert await e.bridge.request(e.device['id'],'general','','phone_status',{})=={'error':'revoked'}
+    release.set();await revoke
+    assert await task=={'error':'revoked'}

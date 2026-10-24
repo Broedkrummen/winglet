@@ -15,7 +15,9 @@ def test_pinned_registry_discovery_is_uncached_per_phone(tmp_path,monkeypatch):
     from plugin import adapter
     registry=ToolRegistry()
     class Context:
-        def register_tool(self,**kw): registry.register(**kw)
+        def register_tool(self,**kw):
+            registry.register(**kw)
+            return object()
     tools.register(Context())
     store=Store(tmp_path/'tools.db')
     try:
@@ -56,7 +58,9 @@ async def test_real_context_dispatch_reaches_exact_gateway_loop(tmp_path,monkeyp
     monkeypatch.setattr(adapter,'profile_info',lambda:{'name':'hermes'})
     registry=ToolRegistry()
     class Context:
-        def register_tool(self,**kw): registry.register(**kw)
+        def register_tool(self,**kw):
+            registry.register(**kw)
+            return object()
     tools.register(Context())
     token=set_session_vars(platform='winglet',chat_id='general',user_id='winglet:'+device['id'])
     try:

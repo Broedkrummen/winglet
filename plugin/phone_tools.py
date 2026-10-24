@@ -142,8 +142,8 @@ class PhoneTools:
         if device.get("platform") != "android" or (scope == "server" and device["role"] != "owner"):
             raise PermissionError("This scope is unavailable for this device")
         # One explicit scope per tool; changing it cancels the old request first.
-        await self.cancel_device(device["id"], "revoked", tool)
         self.store._exec("INSERT INTO phone_tool_grants(device_id,tool,scope,mode,enabled,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(device_id,tool) DO UPDATE SET scope=excluded.scope,mode=excluded.mode,enabled=excluded.enabled,updated_at=excluded.updated_at", (device["id"], tool, "*" if scope == "server" else bot, mode, int(enabled), time.time()))
+        await self.cancel_device(device["id"], "revoked", tool)
         self.audit(device["id"], bot, "", tool, "enabled" if enabled else "revoked")
         await self.changed(device["id"])
 
@@ -156,8 +156,8 @@ class PhoneTools:
                     pass
 
     async def revoke(self, device_id):
-        await self.cancel_device(device_id, "revoked")
         self.store._exec("DELETE FROM phone_tool_grants WHERE device_id=?", (device_id,))
+        await self.cancel_device(device_id, "revoked")
         self.audit(device_id, "", "", "all", "revoked")
         await self.changed(device_id)
 

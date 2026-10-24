@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, Platform, Switch, Text, View } from 'react-native';
 import { Screen } from '../components/Screen';
 import { Button, Card, Field, SectionHeader, Segmented, Skeleton } from '../components/ui';
@@ -14,6 +14,9 @@ export default function PhoneToolsScreen() {
   const server=useApp(s=>s.servers.find(server=>server.id===s.selection.serverId));
   const online=useApp(s=>s.runtime[s.selection.serverId ?? '']?.status==='online');
   const supported=useApp(s=>s.runtime[s.selection.serverId ?? '']?.info?.features.phone_tools===true);
+  const activeServer=useRef(server?.id);
+  activeServer.current=server?.id;
+  const readSequence=useRef(0);
   const [data,setData]=useState<Snapshot>();
   const [error,setError]=useState('');
   const [busy,setBusy]=useState(false);
@@ -21,19 +24,21 @@ export default function PhoneToolsScreen() {
   const notes=usePhone(s=>s.notes);
   const refresh=useCallback(async()=>{
     if(!server || !supported || !phoneSupported) return;
+    const sequence=++readSequence.current;
     try {
       const snapshot=await api<Snapshot>(server,'/api/phone-tools');
+      if(activeServer.current!==server.id || readSequence.current!==sequence) return;
       setData(snapshot);setError('');
       const states=await Promise.all(TOOLS.map(async tool=>[tool,await nativePhone!.permission(tool)] as const));
-      setPermission(Object.fromEntries(states));
-    } catch(e) { setError((e as Error).message); }
+      if(activeServer.current===server.id && readSequence.current===sequence) setPermission(Object.fromEntries(states));
+    } catch(e) { if(activeServer.current===server.id && readSequence.current===sequence) setError((e as Error).message); }
   },[server,supported]);
   useEffect(()=>{setData(undefined);void refresh();},[refresh]);
   useEffect(()=>{const sub=AppState.addEventListener('change',state=>{if(state==='active') void refresh();});return()=>sub.remove();},[refresh]);
   const mutate=async(method:'PUT'|'DELETE',body?:unknown)=>{
     if(!server || busy || !online) return;
     phoneSuspend(server.id);setBusy(true);setError('');
-    try {setData(await signedApi<Snapshot>(server,method,'/api/phone-tools',body));}
+    try {const snapshot=await signedApi<Snapshot>(server,method,'/api/phone-tools',body);if(activeServer.current===server.id) setData(snapshot);}
     catch(e) {setError((e as Error).message);}
     finally {setBusy(false);}
   };

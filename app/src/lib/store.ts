@@ -1254,6 +1254,7 @@ class Connection {
   }
 
   close() {
+    phoneDisconnect(this.server.id);
     this.closed = true;
     this.coordinator.leave(this.server.id);
     clearTimeout(this.timer);

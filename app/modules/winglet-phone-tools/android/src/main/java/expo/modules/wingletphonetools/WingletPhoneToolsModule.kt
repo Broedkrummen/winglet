@@ -58,8 +58,9 @@ class WingletPhoneToolsModule : Module() {
   private fun guard(tool: String, expires: Double, precise: Boolean = false) {
     val activity = appContext.currentActivity
     val keyguard = context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
-    if (!foreground || activity == null || activity.isFinishing || keyguard.isDeviceLocked || System.currentTimeMillis() >= expires) throw CodedException("Phone locked, backgrounded or request expired")
-    if (permissions(tool).any { !granted(it) } || (precise && !granted(Manifest.permission.ACCESS_FINE_LOCATION))) throw CodedException("Phone permission needed")
+    if (!foreground || activity == null || activity.isFinishing || keyguard.isDeviceLocked) throw CodedException("E_PHONE_LOCKED", "Phone locked or backgrounded", null)
+    if (System.currentTimeMillis() >= expires) throw CodedException("E_PHONE_EXPIRED", "Phone request expired", null)
+    if (permissions(tool).any { !granted(it) } || (precise && !granted(Manifest.permission.ACCESS_FINE_LOCATION))) throw CodedException("E_PHONE_PERMISSION", "Phone permission needed", null)
   }
   private fun cancelAll() { signals.values.forEach { it.cancel() }; signals.clear(); running.values.forEach { it.cancel() }; running.clear() }
   override fun definition() = ModuleDefinition {
@@ -94,6 +95,7 @@ class WingletPhoneToolsModule : Module() {
       try {
         val answer: Map<String, Any> = withTimeout(15000) {
           withContext(Dispatchers.IO) {
+            guard(tool, expires, precise)
             when (tool) {
               "phone_status" -> { require(args.isEmpty()); status() }
               "phone_location" -> { require(args.keys == setOf("precise")); location(precise) }
@@ -165,11 +167,15 @@ class WingletPhoneToolsModule : Module() {
     require(query.trim().length in 2..80)
     val resolver = context.contentResolver
     val out = mutableListOf<Map<String, Any>>()
-    val uri = Uri.withAppendedPath(ContactsContract.Contacts.CONTENT_FILTER_URI, Uri.encode(query.trim()))
-    resolver.query(uri, arrayOf(ContactsContract.Contacts._ID, ContactsContract.Contacts.DISPLAY_NAME_PRIMARY), null, null, ContactsContract.Contacts.DISPLAY_NAME_PRIMARY + " ASC", signal)?.use { rows ->
+    val seen = mutableSetOf<String>()
+    val uri = ContactsContract.Data.CONTENT_URI.buildUpon().appendQueryParameter("limit", "100").build()
+    val selection = "(${ContactsContract.Data.MIMETYPE}=? OR ${ContactsContract.Data.MIMETYPE}=? OR ${ContactsContract.Data.MIMETYPE}=?) AND (instr(lower(${ContactsContract.Data.DISPLAY_NAME_PRIMARY}),lower(?))>0 OR instr(lower(${ContactsContract.Data.DATA1}),lower(?))>0)"
+    val selectionArgs = arrayOf(ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE, ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE, ContactsContract.CommonDataKinds.Email.CONTENT_ITEM_TYPE, query.trim(), query.trim())
+    resolver.query(uri, arrayOf(ContactsContract.Data.CONTACT_ID, ContactsContract.Data.DISPLAY_NAME_PRIMARY), selection, selectionArgs, ContactsContract.Data.DISPLAY_NAME_PRIMARY + " ASC", signal)?.use { rows ->
       while (out.size < 5 && rows.moveToNext()) {
         currentCoroutineContext().ensureActive()
         val contactId = rows.getString(0)
+        if (!seen.add(contactId)) continue
         val phones = mutableListOf<String>(); val emails = mutableListOf<String>()
         resolver.query(ContactsContract.CommonDataKinds.Phone.CONTENT_URI, arrayOf(ContactsContract.CommonDataKinds.Phone.NUMBER), ContactsContract.CommonDataKinds.Phone.CONTACT_ID + "=?", arrayOf(contactId), null, signal)?.use { fields ->
           while (phones.size < 3 && fields.moveToNext()) phones.add((fields.getString(0) ?: "").take(254))

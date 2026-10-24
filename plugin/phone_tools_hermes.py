@@ -80,10 +80,12 @@ def register(ctx):
         return  # This Hermes cannot safely vary discovery by originating phone.
     from .phone_tools import CATALOG
     schemas = {"phone_contacts": {"query": {"type": "string", "minLength": 2, "maxLength": 80}}, "phone_location": {"precise": {"type": "boolean", "description": "Always requires an explicit phone decision; approximate by default."}}, "phone_calendar": {"start_ms": {"type": "integer"}, "end_ms": {"type": "integer"}}}
+    all_registered = True
     for tool, item in CATALOG.items():
         properties = schemas.get(tool, {})
         params = {"type": "object", "properties": properties, "additionalProperties": False}
         if tool in ("phone_contacts", "phone_calendar"):
             params["required"] = list(properties)
-        ctx.register_tool(name=tool, toolset="phone_tools", schema={"name": tool, "description": item["description"] + " Returns only: " + item["fields"] + ". Uses this chat sender's single paired Android phone, only while open and unlocked. Calendar times are UTC milliseconds.", "parameters": params}, handler=lambda args, _tool=tool, **kw: invoke(_tool,args,**kw), check_fn=no_cache_check_fn(lambda _tool=tool: available(_tool)), description=item["title"])
-    _REGISTERED = True
+        registration = ctx.register_tool(name=tool, toolset="phone_tools", schema={"name": tool, "description": item["description"] + " Returns only: " + item["fields"] + ". Uses this chat sender's single paired Android phone, only while open and unlocked. Calendar times are UTC milliseconds.", "parameters": params}, handler=lambda args, _tool=tool, **kw: invoke(_tool,args,**kw), check_fn=no_cache_check_fn(lambda _tool=tool: available(_tool)), description=item["title"])
+        all_registered = all_registered and registration is not None
+    _REGISTERED = all_registered

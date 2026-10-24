@@ -277,7 +277,12 @@ class Rooms:
                         answer = {'accepted': True}
                     elif action == 'update':
                         title = clean_title(body.get('title', row['title']))
-                        members = self._members(body.get('bots', [m['profile'] for m in json.loads(row['members'])]))
+                        existing_members = json.loads(row['members'])
+                        existing_profiles = [m['profile'] for m in existing_members]
+                        requested_profiles = body.get('bots', existing_profiles)
+                        # An unavailable roster member must not prevent renaming,
+                        # access revocation or archiving an existing room.
+                        members = existing_members if requested_profiles==existing_profiles else self._members(requested_profiles)
                         archived = body.get('archived', bool(row['archived']))
                         readers = body.get('readers', json.loads(row['readers']))
                         if type(archived) is not bool or not isinstance(readers, list) or len(readers)>100 or not all(isinstance(x,str) for x in readers):

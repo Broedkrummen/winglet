@@ -1,5 +1,6 @@
 """Feature-owned hosted-room worker using the installed Hermes scheduler and RPCs."""
 from pathlib import Path
+import os
 import json
 import sqlite3
 import threading
@@ -21,13 +22,24 @@ def build_worker(adapter, db_path: Path, hub):
         def _guard(self, profile, sid):
             # A title is not proof of ownership. Check the actual profile DB before
             # adopting a persisted room session (including a compression tip).
+            record = self._session_record(sid)
+            if record is not None:
+                expected_home = server._profile_home(profile)
+                live_home = record.get('profile_home')
+                normalized = lambda value: os.path.normcase(os.path.abspath(value)) if value else None
+                if normalized(expected_home) != normalized(live_home):
+                    raise RuntimeError('Room session belongs to another bot profile')
+            # Live IDs are short runtime aliases. Once the first prompt persists,
+            # pending_hidden is consumed; look up its actual durable session key.
+            stored_id = (record or {}).get('session_key') or sid
             with server._profile_db({'profile': profile}, writer=False) as db:
-                row = db.get_session(sid) if db is not None else None
+                if db is None:
+                    raise RuntimeError('Room profile session store is unavailable')
+                row = db.get_session(stored_id)
             if row is not None:
                 if row.get('source') != 'bot_room' or not row.get('hidden'):
                     raise RuntimeError('Refusing to adopt a non-room session')
                 return
-            record = self._session_record(sid)
             if (record is None or record.get('source') != 'bot_room'
                     or not record.get('room_plumbing') or not record.get('pending_hidden')):
                 raise RuntimeError('Room session identity could not be verified')

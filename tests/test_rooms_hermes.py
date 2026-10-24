@@ -167,6 +167,9 @@ def test_real_session_rpc_creates_room_identity_and_refuses_private_title_collis
     rooms,owner,_,_=room_env
     db=SessionDB(tmp_path/'session-guard.db')
     monkeypatch.setattr(server,'_get_db',lambda:db)
+    # The server caches its launch home at import; other integration tests may
+    # have imported it under a different disposable HERMES_HOME.
+    monkeypatch.setattr(server,'_hermes_home',str(tmp_path/'hermes'))
     monkeypatch.setattr(server,'_sessions',{})
     monkeypatch.setattr(server,'_sessions_lock',threading.Lock())
     monkeypatch.setattr(server,'_schedule_agent_build',lambda sid:None)
@@ -177,6 +180,10 @@ def test_real_session_rpc_creates_room_identity_and_refuses_private_title_collis
         created=worker.rpc.create(profile='default',title='Group: opaque-test-room',source='bot_room')
         record=worker.rpc._session_record(created['session_id'])
         assert record['source']=='bot_room' and record['room_plumbing'] and record['pending_hidden']
+        db.create_session(record['session_key'],source='bot_room')
+        db.set_session_hidden(record['session_key'],True)
+        record.pop('pending_hidden')  # consumed when the first real prompt persists
+        worker.rpc._guard('default',created['session_id'])
         db.create_session('private-collision',source='winglet')
         db.set_session_title('private-collision','Group: collision')
         with pytest.raises(RuntimeError,match='private session'):
@@ -218,3 +225,60 @@ def test_live_author_revocation_stops_held_turn_without_a_manual_policy_cycle(ro
         assert len(held.calls)==1
     finally:
         assert worker.stop(timeout=5)
+
+
+def test_offline_roster_member_does_not_block_archive_or_access_revocation(room_env):
+    rooms,owner,member,rpc=room_env
+    rid=create(rooms,owner)
+    rooms.mutate(owner,'update',rid,{'operation_id':'offline-share-1234','revision':1,'readers':[member['id']]})
+    rooms.hub.bots_provider=lambda:{'bots':[{'name':'ops','title':'Ops','served':False}],'multiplex':True}
+    rooms.hub.bots_state(fresh=True)
+    rooms.mutate(owner,'update',rid,{'operation_id':'offline-archive-1234','revision':2,'archived':True,'readers':[]})
+    assert rooms.state(owner,rid)['archived']
+    with pytest.raises(RoomError): rooms.state(member,rid)
+
+
+def test_real_prompt_submit_dispatches_isolated_room_session_without_a_provider(room_env,tmp_path,monkeypatch):
+    from hermes_state import SessionDB
+    from tui_gateway import server
+    from plugin.rooms_hermes import build_worker
+    rooms,owner,_,_=room_env
+    db=SessionDB(tmp_path/'real-room-submit.db')
+    monkeypatch.setattr(server,'_get_db',lambda:db)
+    monkeypatch.setattr(server,'_hermes_home',str(tmp_path/'hermes'))
+    monkeypatch.setattr(server,'_sessions',{})
+    monkeypatch.setattr(server,'_sessions_lock',threading.RLock())
+    monkeypatch.setattr(server,'_schedule_agent_build',lambda sid:None)
+    monkeypatch.setattr(server,'_schedule_session_cap_enforcement',lambda:None)
+    monkeypatch.setattr(server,'_start_agent_build',lambda *args:None)
+    calls=[]
+    def non_network_agent(rid,sid,session,text,kind,metadata,on_terminal,author):
+        calls.append((session['session_key'],session['source'],text))
+        # Run the real completion hook that commits the session's pending room
+        # title. Skipping it would make the next turn create another session.
+        server._after_complete_turn(sid,session,SimpleNamespace(tts_queue=object()),'')
+        with session['history_lock']:
+            session['running']=False
+        on_terminal({'status':'settled','text':'Reply from the non-network test agent'})
+    monkeypatch.setattr(server,'_run_after_agent_ready',non_network_agent)
+    directory=tmp_path/'real-submit';directory.mkdir()
+    adapter=SimpleNamespace(_bots_state=lambda:{'bots':[{'name':'ops','served':True}]})
+    worker=build_worker(adapter,directory/'rooms-runtime.sqlite',rooms.hub)
+    scoped=Rooms(rooms.hub,worker,directory/'rooms-meta.sqlite')
+    worker.runtime.poll_interval_seconds=.02
+    worker.runtime.active_poll_interval_seconds=.01
+    worker.start()
+    try:
+        rid=create(scoped,owner)
+        for index in range(2):
+            scoped.mutate(owner,'send',rid,{'operation_id':f'real-submit-turn-{index}-123','revision':1,'text':'@main inspect this isolated room'})
+            wait_for(lambda:len(calls)>index)
+            wait_for(lambda:not scoped.state(owner,rid)['driver']['working'])
+        assert len(calls)==2 and all(source=='bot_room' for _,source,_ in calls)
+        assert len({sid for sid,_,_ in calls})==1
+        row=db.get_session(calls[0][0])
+        assert row['source']=='bot_room' and row['hidden']
+        assert sum(e['kind']=='message.member' for e in scoped.log(owner,rid)['events'])==2
+    finally:
+        assert worker.stop(timeout=5)
+        db.close()

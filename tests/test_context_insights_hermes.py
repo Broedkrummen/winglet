@@ -1,6 +1,7 @@
 """Real pinned context accounting, stores, manual command and turn lease; no provider."""
 import contextlib
 from types import SimpleNamespace
+from datetime import datetime,timezone
 import pytest
 
 pytest.importorskip('gateway.session')
@@ -14,6 +15,7 @@ from hermes_state import SessionDB
 from plugin.hub import Hub
 from plugin.store import Store
 from plugin.context_insights_hermes import ContextBridge
+from plugin.branching import BranchRefused
 
 
 @pytest.fixture
@@ -84,3 +86,34 @@ async def test_real_context_breakdown_has_numeric_categories_not_prompt_or_tools
     assert value['context']['used']==123
     assert value['context']['categories'] and all('tokens' in c for c in value['context']['categories'])
     assert 'Private system content' not in str(value)
+
+
+async def test_model_switch_without_new_messages_invalidates_compression_preview(real):
+    bridge,runner,db,hub,owner,chat,monkeypatch=real
+    selected={'model':'first','provider':'fixture','base_url':'https://fixture.invalid'}
+    monkeypatch.setattr(runner,'_resolve_session_agent_runtime',lambda **kwargs:(selected['model'],selected),raising=False)
+    async def route(*args):return SimpleNamespace(model=selected['model'],context_length=8192,context_source='config')
+    monkeypatch.setattr(runner,'_resolve_route_context',route)
+    first=await bridge.inspect(chat,owner)
+    selected['model']='second'
+    second=await bridge.inspect(chat,owner)
+    assert first['revision']!=second['revision']
+    assert first['model']=='first' and second['model']=='second'
+    with pytest.raises(BranchRefused) as error:
+        await bridge.compress(chat,owner,first['revision'],lambda:None)
+    assert error.value.code=='stale'
+    assert len(db.get_messages('current'))==2
+
+
+async def test_normalized_account_response_never_serializes_provider_raw_credentials(real):
+    bridge,runner,db,hub,owner,chat,monkeypatch=real
+    from agent import account_usage
+    now=datetime.now(timezone.utc)
+    snapshot=account_usage.AccountUsageSnapshot(provider='openrouter',source='credits_api',fetched_at=now,
+        windows=(account_usage.AccountUsageWindow(label='API key quota',used_percent=25),),
+        details=('Credits balance: $12.50',),raw={'secret':'SHOULD_NEVER_REACH_CLIENT'})
+    monkeypatch.setattr(account_usage,'fetch_account_usage',lambda *args,**kwargs:snapshot)
+    result=await bridge.account(('private-route','openrouter',{'api_key':'sk-private-fixture'},None))
+    assert result['available'] and result['kind']=='credits'
+    assert result['windows'][0]['used_percent']==25
+    assert 'SHOULD_NEVER_REACH_CLIENT' not in str(result) and 'sk-private-fixture' not in str(result)

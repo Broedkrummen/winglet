@@ -25,6 +25,7 @@ class ContextInsights:
         self._closing=False
         with self.db() as db:
             db.execute('CREATE TABLE IF NOT EXISTS winglet_context_ops (id TEXT PRIMARY KEY, device TEXT NOT NULL, chat TEXT NOT NULL, revision TEXT NOT NULL, state TEXT NOT NULL, result TEXT NOT NULL, created REAL NOT NULL)')
+            db.execute('CREATE INDEX IF NOT EXISTS winglet_context_ops_scope ON winglet_context_ops(device,chat,created)')
             db.execute("UPDATE winglet_context_ops SET state='unknown',result=? WHERE state='running'",
                        (json.dumps({'status':'unknown','outcome':'Gateway restarted before a final receipt. Refresh context; this request will not run again.'}),))
 
@@ -54,6 +55,9 @@ class ContextInsights:
         self.actor(device,chat)
         result['busy']=bool(result['busy'] or self.busy(chat['id']) or (self.hub.branching and self.hub.branching.busy(chat['id'])))
         result['can_compress']=self.capabilities()['context_compression'] and not result['busy']
+        with self.db() as db:
+            last=db.execute('SELECT id FROM winglet_context_ops WHERE device=? AND chat=? ORDER BY created DESC LIMIT 1',(device['id'],chat['id'])).fetchone()
+        result['last_operation']=self.operation(device,chat,last['id']) if last else None
         return result
 
     async def limits(self,device,chat):
@@ -146,6 +150,12 @@ class ContextInsights:
             await self.hub.broadcast({'type':'context.updated','chat_id':chat['id'],'operation_id':operation_id,'status':result['status']})
         task=asyncio.create_task(run())
         self.tasks[operation_id]=(chat['id'],task)
+        def finished(done):
+            self.tasks.pop(operation_id,None)
+            # Observe exceptions after shutdown/storage failure. The retained
+            # running receipt is exposed as unknown, never replayed as work.
+            if not done.cancelled():done.exception()
+        task.add_done_callback(finished)
         return self.operation(device,chat,operation_id)
 
     async def close(self):

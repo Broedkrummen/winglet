@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import json
 import math
 from datetime import datetime, timezone
 
@@ -34,7 +35,16 @@ class ContextBridge:
 
     async def snapshot(self, chat, device):
         snap=await self.sessions.snapshot(chat['id'])
-        return snap,transcript_revision(self.adapter._hub.store.all_messages(chat['id']),snap.rows)
+        route_signature=None
+        if callable(getattr(self.runner,'_resolve_session_agent_runtime',None)):
+            source=self.sessions.source_for(chat,device)
+            async with self.runner._async_profile_scope_for_source(source):
+                model,kwargs=await asyncio.to_thread(self.runner._resolve_session_agent_runtime,source=source,session_key=snap.session_key)
+            snap.model={'model':str(model or ''),'provider':str(kwargs.get('provider') or ''),'source':'resolved'}
+            route_signature=(snap.model,kwargs.get('base_url'),kwargs.get('api_mode'))
+        content_revision=transcript_revision(self.adapter._hub.store.all_messages(chat['id']),snap.rows)
+        revision='cx-'+hashlib.sha256(json.dumps([content_revision,snap.model,route_signature],sort_keys=True,default=str).encode()).hexdigest()
+        return snap,revision
 
     async def inspect(self, chat, device):
         from agent.model_metadata import estimate_messages_tokens_rough
@@ -53,7 +63,7 @@ class ContextBridge:
         details={'skills':[],'toolsets':[]}
         rate_limits=[]
         compression_count=None
-        if agent is not None and not running:
+        if agent is not None and not running and (not model.get('model') or getattr(agent,'model','')==model['model']):
             try:
                 async with runner._async_profile_scope_for_source(source):
                     payload=await asyncio.to_thread(runner._session_context_breakdown,agent,source)
@@ -74,7 +84,13 @@ class ContextBridge:
                 pass
         if not payload.get('context_max') and callable(getattr(runner,'_resolve_route_context',None)):
             with contextlib.suppress(Exception):
-                route=await runner._resolve_route_context(source,str(model.get('model') or payload.get('model') or ''))
+                route_model=model.get('model') or payload.get('model') or ''
+                # Carry the session override's own endpoint into model metadata.
+                route_kwargs=None
+                if callable(getattr(runner,'_resolve_session_agent_runtime',None)):
+                    async with runner._async_profile_scope_for_source(source):
+                        _,route_kwargs=await asyncio.to_thread(runner._resolve_session_agent_runtime,source=source,session_key=snap.session_key)
+                route=await runner._resolve_route_context(source,str(route_model),route_kwargs)
                 if route is not None:
                     # Hermes has a probing fallback (currently256K). It is not
                     # an observed/configured model limit and must stay unknown.
@@ -88,12 +104,14 @@ class ContextBridge:
         cost_status=str(row.get('cost_status') or '')
         actual=number(row.get('actual_cost_usd'))
         estimate=number(row.get('estimated_cost_usd'))
-        usage['cost']={'currency':'USD','value':actual if cost_status=='actual' else estimate if estimate else None,
-                       'source':'measured' if cost_status=='actual' else 'estimated' if estimate else 'unavailable'}
+        measured=actual is not None and cost_status=='actual'
+        estimated=estimate is not None and (estimate>0 or cost_status=='estimated')
+        usage['cost']={'currency':'USD','value':actual if measured else estimate if estimated else None,
+                       'source':'measured' if measured else 'estimated' if estimated else 'unavailable'}
         breakdown=[{'id':str(c.get('id',''))[:64],'label':str(c.get('label',''))[:80],'tokens':number(c.get('tokens'))} for c in payload.get('categories',[])[:20]]
         window=number(payload.get('context_max'))
         result={'chat_id':chat['id'],'revision':revision,'session_id':snap.session_id,
-                'model':str(payload.get('model') or model.get('model') or row.get('model') or '')[:200],
+                'model':str(model.get('model') or payload.get('model') or row.get('model') or '')[:200],
                 'provider':str(model.get('provider') or '')[:100],
                 'context':{'used':number(payload.get('context_used')),'window':window if window else None,
                            'source':str(payload.get('context_source') or 'local_estimate'),

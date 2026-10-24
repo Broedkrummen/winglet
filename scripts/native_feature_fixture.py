@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import tempfile
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -21,10 +22,12 @@ from gateway.platforms.base import Platform, SessionSource
 from gateway.session import AsyncSessionStore, SessionStore
 from hermes_state import SessionDB
 from tools.checkpoint_manager import CheckpointManager
+from tools.process_registry import process_registry
 from plugin import execution, hermes_api
 from plugin.branching import BranchService
 from plugin.hub import Hub
 from plugin.store import Store
+from plugin.processes import Processes
 
 async def main():
     store=Store(scratch/'winglet.db')
@@ -65,6 +68,7 @@ async def main():
             await hub.set_typing(chat['id'],False)
     adapter=Adapter()
     hub.branching=BranchService(hub,adapter)
+    hub.processes=Processes(adapter)
     hub.on_user_message=adapter._on_user_message
     async def exchange(chat_id,prompt,reply):
         entry=await runner.async_session_store.get_or_create_session(adapter.build_source(chat_id=chat_id,user_id='fixture'))
@@ -78,6 +82,16 @@ async def main():
     await exchange('general','Help me plan a spring garden.','Start with a sunny bed, rich soil and a simple watering plan.')
     await exchange('general','What about tomatoes? I had blossom end rot last year.','Keep moisture consistent and check the soil before adding calcium. Choose two varieties to start.')
     sid=await exchange('research','Review the release notes.','I am checking the changes and preparing a short summary.')
+    old_sid=os.environ.get('HERMES_SESSION_ID')
+    os.environ['HERMES_SESSION_ID']=sid
+    proc=subprocess.Popen([sys.executable,'-u','-c',
+        'import time\nfor i in range(600):\n print(f"Watching release notes: check {i}",flush=True)\n time.sleep(2)'],
+        stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding='utf-8',errors='replace',
+        start_new_session=True,creationflags=0x08000000 if os.name=='nt' else 0)
+    job=process_registry.adopt_local(proc,command='python watch_release_notes.py',cwd=str(workspace),
+        task_id=sid,session_key=adapter._session_key('research'),output_so_far='Watching release notes...\n',notify_on_complete=False)
+    if old_sid is None: os.environ.pop('HERMES_SESSION_ID',None)
+    else: os.environ['HERMES_SESSION_ID']=old_sid
     tracker.turn_started(sid,'native-review')
     tracker.plan_updated(sid,json.dumps({'revision':1,'todos':[
         {'id':'1','content':'Read the release notes','status':'completed'},
@@ -123,6 +137,12 @@ async def main():
     print(f'QA_PAIR http://127.0.0.1:9380/#pair={code}&fp={hub.keys.fingerprint}',flush=True)
     print(f'QA_SCRATCH {scratch}',flush=True)
     print(f'QA_FEATURES {hub.features()}',flush=True)
-    await asyncio.Event().wait()
+    try:
+        await asyncio.Event().wait()
+    finally:
+        await hub.processes.close()
+        await asyncio.to_thread(process_registry.kill_process,job.id,consume_output=False)
+        await api.cleanup()
+        await qa.cleanup()
 
 asyncio.run(main())

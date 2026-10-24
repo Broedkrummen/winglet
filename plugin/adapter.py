@@ -28,7 +28,7 @@ from gateway.platforms._shared import extra_or_secret, get_scoped_secret, seed_e
 from gateway.platforms.base import BasePlatformAdapter, ExecApprovalPrompt, SendResult
 from gateway.platforms.event import MessageEvent, MessageType
 
-from . import bridge, cli, hermes_api, teamwork
+from . import bridge, checkpoints, cli, execution, hermes_api, teamwork
 from .dependencies import missing_dependencies
 from .store import Store
 
@@ -46,6 +46,33 @@ GENERAL_CHAT_ID = "general"
 RECONCILE_SECONDS = 5.0
 MAX_MESSAGE_LENGTH = 16_000
 _TRUTHY = ("1", "true", "yes", "on")
+
+# -- structured execution activity ------------------------------------------------------------
+#
+# Hermes fires plugin hooks for every platform and every profile in this process. The tracker below is
+# shared by the one Winglet adapter this gateway runs; its resolvers keep only sessions that really
+# belong to a Winglet chat, and only that chat's bot.
+
+_TRACKER: Optional[execution.Tracker] = None
+_TRACKER_HOOKS: Dict[str, bool] = {}
+_ACTIVE: Optional["WingletAdapter"] = None
+
+
+def _resolve_session_chat(session_id: str) -> Optional[Dict[str, Any]]:
+    adapter = _ACTIVE
+    return adapter._session_chat(session_id) if adapter is not None else None
+
+
+def _resolve_session_key_chat(session_key: str) -> Optional[str]:
+    adapter = _ACTIVE
+    return adapter._session_key_chat(session_key) if adapter is not None else None
+
+
+def _publish_task_event(event: Dict[str, Any]) -> None:
+    adapter = _ACTIVE
+    if adapter is not None:
+        adapter._publish_task_event(event)
+
 
 PLATFORM_HINT = (
     "You are talking to your owner through Winglet, their personal mobile app. It renders full "
@@ -198,6 +225,9 @@ class WingletAdapter(BasePlatformAdapter):
         self._reconcile_task: Optional[asyncio.Task] = None
         # (chat_id, status_key) -> message id, so a repeated status edits one line in place.
         self._status_ids: Dict[tuple, str] = {}
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        # Broadcasts started by hook callbacks; kept referenced until they finish.
+        self._execution_tasks: set = set()
 
     # -- lifecycle -------------------------------------------------------------------------
 
@@ -225,10 +255,24 @@ class WingletAdapter(BasePlatformAdapter):
             hub.hermes_version = hermes_api.hermes_version
             hub.commands_provider = hermes_api.list_commands
             hub.hermes = hermes_api
+<<<<<<< HEAD
             # Speech-to-text and text-to-speech from this profile's own configuration. The app only sees
             # the capability and provider names; keys and models stay on the server.
             hub.speech = hermes_api.SpeechBackend() if hermes_api.speech_available() else None
+=======
+            # Hermes's own workspace snapshots, only where this Hermes keeps them.
+            hub.checkpoints = (checkpoints.CheckpointService(hermes_api, busy=hub.busy_chats)
+                               if hermes_api.checkpoints_available() else None)
+>>>>>>> origin/codex/major-features
             hub.chat_model = self._chat_model
+            # Structured task activity is on only when every hook it needs was accepted. Old Hermes
+            # versions, or a host that refuses hooks, keep the feature off rather than showing guesses.
+            self._loop = asyncio.get_running_loop()
+            global _ACTIVE
+            _ACTIVE = self
+            if _TRACKER is not None and _TRACKER_HOOKS and all(_TRACKER_HOOKS.values()):
+                _TRACKER.reset()
+                hub.execution = _TRACKER
             # The app only offers goals when this Hermes has them (features.goals).
             hub.chat_goal = self._chat_goal if hermes_api.goals_available() else None
             hub.command_resolver = hermes_api.resolve_command
@@ -242,6 +286,23 @@ class WingletAdapter(BasePlatformAdapter):
             # Members' tool limits hold only if every turn's final toolsets can be capped (see toolset_limit).
             hub.limits_members = hermes_api.limit_turn_toolsets(self.gateway_runner, PLATFORM) \
                 if getattr(self, "gateway_runner", None) is not None else False
+            # Conversation branching is installed here and fails closed inside HermesBranchBridge
+            # when this Hermes lacks the session-store operations it needs.
+            from .branching import BranchService
+            hub.branching = BranchService(hub, self)
+            from .processes import Processes
+            hub.processes = Processes(self)
+            # A private hosted-room worker reuses Hermes's durable scheduler. It
+            # owns separate storage and never adopts the user's dashboard rooms.
+            from .rooms import Rooms
+            from .rooms_hermes import build_worker
+            try:
+                worker = await asyncio.to_thread(build_worker, self, Path(store.path).parent / "rooms-runtime.sqlite", hub)
+                hub.rooms = Rooms(hub, worker, Path(store.path).parent / "rooms-meta.sqlite")
+                worker.start()
+            except Exception:
+                logger.warning("[%s] hosted rooms unavailable on this Hermes", self.name, exc_info=True)
+
             from gateway.platforms.shared_ingress import bind_listener
             # No access log: device tokens ride in WebSocket/media query strings and must not reach log files.
             self._runner = await bind_listener(self, hub.build_app(), self._host, self._port, "/api/ws",
@@ -268,6 +329,13 @@ class WingletAdapter(BasePlatformAdapter):
     async def disconnect(self) -> None:
         self._running = False
         self._mark_disconnected()
+        global _ACTIVE
+        if _ACTIVE is self:
+            _ACTIVE = None
+        if _TRACKER is not None:
+            _TRACKER.reset()
+        self._loop = None
+        self._execution_tasks.clear()
         if self._tunnel is not None:
             await self._tunnel.stop()
             self._tunnel = None
@@ -482,6 +550,74 @@ class WingletAdapter(BasePlatformAdapter):
         event = MessageEvent(text="/reload-mcp", message_type=MessageType.COMMAND, source=source,
                              timestamp=datetime.now(tz=timezone.utc))
         return await hermes_api.reload_mcp(getattr(self, "gateway_runner", None), event)
+
+    # -- structured execution activity ---------------------------------------------------------
+
+    def _chat_for_entry(self, entry: Any) -> Optional[Dict[str, Any]]:
+        """The Winglet chat (and bot) a Hermes session entry belongs to, or None.
+
+        Authority is Hermes's own session record: its origin platform must be Winglet, the chat must
+        still exist here, and the profile must be that chat's bot. A session for Telegram, a removed
+        bot, a deleted chat or another profile produces no activity in this app.
+        """
+        hub = self._hub
+        if hub is None or entry is None:
+            return None
+        origin = getattr(entry, "origin", None)
+        platform = getattr(origin, "platform", None)
+        if str(getattr(platform, "value", platform) or "") != PLATFORM:
+            return None
+        chat_id = str(getattr(origin, "chat_id", "") or "")
+        if not chat_id:
+            return None
+        chat = hub.store.get_chat(chat_id)
+        if chat is None:
+            return None
+        profile = getattr(origin, "profile", None) or None
+        if (chat.get("bot") or None) != profile:
+            return None
+        return {"chat_id": chat_id, "bot": profile}
+
+    def _session_chat(self, session_id: str) -> Optional[Dict[str, Any]]:
+        store = getattr(getattr(self, "gateway_runner", None), "session_store", None)
+        if store is None or not session_id:
+            return None
+        try:
+            return self._chat_for_entry(store.lookup_by_session_id(session_id))
+        except Exception:
+            logger.debug("[%s] could not map a session to a chat", self.name, exc_info=True)
+            return None
+
+    def _session_key_chat(self, session_key: str) -> Optional[str]:
+        store = getattr(getattr(self, "gateway_runner", None), "session_store", None)
+        if store is None or not session_key:
+            return None
+        try:
+            target = self._chat_for_entry(store.lookup_by_session_key(session_key))
+        except Exception:
+            logger.debug("[%s] could not map a session key to a chat", self.name, exc_info=True)
+            return None
+        return (target or {}).get("chat_id")
+
+    def _publish_task_event(self, event: Dict[str, Any]) -> None:
+        """Send one structured activity event from a hook (possibly a worker thread) to the app."""
+        hub, loop = self._hub, self._loop
+        if hub is None or loop is None or loop.is_closed():
+            return
+
+        def send() -> None:
+            try:
+                task = asyncio.ensure_future(hub.broadcast(event))
+                self._execution_tasks.add(task)
+                task.add_done_callback(self._execution_tasks.discard)
+            except Exception:
+                logger.debug("[%s] task event not delivered", self.name, exc_info=True)
+
+        try:
+            loop.call_soon_threadsafe(send)
+        except RuntimeError:
+            # The loop closed between the check and the hand-off (a restart): nothing to deliver to.
+            pass
 
     def _session_key(self, chat_id: str) -> Optional[str]:
         """The key Hermes files this chat's session under, or None outside a gateway."""
@@ -722,6 +858,11 @@ def _message_type(text: str, kinds: list):
 
 
 def register(ctx) -> None:
+    global _TRACKER, _TRACKER_HOOKS
+    if _TRACKER is None:
+        _TRACKER = execution.Tracker(_resolve_session_chat, publish=_publish_task_event,
+                                     resolve_key=_resolve_session_key_chat)
+        _TRACKER_HOOKS = execution.register_hooks(ctx, _TRACKER)
     platform = dict(
         name=PLATFORM, label="Winglet", adapter_factory=lambda cfg: WingletAdapter(cfg),
         check_fn=check_requirements, validate_config=validate_config, is_connected=is_connected,

@@ -1,5 +1,8 @@
 export type Bot = { name: string; title: string; description: string };
 
+/** Structured task activity lives in its own feature module; re-exported here for the store and screens. */
+export type { TaskCapabilities, TaskEnvelope, TaskSnapshot, TaskState } from '../features/execution/model';
+
 export type Server = {
   id: string; // server_id reported by the plugin
   url: string; // base URL, no trailing slash
@@ -33,6 +36,16 @@ export type Device = { id: string; name: string; platform: string; role: Role; v
 export type AuditEntry = { id: number; ts: number; device_id: string; device_name: string; role: string; action: string;
   summary: string; outcome: string };
 
+/** Where a branch chat came from: a snapshot of the parent at the moment it was copied. */
+export type ChatBranch = {
+  parent_chat_id: string;
+  parent_title: string;
+  from_message_id: string;
+  mode: 'edit' | 'branch' | 'regenerate' | string;
+  created_at: number;
+  source_revision: string;
+};
+
 export type Chat = {
   id: string;
   title: string;
@@ -42,6 +55,73 @@ export type Chat = {
   preview: string;
   /** A member's own chat; owners' shared chats have none. */
   owner_device?: string | null;
+  /** Present when this chat was branched from another one. */
+  branch?: ChatBranch | null;
+};
+
+/** One message's branching/editing gates, from the server's real transcript mapping. */
+export type BranchMessageCapability = {
+  role: 'user' | 'bot';
+  can_branch?: boolean;
+  can_edit?: boolean;
+  can_regenerate?: boolean;
+  reason?: string;
+};
+
+/** The branching state of one chat, plus the per-message gates for its More menu. */
+export type BranchState = {
+  supported: boolean;
+  reason?: string;
+  chat_id?: string;
+  revision?: string;
+  busy?: boolean;
+  model?: { model?: string; provider?: string; label?: string; source?: string } | null;
+  branch?: ChatBranch | null;
+  children?: { id: string; title: string; created_at: number }[];
+  messages?: Record<string, BranchMessageCapability>;
+};
+
+/** What the server returns after creating a branch (or replaying an idempotent request). */
+export type BranchResult = {
+  chat: Chat;
+  branch: ChatBranch;
+  mode: 'edit' | 'branch' | 'regenerate';
+  copies: number;
+  later: number;
+  revision: string;
+  model?: { model?: string; provider?: string; label?: string } | null;
+  message?: Message | null;
+  warning?: string;
+  replayed?: boolean;
+};
+
+/** A server-persisted folder of conversations on one bot. `private` projects belong to one member. */
+export type Project = {
+  id: string;
+  name: string;
+  /** Stable order within its scope; sorted by the server. */
+  position: number;
+  archived: boolean;
+  /** Rename/archive/reorder/delete are guarded by this revision. */
+  revision: number;
+  private: boolean;
+  /** This device may rename, archive, reorder or delete it. */
+  can_manage: boolean;
+  /** Chats in the project that this device may see. */
+  chat_count: number;
+  created_at: number;
+  updated_at: number;
+};
+
+/** A chat's place in a project. The chat itself (messages, draft, pin) is unchanged. */
+export type ProjectThread = { chat_id: string; project_id: string; position: number };
+
+/** Everything the server shares about one bot's projects with this device. */
+export type ProjectSnapshot = {
+  projects: Project[];
+  threads: ProjectThread[];
+  /** Changes when a project is created, deleted or reordered in this device's scope. */
+  layout_revision: number;
 };
 
 export type AttachmentKind = 'image' | 'audio' | 'video' | 'file' | 'voice';

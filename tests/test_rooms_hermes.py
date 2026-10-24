@@ -241,11 +241,21 @@ def test_offline_roster_member_does_not_block_archive_or_access_revocation(room_
 def test_real_prompt_submit_dispatches_isolated_room_session_without_a_provider(room_env,tmp_path,monkeypatch):
     from hermes_state import SessionDB
     from tui_gateway import server
+    from tui_gateway import launch_profile_policy
+    from agent import secret_scope
     from plugin.rooms_hermes import build_worker
     rooms,owner,_,_=room_env
+    ops_home=tmp_path/'hermes'/'profiles'/'ops'
+    ops_home.mkdir(parents=True)
+    (ops_home/'config.yaml').write_text('model: {}\n',encoding='utf-8')
     db=SessionDB(tmp_path/'real-room-submit.db')
     monkeypatch.setattr(server,'_get_db',lambda:db)
     monkeypatch.setattr(server,'_hermes_home',str(tmp_path/'hermes'))
+    # Exercise real multi-profile activation, then restore process-wide state
+    # so this disposable host does not scope the tests that follow it.
+    monkeypatch.setattr(server,'_served_profile_homes',set())
+    monkeypatch.setattr(launch_profile_policy,'_snapshot',None)
+    monkeypatch.setattr(secret_scope,'_MULTIPLEX_ACTIVE',secret_scope._MULTIPLEX_ACTIVE)
     monkeypatch.setattr(server,'_sessions',{})
     monkeypatch.setattr(server,'_sessions_lock',threading.RLock())
     monkeypatch.setattr(server,'_schedule_agent_build',lambda sid:None)
@@ -270,15 +280,26 @@ def test_real_prompt_submit_dispatches_isolated_room_session_without_a_provider(
     worker.start()
     try:
         rid=create(scoped,owner)
-        for index in range(2):
-            scoped.mutate(owner,'send',rid,{'operation_id':f'real-submit-turn-{index}-123','revision':1,'text':'@main inspect this isolated room'})
+        for index,handle in enumerate(('main','main','ops','ops')):
+            scoped.mutate(owner,'send',rid,{'operation_id':f'real-submit-turn-{index}-123','revision':1,'text':f'@{handle} inspect this isolated room'})
             wait_for(lambda:len(calls)>index)
             wait_for(lambda:not scoped.state(owner,rid)['driver']['working'])
-        assert len(calls)==2 and all(source=='bot_room' for _,source,_ in calls)
-        assert len({sid for sid,_,_ in calls})==1
+        assert len(calls)==4 and all(source=='bot_room' for _,source,_ in calls)
+        assert calls[0][0]==calls[1][0] and calls[2][0]==calls[3][0]
+        assert calls[0][0]!=calls[2][0]
         row=db.get_session(calls[0][0])
         assert row['source']=='bot_room' and row['hidden']
-        assert sum(e['kind']=='message.member' for e in scoped.log(owner,rid)['events'])==2
+        ops_db=SessionDB(ops_home/'state.db')
+        try:
+            ops_row=ops_db.get_session(calls[2][0])
+            assert ops_row['source']=='bot_room' and ops_row['hidden']
+            assert db.get_session(calls[2][0]) is None
+            assert ops_db.get_session(calls[0][0]) is None
+        finally:
+            ops_db.close()
+        with pytest.raises(RuntimeError,match='another bot profile'):
+            worker.rpc._guard('ops',next(key for key,value in server._sessions.items() if value['session_key']==calls[0][0]))
+        assert sum(e['kind']=='message.member' for e in scoped.log(owner,rid)['events'])==4
     finally:
         assert worker.stop(timeout=5)
         db.close()

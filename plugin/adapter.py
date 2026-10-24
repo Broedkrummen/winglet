@@ -284,6 +284,8 @@ class WingletAdapter(BasePlatformAdapter):
             # when this Hermes lacks the session-store operations it needs.
             from .branching import BranchService
             hub.branching = BranchService(hub, self)
+            from .processes import Processes
+            hub.processes = Processes(self)
             from gateway.platforms.shared_ingress import bind_listener
             # No access log: device tokens ride in WebSocket/media query strings and must not reach log files.
             self._runner = await bind_listener(self, hub.build_app(), self._host, self._port, "/api/ws",

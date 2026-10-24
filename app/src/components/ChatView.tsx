@@ -39,6 +39,7 @@ import { ChatPet } from './ChatPet';
 import type { DockPetFrame } from './BotCarousel';
 import { ConnectionBanner } from './ConnectionBanner';
 import { FilesSheet } from './FilesSheet';
+import { ProcessesSheet } from '../features/processes/ProcessesSheet';
 import { GoalSheet, GoalStrip, useChatGoal } from './Goal';
 import { PausedBanner } from './PausedBanner';
 import { Glass } from './Glass';
@@ -101,6 +102,7 @@ export function ChatView({ server, chatId, showBack, embedded, landing }: { serv
   const [selectText, setSelectText] = useState<string | null>(null);
   const [goalOpen, setGoalOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
+  const [processesOpen, setProcessesOpen] = useState(false);
   const [branchTarget, setBranchTarget] = useState<BranchTarget | null>(null);
   const target = useRef<View>(null);
   const typing = isTyping(runtime, chatId);
@@ -128,7 +130,7 @@ export function ChatView({ server, chatId, showBack, embedded, landing }: { serv
     const hide = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide', () => setInputFocused(false));
     return () => hide.remove();
   }, []);
-  useEffect(() => { setMenu(false); setSelected(null); setGoalOpen(false); setFilesOpen(false); setBranchTarget(null); }, [server.id, chatId]);
+  useEffect(() => { setMenu(false); setSelected(null); setGoalOpen(false); setFilesOpen(false); setProcessesOpen(false); setBranchTarget(null); }, [server.id, chatId]);
   // The More sheet is the moment these gates matter: a reply may have settled since the last load.
   useEffect(() => { if (selected && branching.supported && branching.online) void branching.refresh(); }, [selected, branching.supported, branching.online, branching.refresh]);
 
@@ -232,8 +234,11 @@ export function ChatView({ server, chatId, showBack, embedded, landing }: { serv
         onGoal={goalsSupported && chat?.kind !== 'home' ? () => setGoalOpen(true) : undefined} hasGoal={!!goal && goal.status !== 'done'}
         onFiles={runtime?.info?.features?.files ? () => setFilesOpen(true) : undefined}
         onCheckpoints={runtime?.info?.features?.checkpoints && isOwner(runtime) ? () => router.push('/checkpoints') : undefined}
+        onProcesses={runtime?.info?.features?.processes && isOwner(runtime) ? () => setProcessesOpen(true) : undefined}
         onDeleted={() => router.replace('/chats')} onArchived={() => router.replace('/chats')} />
       <GoalSheet server={server} chatId={chatId} goal={goal} visible={goalOpen} onClose={() => setGoalOpen(false)} onChanged={refreshGoal} />
+      <ProcessesSheet key={`processes:${server.id}:${chatId}`} server={server} chatId={chatId}
+        visible={processesOpen} onClose={() => setProcessesOpen(false)} />
       <FilesSheet server={server} chatId={chatId} visible={filesOpen} onClose={() => setFilesOpen(false)}
         onJump={(id) => requestFocus(server.id, chatId, id)} />
       <MessageMenu server={server} message={selected} busy={typing} onClose={() => setSelected(null)}

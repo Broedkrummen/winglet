@@ -130,6 +130,7 @@ ROUTE_POLICY = {
     "h_chat_goal": "device", "h_goals": "device", "h_search": "device", "h_chat_files": "device",
     "h_checkpoints": "owner", "h_checkpoint": "owner", "h_checkpoint_restore": "owner_signed",
     "h_task": "device",
+    "h_process_list": "owner", "h_process_detail": "owner", "h_process_stop": "owner_signed",
     "h_projects": "device", "h_project_create": "signed", "h_project_update": "signed",
     "h_project_order": "signed", "h_project_delete": "signed", "h_project_chat_create": "signed",
     "h_project_chat_move": "signed", "h_project_chat_remove": "signed",
@@ -267,6 +268,7 @@ class Hub:
         # Structured task activity (plugin/execution.py), installed by the adapter when Hermes offers
         # the observer hooks it needs. None keeps the feature off (old server or old Hermes).
         self.execution: Any = None
+        self.processes = None
         self._pickers: Dict[str, Dict[str, Any]] = {}
         # Restarts and updates outlive this process; jobs started by this one carry its boot id.
         self.boot_id = new_id()
@@ -418,6 +420,8 @@ class Hub:
         if self.branching is not None:
             from .branching_routes import register_routes as _register_branch_routes
             _register_branch_routes(app)
+        from .processes_routes import register_routes as _register_process_routes
+        _register_process_routes(app)
         r.add_get("/{tail:.*}", self.h_static)
         app.on_startup.append(self._start_janitor)
         app.on_shutdown.append(self._close_sockets)
@@ -740,6 +744,9 @@ class Hub:
                 "checkpoint_restore": checkpoints and self.checkpoints.can_restore,
                 "chat_branching": branching, "message_editing": branching, "regeneration": branching,
                 "task_activity": self.execution is not None,
+                "processes": self.processes is not None and self.processes.available(),
+                "process_output": self.processes is not None and self.processes.available(),
+                "process_stop": self.processes is not None and self.processes.available(),
                 "connection_status": True, "projects": True}
 
     def about(self) -> Dict[str, Any]:
@@ -3154,6 +3161,8 @@ class Hub:
         return self._http
 
     async def aclose(self) -> None:
+        if self.processes is not None:
+            await self.processes.close()
         if self._recovery_task:
             self._recovery_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

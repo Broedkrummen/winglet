@@ -25,7 +25,7 @@ import { ChatFilters } from './ChatFilters';
 import { ProjectSection } from '../features/projects/ProjectSection';
 import { Glass } from './Glass';
 import { KeyboardViewport } from './KeyboardViewport';
-import { Bot, Inbox, MessageCircle, MessageSquarePlus, MessagesSquare, MoreHorizontal, PanelLeft, Pin, Settings } from './icons';
+import { Bot, Inbox, MessageCircle, MessageSquarePlus, MessagesSquare, MoreHorizontal, PanelLeft, Pin, Settings, Users } from './icons';
 import { Badge, IconButton, SearchField, Tap } from './ui';
 
 const Navigation = createContext({ open: () => {}, close: () => {}, home: () => {}, homeRevision: 0, reserved: 0 });
@@ -209,6 +209,7 @@ function Sidebar({ onClose, drawer = false }: { onClose: () => void; drawer?: bo
       <View style={s.groupCard}>
       <Text style={s.groupTitle}>Conversations</Text>
       {nav('Chat', MessageCircle, '/')}
+      {nav('Rooms', Users, '/rooms')}
       <Tap accessibilityLabel="New chat" disabled={creating} accessibilityState={{ disabled: creating }} onPress={newChat} style={s.navRow}>
         <MessageSquarePlus size={19} color={t.colors.textSecondary} /><Text style={s.navText}>{creating ? 'Creating…' : 'New chat'}</Text>
       </Tap>
@@ -288,7 +289,8 @@ function NavigationRail() {
     {item('Inbox', Inbox, '/inbox')}
     <View style={{ flex: 1 }} />
     <View style={s.railDivider} />
-    {item('Agent', Bot, '/agent')}
+    {item('Rooms', Users, '/rooms')}
+      {item('Agent', Bot, '/agent')}
     {item('Settings', Settings, '/settings')}
   </View>;
 }

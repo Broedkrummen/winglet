@@ -65,6 +65,7 @@ function harness(os = 'web') {
     return exports;
   }
   const helpers = compile('../src/lib/messages.ts', {});
+  const taskModel = compile('../src/features/execution/model.ts', {});
   const projectHelpers = compile('../src/features/projects/logic.ts', {});
   const { useApp: store } = compile('../src/lib/store.ts', {
     zustand: { create: (fn: any) => createStore(fn) },
@@ -82,13 +83,14 @@ function harness(os = 'web') {
       cacheRemove: async (prefix: string) => { for (const k of [...cache.keys()]) if (k.startsWith(prefix)) cache.delete(k); },
     },
     './verify': { NEEDS_VERIFY: 'Verify this phone to do that.' },
+    '../features/execution/model': taskModel,
     './sounds': { sound: { reply: () => played.push('reply'), needsYou: () => played.push('needsYou'), tap: () => {}, sent: () => {} } },
     './storage': { getJSON: async (key: string, fallback: any) => (key === 'winglet.servers' && persisted) || fallback,
       setJSON: async (key: string, value: any) => { if (key === 'winglet.servers') persisted = value; } },
   });
   const tick = () => new Promise(resolve => setImmediate(resolve));
   return {
-    store, cache, played, setRequest: (fn: typeof request) => { request = fn; },
+    store, cache, played, taskModel, setRequest: (fn: typeof request) => { request = fn; },
     setRecovery: (fn: typeof recoveryRequest) => { recoveryRequest = fn; },
     disconnect: () => { socket.readyState = 3; socket.onclose?.({ code: 1006 }); },
     retry: () => timers.shift()?.(), timers, sockets, persisted: () => persisted, socket: () => socket, tick,
@@ -760,6 +762,38 @@ test('overlapping inbox loads apply only the latest requested snapshot', async (
   await first;
   assert.equal(h.store.getState().runtime.s.pending, 0);
   assert.equal(Object.keys(h.store.getState().runtime.s.inbox).length, 0);
+});
+
+test('task activity stays per chat, ignores a stale snapshot, and starts fresh on hello', async () => {
+  const h = harness();
+  await h.connect();
+  const base = h.taskModel.emptyTask('general');
+  h.event({ type: 'task.snapshot', chat_id: 'general',
+    snapshot: { ...base, turn_index: 1, turn_id: 't1', state: 'running', started_at: 1, updated_at: 2, seq: 1 } });
+  const tool = { id: 'call-1', name: 'terminal', preview: 'ls', status: 'running', started_at: 2,
+    ended_at: null, duration_ms: null, error: null, started_known: true };
+  h.event({ type: 'task.event', chat_id: 'general', turn_id: 't1', turn_index: 1, seq: 2,
+    event: { kind: 'tool.started', tool } });
+  assert.equal(h.store.getState().runtime.s.tasks.general.tools[0].id, 'call-1');
+
+  // A slow refetch that predates the live fact cannot erase it.
+  h.event({ type: 'task.snapshot', chat_id: 'general',
+    snapshot: { ...base, turn_index: 1, turn_id: 't1', state: 'running', updated_at: 3, seq: 1 } });
+  assert.equal(h.store.getState().runtime.s.tasks.general.tools.length, 1);
+
+  // Another chat's task is independent.
+  h.event({ type: 'task.snapshot', chat_id: 'side',
+    snapshot: { ...h.taskModel.emptyTask('side'), turn_index: 1, state: 'completed', updated_at: 3, ended_at: 3, seq: 1 } });
+  assert.equal(h.store.getState().runtime.s.tasks.side.state, 'completed');
+  assert.equal(h.store.getState().runtime.s.tasks.general.tools.length, 1);
+
+  // A newer snapshot settles this chat.
+  h.event({ type: 'task.snapshot', chat_id: 'general',
+    snapshot: { ...base, turn_index: 1, turn_id: 't1', state: 'completed', updated_at: 4, ended_at: 4, seq: 3 } });
+  assert.equal(h.store.getState().runtime.s.tasks.general.state, 'completed');
+
+  await h.hello();
+  assert.equal(Object.keys(h.store.getState().runtime.s.tasks).length, 0);
 });
 
 test('a late project read cannot roll back live project changes', async () => {

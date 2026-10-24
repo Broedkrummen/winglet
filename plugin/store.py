@@ -658,7 +658,8 @@ class Store:
     def prune(self, now: Optional[float] = None) -> int:
         """Drop old tombstones and old answered inbox items. Returns how many rows went."""
         now = now or _now()
-        return (self._exec("DELETE FROM message_deletions WHERE deleted_at < ?", (now - DELETIONS_KEEP_SECONDS,))
+        return (self._exec("DELETE FROM phone_tool_events WHERE ts < ? OR id NOT IN (SELECT id FROM phone_tool_events ORDER BY id DESC LIMIT 5000)", (now - 30 * 86400,))
+                + self._exec("DELETE FROM message_deletions WHERE deleted_at < ?", (now - DELETIONS_KEEP_SECONDS,))
                 + self._exec("DELETE FROM inbox WHERE status != 'pending' AND updated_at < ?",
                              (now - INBOX_KEEP_SECONDS,)))
 

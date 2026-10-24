@@ -118,6 +118,8 @@ class Forbidden(PermissionError):
 #   signed        any verified device, with a signed request
 #   owner_signed  an owner's verified device, with a signed request: every control action
 ROUTE_POLICY = {
+    "h_phone_tools": "device", "h_phone_tools_put": "signed", "h_phone_tools_revoke": "signed",
+    "h_phone_tools_log": "device",
     "h_rooms": "paired", "h_room_state": "paired", "h_room_log": "paired",
     "h_room_create": "owner_signed", "h_room_action": "signed",
     "h_info": "public", "h_pair": "public", "h_ws": "public", "h_static": "public", "h_media": "public",
@@ -270,6 +272,7 @@ class Hub:
         # Structured task activity (plugin/execution.py), installed by the adapter when Hermes offers
         # the observer hooks it needs. None keeps the feature off (old server or old Hermes).
         self.execution: Any = None
+        self.phone_tools = None
         self.processes = None
         self.rooms = None
         self._pickers: Dict[str, Dict[str, Any]] = {}
@@ -307,6 +310,10 @@ class Hub:
         app = web.Application(client_max_size=2 * 1024 * 1024, middlewares=[self._cors, self._policy])
         app["hub"] = self
         r = app.router
+        r.add_get("/api/phone-tools", self.h_phone_tools)
+        r.add_put("/api/phone-tools", self.h_phone_tools_put)
+        r.add_delete("/api/phone-tools", self.h_phone_tools_revoke)
+        r.add_get("/api/phone-tools/log", self.h_phone_tools_log)
         r.add_get("/api/info", self.h_info)
         r.add_post("/api/pair", self.h_pair)
         r.add_get("/api/ws", self.h_ws)
@@ -736,7 +743,7 @@ class Hub:
         checkpoints = self.checkpoints is not None
         branching = bool(self.branching is not None and self._has(self.branching, "available")
                          and self.branching.available())
-        return {"rooms": self.rooms is not None and self.rooms.available(),
+        return {"phone_tools": self.phone_tools is not None, "rooms": self.rooms is not None and self.rooms.available(),
                 "room_mentions": self.rooms is not None and self.rooms.available(), "rooms_member_write": False,
                 "webpush": True, "ntfy": True, "approvals": True, "questions": True, "uploads": True, "voice": True,
                 "replies": True, "export": True, "mute": True, "status_updates": True, "roles": True,
@@ -1711,6 +1718,8 @@ class Hub:
                 with self._bot_context(bot):
                     await self._on_ws(ws, device, data)
         finally:
+            if self.phone_tools is not None:
+                await self.phone_tools.socket_closed(ws)
             self._sockets.pop(ws, None)
         return ws
 
@@ -1719,7 +1728,12 @@ class Hub:
         if device is None:
             await ws.close(code=4401, message=b"unpaired")
             return
+        if not isinstance(data, dict):
+            return
         kind = data.get("type")
+        if self.phone_tools is not None and isinstance(kind, str) and kind.startswith(("phone_tool.", "phone_tools.")):
+            await self.phone_tools.event(ws, device, _BOT.get() or "", data)
+            return
         if kind == "ping":
             await ws.send_json({"type": "pong", "t": data.get("t")})
         elif kind == "message.send":
@@ -1734,6 +1748,8 @@ class Hub:
                 await ws.send_json({"type": "error", "message": str(exc)})
         elif kind == "presence":
             self._sockets[ws]["visible"] = bool(data.get("visible", True))
+            if self.phone_tools is not None and not self._sockets[ws]["visible"]:
+                await self.phone_tools.socket_closed(ws)
 
     def live_clients(self) -> int:
         """Sockets whose app is in the foreground (a backgrounded PWA may keep its socket briefly)."""
@@ -1847,10 +1863,45 @@ class Hub:
         for ws in dead:
             self._sockets.pop(ws, None)
 
+    # -- opt-in phone reads ---------------------------------------------------------------
+
+    async def h_phone_tools(self, request):
+        if self.phone_tools is None:
+            return _error(404, "Phone tools are unavailable on this server")
+        from .phone_tools import CATALOG
+        device = self._require(request)
+        return _json({"catalog": CATALOG, "grants": self.phone_tools.grants(device["id"]),
+                      "history": self.phone_tools.history(device["id"], _BOT.get() or ""),
+                      "bot_scope": _BOT.get() or "", "server_scope_allowed": device["role"] == "owner"})
+
+    async def h_phone_tools_put(self, request):
+        if self.phone_tools is None:
+            return _error(404, "Phone tools are unavailable on this server")
+        try:
+            await self.phone_tools.update(self._require(request), _BOT.get() or "", await self._body(request))
+        except ValueError as exc:
+            return _error(400, str(exc))
+        except PermissionError as exc:
+            return _error(403, str(exc))
+        return await self.h_phone_tools(request)
+
+    async def h_phone_tools_revoke(self, request):
+        if self.phone_tools is None:
+            return _error(404, "Phone tools are unavailable on this server")
+        await self.phone_tools.revoke(self._require(request)["id"])
+        return await self.h_phone_tools(request)
+
+    async def h_phone_tools_log(self, request):
+        if self.phone_tools is None:
+            return _error(404, "Phone tools are unavailable on this server")
+        return _json({"history": self.phone_tools.history(self._require(request)["id"], _BOT.get() or "")})
+
     # -- devices, verification, audit ---------------------------------------------------------
 
     async def _close_device_sockets(self, device_id: str, code: int, reason: bytes) -> None:
         self._alive_cache.pop(device_id, None)
+        if self.phone_tools is not None:
+            await self.phone_tools.revoke(device_id)
         for ws, meta in list(self._sockets.items()):
             if meta["device"]["id"] == device_id:
                 with contextlib.suppress(Exception):
@@ -3168,6 +3219,9 @@ class Hub:
         return self._http
 
     async def aclose(self) -> None:
+        if self.phone_tools is not None:
+            for p in list(self.phone_tools.pending.values()):
+                await self.phone_tools.finish(p, {"error": "restart"})
         if self.rooms is not None:
             await self.rooms.close()
         if self.processes is not None:

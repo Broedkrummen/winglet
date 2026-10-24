@@ -112,6 +112,17 @@ export type InboxItem = {
 
 export type ConnStatus = 'connecting' | 'online' | 'offline' | 'unauthorized';
 
+/** How far this phone has caught up with a bot's event journal. */
+export type SyncPhase = 'unsupported' | 'idle' | 'catching-up' | 'snapshot' | 'blocked';
+
+export type SyncState = {
+  phase: SyncPhase;
+  /** Events applied during this catch-up, for the "Catching up · n" chip. */
+  caught: number;
+  /** Why a catch-up couldn't be proved: the server's refusal, or that the snapshot didn't arrive. */
+  reason?: 'epoch' | 'cursor' | 'gap' | 'journal' | 'network';
+};
+
 /** What a server reports about itself in `hello` and `/api/info`. */
 export type ServerInfo = {
   version: string;

@@ -5,10 +5,13 @@ import { RecoveryCoordinator } from './recovery';
 import { sound } from './sounds';
 import { api, ApiError, wsUrl } from './api';
 import { cacheGet, cacheRemove, cacheSet } from './cache';
+import { mergeSnapshot } from './features/event-replay/merge';
+import { SyncSession, type ReplayCursor, type SyncHost } from './features/event-replay/session';
+import type { SyncSnapshot } from './features/event-replay/protocol';
 import { isNotifiable, markFailed, mergeMessages } from './messages';
 import { getJSON, setJSON } from './storage';
 import { NEEDS_VERIFY } from './verify';
-import type { Attachment, BotRow, Chat, ConnStatus, DraftFile, InboxItem, Job, Me, Message, PauseState, PetSheet, ReplyRef, Server, ServerInfo } from './types';
+import type { Attachment, BotRow, Chat, ConnStatus, DraftFile, InboxItem, Job, Me, Message, PauseState, PetSheet, ReplyRef, Server, ServerInfo, SyncState } from './types';
 
 const SERVERS_KEY = 'winglet.servers';
 const SELECTION_KEY = 'winglet.selection';
@@ -61,6 +64,8 @@ export type ServerState = {
   job?: Job;
   /** The agent's pet, its animated face: null when it has none, undefined until known. */
   pet?: PetSheet | null;
+  /** How far this phone has caught up with the server's event journal (absent on older servers). */
+  sync?: SyncState;
 };
 
 type Selection = { serverId?: string; chatId?: string };
@@ -105,6 +110,8 @@ type AppState = {
   createChat: (serverId: string, title?: string) => Promise<Chat | undefined>;
   renameChat: (serverId: string, chatId: string, title: string) => Promise<void>;
   deleteChat: (serverId: string, chatId: string) => Promise<void>;
+  /** Ask the server for the authoritative state again after a catch-up it couldn't prove. */
+  resyncNow: (serverId: string) => void;
   toast: (t: Omit<Toast, 'id'>) => void;
   dismissToast: (id: string) => void;
   clearCache: () => Promise<void>;
@@ -125,6 +132,21 @@ export const isOwner = (rt?: ServerState) => (rt?.me?.role ?? 'owner') === 'owne
 
 const connections = new Map<string, Connection>();
 const coordinator = new RecoveryCoordinator();
+/**
+ * Each bot's place in its server's event journal, kept in memory and persisted on a timer: a page
+ * can carry dozens of cursors and the cache write must not run on every frame.
+ */
+const replayCursors = new Map<string, ReplayCursor>();
+const cursorTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const CURSOR_SAVE_MS = 400;
+const saveCursor = (serverId: string) => {
+  clearTimeout(cursorTimers.get(serverId));
+  cursorTimers.set(serverId, setTimeout(() => {
+    cursorTimers.delete(serverId);
+    const cursor = replayCursors.get(serverId);
+    if (cursor) cacheSet(`replay:${serverId}`, cursor);
+  }, CURSOR_SAVE_MS));
+};
 /** Per-bot send queue: keeps messages in order, and stops at the first one the network loses. */
 const sendChains = new Map<string, Promise<void>>();
 const sendPaused = new Set<string>();

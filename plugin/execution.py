@@ -6,7 +6,7 @@ without guessing from prose.
 
 Contract (see ``docs/agent-handoffs/execution.md``):
 
-* ``pre_llm_call`` / ``post_llm_call`` delimit a turn; ``agent_loop_stopped`` is a cancellation.
+* ``pre_llm_call`` / ``on_session_end`` delimit a turn; ``agent_loop_stopped`` is a cancellation.
 * ``pre_tool_call`` / ``post_tool_call`` carry ``tool_call_id``, ``duration_ms`` and ``status``.
 * ``subagent_start`` / ``subagent_stop`` carry the parent and child session/subagent IDs.
 * The ``todo_list`` tool's result carries the authoritative plan and its monotonic revision.
@@ -287,9 +287,9 @@ class Tracker:
         self._clock = clock
         self._lock = threading.RLock()
         self._tasks: Dict[str, _Task] = {}
-        self._turn_counters: Dict[str, int] = {}
-        # child session id -> subtask key, and (chat id, subtask id) -> key, so a late start/stop both land.
-        self._child_sessions: Dict[str, str] = {}
+        self._turn_counter = 0  # global monotonic ordering also survives a chat being evicted
+        # Child routing is scoped to the exact parent chat and turn.
+        self._child_sessions: Dict[str, tuple] = {}
         self._closed = False
 
     # -- lifecycle ---------------------------------------------------------------------------
@@ -305,7 +305,7 @@ class Tracker:
         with self._lock:
             self._tasks.clear()
             self._child_sessions.clear()
-            self._turn_counters.clear()
+            self._turn_counter = 0
 
     def set_publish(self, publish: Optional[Callable[[Dict[str, Any]], None]]) -> None:
         with self._lock:
@@ -313,7 +313,9 @@ class Tracker:
 
     def forget_chat(self, chat_id: str) -> None:
         with self._lock:
-            self._tasks.pop(chat_id, None)
+            task = self._tasks.pop(chat_id, None)
+            if task is not None:
+                self._forget_children(task)
 
     # -- hook entry points --------------------------------------------------------------------
 
@@ -326,9 +328,11 @@ class Tracker:
         with self._lock:
             if self._closed:
                 return
-            index = self._turn_counters.get(chat_id, 0) + 1
-            self._turn_counters[chat_id] = index
+            self._turn_counter += 1
+            index = self._turn_counter
             previous = self._tasks.get(chat_id)
+            if previous is not None:
+                self._forget_children(previous)
             task = _Task(chat_id, bot, self._turn_id(turn_id), index, now)
             # A new turn starts clean: no stale tool or subagent survives into it. The plan is the
             # session's own list, so it carries over as a "last plan" until this turn writes a new one.
@@ -342,12 +346,13 @@ class Tracker:
         self._emit(event)
 
     def turn_finished(self, session_id: Any, turn_id: Any = None, *, failed: bool = False,
-                      reason: Any = None, outcome: Any = None, notify: bool = True) -> None:
+                      reason: Any = None, outcome: Any = None, notify: bool = True,
+                      completed: bool = True, interrupted: bool = False) -> None:
         target = self._target(session_id)
         if target is None:
             return
-        self._finish(target["chat_id"], turn_id, FAILED if failed else COMPLETED, reason=reason, outcome=outcome,
-                     notify=notify)
+        state = CANCELLED if interrupted else FAILED if failed else COMPLETED if completed else UNKNOWN
+        self._finish(target["chat_id"], turn_id, state, reason=reason, outcome=outcome, notify=notify)
 
     def loop_stopped(self, session_key: Any = None, *, reason: Any = None) -> None:
         chat_id = None
@@ -382,6 +387,11 @@ class Tracker:
                     return
                 key = self._tool_key(task, tool_call_id, index)
                 if key is None:
+                    return
+                tool = task.tools.get(key)
+                if tool is not None:
+                    # A delayed/repeated start cannot revive an already settled call or
+                    # invent a start timestamp after its observed finish.
                     return
                 tool = _Tool(key, str(tool_name or "tool"), tool_preview(str(tool_name or ""), args),
                              TOOL_RUNNING, now)
@@ -507,12 +517,11 @@ class Tracker:
                 task.subagents[sub_id] = existing
                 self._trim_subagents(task)
             else:
-                existing.status = SUB_RUNNING
-                existing.started_at = existing.started_at or now
-                existing.started_known = True
+                if existing.status not in (SUB_RUNNING, SUB_QUEUED):
+                    return  # delayed start after a finish must retain the terminal fact
                 existing.parent_id = parent_key or existing.parent_id
             if child_session_id:
-                self._child_sessions[str(child_session_id)] = sub_id
+                self._child_sessions[str(child_session_id)] = (task.chat_id, task.turn_index, sub_id)
             task.updated_at = now
             events = self._update_events(task, {"kind": "subagent.started", "subagent": existing.payload()})
         for event in events:
@@ -538,7 +547,9 @@ class Tracker:
                 return
             sub_id = None
             if child_session_id:
-                sub_id = self._child_sessions.get(str(child_session_id))
+                route = self._child_sessions.get(str(child_session_id))
+                if route and route[:2] == (task.chat_id, task.turn_index):
+                    sub_id = route[2]
             sub_id = sub_id or redact(child_subagent_id, 120) or redact(child_session_id, 120)
             if not sub_id:
                 return
@@ -611,8 +622,9 @@ class Tracker:
             key = self._child_sessions.get(str(session_id))
             if not key:
                 return None
-            for task in self._tasks.values():
-                sub = task.subagents.get(key)
+            task = self._tasks.get(key[0])
+            if task is not None and task.turn_index == key[1] and task.state == RUNNING:
+                sub = task.subagents.get(key[2])
                 if sub is not None and sub.status in (SUB_RUNNING, SUB_QUEUED):
                     return task, sub
         return None
@@ -645,8 +657,7 @@ class Tracker:
             for key in list(task.tools)[: len(task.tools) - MAX_TOOLS]:
                 task.tools.pop(key, None)
 
-    @staticmethod
-    def _trim_subagents(task: _Task) -> None:
+    def _trim_subagents(self, task: _Task) -> None:
         if len(task.subagents) <= MAX_SUBAGENTS:
             return
         # Finished children go first; a flood of live ones still stays bounded, newest kept.
@@ -655,18 +666,28 @@ class Tracker:
                 return
             if sub.status not in (SUB_RUNNING, SUB_QUEUED):
                 task.subagents.pop(key, None)
+                self._forget_children(task, key)
         for key in list(task.subagents)[: max(0, len(task.subagents) - MAX_SUBAGENTS)]:
             task.subagents.pop(key, None)
+            self._forget_children(task, key)
+
+    def _forget_children(self, task: _Task, sub_id: Optional[str] = None) -> None:
+        for session, route in list(self._child_sessions.items()):
+            if route[:2] == (task.chat_id, task.turn_index) and (sub_id is None or route[2] == sub_id):
+                self._child_sessions.pop(session, None)
 
     def _trim_chats(self) -> None:
         if len(self._tasks) <= MAX_CHATS:
             return
-        ended = sorted(self._tasks.items(), key=lambda pair: pair[1].updated_at)
-        for chat_id, task in ended:
+        oldest = sorted(self._tasks.items(), key=lambda pair: (pair[1].state == RUNNING, pair[1].updated_at))
+        for chat_id, task in oldest:
             if len(self._tasks) <= MAX_CHATS:
                 break
-            if task.state != RUNNING:
-                self._tasks.pop(chat_id, None)
+            if task.state == RUNNING:
+                # Bound observation memory, without pretending that an evicted live task succeeded.
+                self._finish(chat_id, task.turn_id, UNKNOWN, reason="Activity details are no longer retained.")
+            self._tasks.pop(chat_id, None)
+            self._forget_children(task)
 
     def _finish(self, chat_id: str, turn_id: Any, state: str, *, reason: Any = None, outcome: Any = None,
                 notify: bool = True) -> None:
@@ -684,6 +705,7 @@ class Tracker:
             if task.state != RUNNING:
                 return
             task.state = state
+            self._forget_children(task)
             task.ended_at = now
             task.updated_at = now
             task.reason = redact(reason, MAX_REASON) or None
@@ -759,7 +781,13 @@ def register_hooks(ctx: Any, tracker: Tracker) -> Dict[str, bool]:
         tracker.turn_started(kw.get("session_id"), kw.get("turn_id"))
 
     def on_turn_end(**kw: Any) -> None:
-        tracker.turn_finished(kw.get("session_id"), kw.get("turn_id"))
+        # post_llm_call is emitted for failures and interrupts too; only the final
+        # lifecycle hook supplies the authoritative outcome flags.
+        tracker.turn_finished(kw.get("session_id"), kw.get("turn_id"),
+                              completed=kw.get("completed") is True,
+                              failed=kw.get("failed") is True,
+                              interrupted=kw.get("interrupted") is True,
+                              reason=kw.get("turn_exit_reason"))
 
     def on_tool_start(**kw: Any) -> None:
         tracker.tool_started(kw.get("session_id"), kw.get("tool_name"), kw.get("tool_call_id"),
@@ -788,7 +816,7 @@ def register_hooks(ctx: Any, tracker: Tracker) -> Dict[str, bool]:
     def on_loop_stopped(**kw: Any) -> None:
         tracker.loop_stopped(kw.get("session_key"), reason=kw.get("reason"))
 
-    wanted = {"pre_llm_call": on_turn_start, "post_llm_call": on_turn_end,
+    wanted = {"pre_llm_call": on_turn_start, "on_session_end": on_turn_end,
               "pre_tool_call": on_tool_start, "post_tool_call": on_tool_end,
               "subagent_start": on_subagent_start, "subagent_stop": on_subagent_stop,
               "agent_loop_stopped": on_loop_stopped}

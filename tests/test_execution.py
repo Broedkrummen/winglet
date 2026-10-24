@@ -274,7 +274,7 @@ def test_register_hooks_accepts_the_observer_surface_and_reports_refusals():
     tracker, published, _ = make_tracker()
     ctx = Ctx()
     accepted = execution.register_hooks(ctx, tracker)
-    assert set(accepted) == {"pre_llm_call", "post_llm_call", "pre_tool_call", "post_tool_call",
+    assert set(accepted) == {"pre_llm_call", "on_session_end", "pre_tool_call", "post_tool_call",
                              "subagent_start", "subagent_stop", "agent_loop_stopped"}
     assert all(accepted.values())
     # Drive a turn through the registered callbacks exactly as Hermes would.
@@ -283,7 +283,7 @@ def test_register_hooks_accepts_the_observer_surface_and_reports_refusals():
                               args={"command": "pwd"}, turn_id="t1")
     ctx.hooks["post_tool_call"](session_id="s1", tool_name="terminal", tool_call_id="c1",
                                 turn_id="t1", status="ok", duration_ms=5)
-    ctx.hooks["post_llm_call"](session_id="s1", turn_id="t1")
+    ctx.hooks["on_session_end"](session_id="s1", turn_id="t1", completed=True, failed=False, interrupted=False)
     snap = tracker.snapshot("general")
     assert snap["state"] == "completed" and snap["tools"][0]["name"] == "terminal"
     assert execution.register_hooks(Ctx(allow=False), tracker) == {name: False for name in accepted}
@@ -363,3 +363,96 @@ async def test_task_route_never_shows_another_members_chat(client, hub):
 
 def test_the_task_route_is_in_the_policy_table():
     assert ROUTE_POLICY["h_task"] == "device"
+
+
+@pytest.mark.parametrize("flags,expected", [
+    ({"completed": True}, "completed"),
+    ({"completed": False, "failed": True}, "failed"),
+    ({"completed": False, "interrupted": True}, "cancelled"),
+    ({}, "unknown"),
+])
+def test_final_hook_uses_authoritative_outcome_flags(flags, expected):
+    hooks = {}
+    class Context:
+        def register_hook(self, name, callback):
+            hooks[name] = callback
+    tracker, _, _ = make_tracker()
+    execution.register_hooks(Context(), tracker)
+    hooks["pre_llm_call"](session_id="s1", turn_id="t1")
+    assert "post_llm_call" not in hooks
+    hooks["on_session_end"](session_id="s1", turn_id="t1", turn_exit_reason="provider_exit", **flags)
+    snapshot = tracker.snapshot("general")
+    assert snapshot["state"] == expected
+    assert snapshot["outcome"]["state"] == expected
+    assert snapshot["reason"] == "provider_exit"
+
+
+def test_delayed_tool_start_cannot_revive_a_finished_call():
+    tracker, _, clock = make_tracker()
+    tracker.turn_started("s1", "t1")
+    tracker.tool_finished("s1", "terminal", "call-1", turn_id="t1", status="error", duration_ms=42,
+                          error="timeout")
+    before = tracker.snapshot("general")["tools"][0]
+    clock.tick(2)
+    tracker.tool_started("s1", "terminal", "call-1", {"command": "ls"}, turn_id="t1")
+    assert tracker.snapshot("general")["tools"][0] == before
+
+
+def test_delayed_subagent_start_cannot_revive_a_finished_child():
+    tracker, _, clock = make_tracker()
+    tracker.turn_started("s1", "t1")
+    tracker.subagent_finished("s1", child_session_id="c1", child_subagent_id="sa1",
+                              status="failed", summary="Timed out", duration_ms=42, parent_turn_id="t1")
+    before = tracker.snapshot("general")["subagents"][0]
+    clock.tick(2)
+    tracker.subagent_started("s1", "c1", "sa1", goal="Late start", parent_turn_id="t1")
+    assert tracker.snapshot("general")["subagents"][0] == before
+    tracker.tool_started("c1", "terminal", "late", turn_id="t1")
+    assert tracker.snapshot("general")["subagents"][0] == before
+
+
+def test_many_live_chats_and_child_routes_stay_bounded_with_monotonic_reentry():
+    mapping = {f"s{i}": {"chat_id": f"chat{i}"} for i in range(execution.MAX_CHATS + 10)}
+    tracker, events, clock = make_tracker(mapping)
+    tracker.turn_started("s0", "first")
+    first_index = tracker.snapshot("chat0")["turn_index"]
+    for i in range(execution.MAX_CHATS + 10):
+        clock.tick(1)
+        tracker.turn_started(f"s{i}", f"t{i}")
+        tracker.subagent_started(f"s{i}", f"child{i}", "same-id", parent_turn_id=f"t{i}")
+    assert len(tracker._tasks) == execution.MAX_CHATS
+    assert len(tracker._child_sessions) <= execution.MAX_CHATS
+    assert tracker.snapshot("chat0") is None
+    assert any(e.get("snapshot", {}).get("state") == "unknown" for e in events)
+    tracker.turn_started("s0", "new")
+    assert tracker.snapshot("chat0")["turn_index"] > first_index
+    assert tracker._child_target("child0") is None
+
+
+def test_child_routes_are_removed_on_new_turn_finish_forget_and_row_eviction():
+    tracker, _, _ = make_tracker()
+    tracker.turn_started("s1", "t1")
+    for i in range(execution.MAX_SUBAGENTS + 5):
+        tracker.subagent_started("s1", f"c{i}", f"sa{i}", parent_turn_id="t1")
+    assert len(tracker._child_sessions) == execution.MAX_SUBAGENTS
+    assert tracker._child_target("c0") is None
+    tracker.turn_started("s1", "t2")
+    assert tracker._child_sessions == {}
+    tracker.subagent_started("s1", "c", "sa", parent_turn_id="t2")
+    tracker.turn_finished("s1", "t2")
+    assert tracker._child_sessions == {}
+    tracker.turn_started("s1", "t3")
+    tracker.subagent_started("s1", "c", "sa", parent_turn_id="t3")
+    tracker.forget_chat("general")
+    assert tracker._child_sessions == {}
+
+
+def test_same_subagent_id_in_two_chats_routes_to_its_own_parent():
+    tracker, _, _ = make_tracker()
+    tracker.turn_started("s1", "t1")
+    tracker.turn_started("s2", "t2")
+    tracker.subagent_started("s1", "c1", "shared", parent_turn_id="t1")
+    tracker.subagent_started("s2", "c2", "shared", parent_turn_id="t2")
+    tracker.tool_started("c2", "read_file", "call", {"path": "/tmp/second"}, turn_id="t2")
+    assert tracker.snapshot("general")["subagents"][0]["activity"] == []
+    assert tracker.snapshot("side")["subagents"][0]["activity"][0]["detail"] == "/tmp/second"

@@ -171,3 +171,7 @@ expo-env.d.ts
 .playwright-cli/
 output/
 app/dist-web-preview/
+
+# Private phone-tools validation outputs
+.pytest-phone-*/
+app/dist-phone-*/

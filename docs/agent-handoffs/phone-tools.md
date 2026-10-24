@@ -1,288 +1,220 @@
-# Phone tools (Assignment 11)
+# Phone tools — Assignment 11
 
-Status: **STOPPED EARLY — design/contract only, feature not implemented.**
-Branch `codex/major-11-phone-tools` has **no commits**; the worktree
-`C:\Users\vikas\Documents\winglet-agents\11-phone-tools` is at `b71d93b` with two
-uncommitted paths (`plugin/store.py`, this document). No PR exists. Sections 1–9
-below are the **planned** contract and are not yet true of the code; section 10
-records exactly what is and is not in the tree.
+Status: **CODE IMPLEMENTED; draft for Codex orchestrator review. MOBILE VALIDATION PENDING.**
 
-Primary specialist role: Security Engineer. Workflow: architect (this contract) →
-implement → separate review pass against the checklist at the end of this document.
+Branch: `codex/major-11-phone-tools`. The stopped schema/design was preserved unchanged in `bbc7490`;
+the approved integration baseline `87cf6269c42ea4610880ef158110e48837e34848` was merged in `acfae14`.
+The earlier document was a plan; this replacement records the actual implementation.
 
-This document is the feature contract and ownership record. It is updated as the
-implementation lands; the final sections report actual check results and the
-MOBILE VALIDATION PENDING recipe.
+Primary role: Security Engineer, following the Agency Agents architecture → implementation → distinct review workflow.
+No subagents, real phone, ADB, emulator, remote Hermes, contacts, calendar or location data were used.
 
-## 1. What the feature is
+## Implemented subset
 
-Winglet can ask **one paired Android phone** for a small, named set of device
-details, only after the user has opted in to that tool. It is off by default.
-There is no fan-out to every paired phone: a request is bound to the authenticated
-sender of the Hermes turn (device + chat + bot), and the server derives that
-binding from its own session/chat rows rather than from anything the caller sends.
+All tools are off until a verified paired Android device signs an explicit per-tool grant.
 
-Implemented tool subset (all namespaced `phone_*`, Hermes toolset `phone_tools`):
+| Hermes tool | Returned fields and limits |
+| --- | --- |
+| `phone_status` | Battery percentage/charging, network type/metered, Do Not Disturb, model and Android version. No device/network identifiers. |
+| `phone_shared_note` | Only the note typed into Winglet, at most 2000 characters. Memory-only for this app session, separately keyed by bot. |
+| `phone_location` | Latitude, longitude and accuracy. Approximate results round to 0.01 degrees and report at least 1500 m accuracy; precise always requires a request decision and Android fine permission. A current fix times out after 10 s. |
+| `phone_contacts` | Specific name/number/email query of 2–80 characters; at most 5 contacts, 3 numbers and 3 emails each. Names ≤200 characters; numbers/emails ≤254. Native candidate scan ≤100 data rows. No IDs, notes, photos, addresses or birthdays returned. |
+| `phone_calendar` | UTC millisecond range of at most 31 days, at most 50 overlapping instances. Title ≤300 characters, calendar name ≤200, start/end and all-day only. No attendees, descriptions, locations or reminders. |
 
-| Tool | What it returns | Sensitive | Default mode |
-| --- | --- | --- | --- |
-| `phone_status` | Battery level/charging, network (Wi‑Fi/mobile/offline, metered), do-not-disturb, model and Android version. No identifiers. | No | Ask |
-| `phone_shared_note` | A short note the user wrote in Winglet for the agent to read. User-authored share data; never inferred. | No | Ask |
-| `phone_location` | Last/current fix reduced to latitude/longitude, horizontal accuracy, and a coarse accuracy cap. `precise` is opt-in per request. | Yes | Ask |
-| `phone_contacts` | Name, phone numbers and email addresses for a user-supplied query, at most 5 matches. No photos, notes, addresses, birthdays or IDs. | Yes | Ask |
-| `phone_calendar` | Title, start/end, all-day flag and calendar name for a user-supplied date range of at most 31 days, at most 50 events. No attendees, descriptions, locations or reminders. | Yes | Ask |
+No arbitrary command tool, fan-out, background location, SMS, accessibility, device-admin, Health Connect,
+geofence, screen-time, alarms, clipboard or write operations are registered or advertised.
 
-Deliberately **not** advertised and not implemented: screen time, Health Connect,
-geofences/background location, alarms, SMS/call log, accessibility services,
-device-admin, notifications, clipboard reads, shell/ADB. Unknown tool names are
-rejected.
+The Kotlin Expo local module lives in `app/modules/winglet-phone-tools/`; Expo autolinking resolves
+`expo.modules.wingletphonetools.WingletPhoneToolsModule`. `app/plugins/withPhoneTools.js` declares only
+coarse/fine foreground location, contacts, calendar and network-state permissions. Generated `app/android/`
+is ignored and is not the source of the feature. iOS/web and Android builds without the module show an
+explicit unsupported state and never handshake or execute.
 
-## 2. Capability keys and protocol
+## Trust and request contract
 
-`Hub.features()` adds one additive boolean: `phone_tools` (true only when the
-adapter installed the bridge). Old clients ignore it; an old server omits it and
-the new app hides the feature.
+`phone_tools` is an additive capability, true only when the adapter installs the registered tool bridge.
+Hermes toolset: `phone_tools`. Registration uses the actual pinned `PluginContext.register_tool` contract,
+with `tools.registry.no_cache_check_fn`: grant discovery must not be cached across device sessions.
+No provider/model or protocol-version change is needed.
 
-WebSocket (namespaced, ignorable by older clients):
+The Hermes adapter reads `HERMES_SESSION_PLATFORM`, `USER_ID`, `CHAT_ID`, and `PROFILE` via the real
+`gateway.session_context` API. Only `winglet:<paired device id>` in a Winglet chat may call. Device, bot,
+chat ownership, current role and grant are derived from authenticated server records, never tool arguments.
+The originating phone is the only target. Of its foreground/unlocked sockets for this bot, exactly one is
+chosen; requests are never broadcast or queued for offline delivery.
 
-- app → server `phone_tools.hello` `{instance_id}` — sent after `hello` on each
-  (re)connect. Until it arrives the server will not dispatch a request to that
-  socket. A new `instance_id` (app restart) cancels that device's stale pending
-  requests.
-- server → app `phone_tool.request`
-  `{request: {id, tool, args, mode, sensitive, expires_at, nonce, requested_at,
-  bot: {name, title}, chat: {id, title}}}`
-- server → app `phone_tool.cancel` `{id, reason}`
-- app → server `phone_tool.decision`
-  `{id, nonce, allow, remember?}` — `remember: true` turns this tool's mode into
-  “while Winglet is open” for the same scope when the user chooses that in the
-  sheet.
-- app → server `phone_tool.answer`
-  `{id, nonce, ok: true, result}` or `{id, nonce, ok: false, error, detail?}`
+| Event | Meaning |
+| --- | --- |
+| app → `phone_tools.hello` | `{instance_id, unlocked}` after the existing authenticated hello; same process shares its instance across bot sockets. New instance cancels prior pending access. |
+| server → `phone_tool.request` | Random 128-bit ID + 192-bit nonce, allowlisted tool/arguments, mode, ask flag, server request/expiry timestamps, authenticated bot and chat context. |
+| app → `phone_tool.decision` | `{id, nonce, allow}`. Ask mode shows the request sheet. While-open mode still performs this authorization step. Precise location always asks. |
+| server → `phone_tool.execute` | `{id, nonce}` only after rechecking role, device/chat/bot scope, grant, mode, foreground, unlock and expiry. This frame is required before any native read. |
+| app → `phone_tool.answer` | `{id, nonce, ok, result/error}`. Exactly one execution/result settles the request. Server rechecks authority and sanitizes every returned field; unknown error text is discarded. |
+| server → `phone_tool.cancel` | `{id, reason}`; dismisses decisions and cancels native work. |
+| server → `phone_tool.grants_changed` | Clears local pending requests immediately. Settings can be pulled to refresh. |
 
-The answer/decision nonce is random per request and consumed once, so a replay
-from the same socket is refused. Requests expire (default 120 s for “ask me every
-time”, 20 s for “while Winglet is open”); an answer after expiry is ignored. Only
-one answer settles a request.
+Ask-mode deadline: 120 s. While-open deadline: 20 s. At most 4 concurrent requests per device;
+native operations have a 15 s deadline. Server protocol timestamps/audit use epoch seconds, native/calendar
+APIs use milliseconds. Client timers measure the advertised interval locally; the gateway is authoritative
+for expiry. Old, duplicate, wrong-socket, wrong-device and wrong-bot decisions/answers cannot settle a request.
 
-HTTP routes (feature-local, listed in `ROUTE_POLICY`):
+The app fetches authoritative grants before deciding, immediately before reading and after reading.
+The native module independently rechecks OS permissions, activity foreground, device lock and expiry before
+and after reads. App lock, background, explicit connection closure, disconnect, revoke, new app instance,
+unpair and role changes cancel pending access. Android provider queries receive cancellation signals;
+location cancellation removes its listener or cancels the platform signal. A late result is discarded.
+The real pinned Hermes interrupt mechanism and parent-agent interrupt state cancel the waiting future on Stop.
 
-| Route | Policy | Purpose |
+Pending requests/results live only in memory. The plugin stores metadata audit rows, not arguments/results.
+No sensitive payload is logged by this feature or placed in a new plaintext cache. Results deliberately enter
+the requesting Hermes conversation/model context and may be retained by Hermes's existing transcript behavior;
+the decision and settings screens say results are shared with that conversation.
+
+## Routes, scope and storage
+
+| Route | ROUTE_POLICY | Behavior |
 | --- | --- | --- |
-| `GET /api/phone-tools` | `device` | This phone's grants for the current bot, plus catalog text and recent access. Never another device's grants. |
-| `PUT /api/phone-tools` | `signed` | Enable/disable one tool, choose `while_open`/`ask`, choose `bot` or `server` scope. |
-| `DELETE /api/phone-tools` | `signed` | One-step revoke-all for this phone (and cancel pending requests). |
-| `GET /api/phone-tools/log` | `device` | This phone's own metadata-only access log. |
+| `GET /api/phone-tools` | device | Catalog, this device's own grants, current bot scope, owner scope availability and recent metadata. |
+| `PUT /api/phone-tools` | signed | Set one allowlisted tool's enabled state, `ask`/`while_open`, `bot`/`server` scope. |
+| `DELETE /api/phone-tools` | signed | One-step revoke-all for this device, including cancellation. No offline outbox. |
+| `GET /api/phone-tools/log` | device | Last 20 metadata entries for this device/current bot. |
 
-Scope: `bot` (default; the current server/bot) or `server` (“every bot on this
-server”, owner devices only). The server records the bot it authenticated, never
-a bot/device id from the body. A member can enable tools for their own phone but
-cannot widen scope beyond the bot they can talk to.
+A member can grant their own Android phone only in the current bot scope. Server-wide scope is owner-only.
+As in the preserved schema, there is **one active scope per device/tool**, `PRIMARY KEY(device_id,tool)`;
+changing bot scope replaces the previous scope and cancels its pending access. Scope `''` means the main bot,
+a profile name means that bot, `'*'` means all this server's bots. The body never chooses a device or bot ID.
 
-## 3. Authorization and lifecycle
+Additive idempotent `phone_tool_grants` and `phone_tool_events` tables from the preserved schema are used.
+No global migration number. `Store.prune()` and audit insertion retain ≤30 days/5000 event rows.
+Audit fields: timestamp, device, bot, chat, tool and enum outcome; detail stays `{}`. Rollback after stopping
+the gateway: `DROP TABLE phone_tool_events; DROP TABLE phone_tool_grants;`. Only feature grants/history are lost.
 
-- Requests are accepted only on a Winglet turn: `HERMES_SESSION_PLATFORM` is
-  `winglet`, `HERMES_SESSION_USER_ID` is `winglet:<device id>`, the chat row
-  belongs to that device (member) or the device is an owner, and the chat's bot
-  equals the bot the tool call is running as.
-- The server re-checks the app grant **and** the tool's mode when the request is
-  created. The app re-checks the OS permission immediately before reading; if it
-  is missing or revoked the app answers `permission` and the tool returns an
-  error, never a partial/guessed result.
-- “While Winglet is open” requests require a foreground, handshaken socket for
-  that device and bot. Otherwise the tool fails with `phone_offline` and nothing
-  is queued for later.
-- Unpair (`DELETE /api/me`), device removal, role change, app revoke-all, socket
-  close (last socket for the device) and app-restart `instance_id` change cancel
-  pending requests with `phone_tool.cancel` and settle the waiting tool call.
-- Pending requests live in memory only. Results are returned to Hermes and are
-  never stored by the plugin. Audit rows carry metadata only (tool, outcome,
-  duration bucket, reason code) — never location coordinates, contact fields,
-  note text or calendar titles.
-- The app's request sheet names the bot, chat, tool and exact fields, with
-  “Allow once” and “Don't allow”. “Always allow while Winglet is open” is a
-  secondary choice that writes the same grant the settings screen writes.
-- Web and iOS: the screen renders an explicit “Android only” unsupported state;
-  no tool is advertised (`phone_tools` may be true for other phones on the
-  server, but this device has no bridge).
+Minimal shared wiring: `hub.py`, `store.py`, `adapter.py`, `plugin.yaml`, app `store.ts`, `_layout.tsx`,
+`settings.tsx`, `app.config.js`. The feature code and tests otherwise stay in their own modules.
 
-## 4. Storage and migration
+## UI and evidence
 
-Additive, idempotent, feature-prefixed tables created by `Store.__init__`:
+Settings → Agent → Phone tools appears only when the server advertises the capability. The screen has an
+off-by-default explanation, one-step revoke-all, Everyday and Personal information groups, per-tool switches,
+Ask each time/While open, owner-only bot/server scope, exact shared fields, permission repair, session-only
+shared note, and recent metadata history. No master enable switch is needed: each capability is independent.
+Loading, retry/error, offline, unavailable-server and unsupported-platform states are implemented.
+The request sheet names the bot and chat, exact fields and query/date range; Allow once and Don't allow are
+explicit. Dismissal denies. Expired/cancelled requests are removed. Winglet's theme/Sheet/Screen/ui tokens,
+reduced-motion behavior, navigation and pets are preserved.
 
-```sql
-CREATE TABLE IF NOT EXISTS phone_tool_grants (
-  device_id TEXT NOT NULL, tool TEXT NOT NULL, scope TEXT NOT NULL DEFAULT '',
-  mode TEXT NOT NULL DEFAULT 'ask', enabled INTEGER NOT NULL DEFAULT 1,
-  updated_at REAL NOT NULL, PRIMARY KEY (device_id, tool, scope)
-);
-CREATE INDEX IF NOT EXISTS phone_tool_grants_device ON phone_tool_grants (device_id);
+Playwright CLI rendered the **actual components** with a disposable resolver/native mock and local synthetic
+API on ports 8311/9311. The resolver was removed after exporting ignored fixture output; it is not committed.
+Production web was also exported separately and its genuine unsupported state was checked. No personal data.
+320/390/820/1440 widths, light/dark and reduced motion: no document overflow. Long bot names, permission repair
+and request-sheet layouts were inspected. Browser console: 0 errors/0 warnings in the inspected fixture flow.
+These screenshots establish UI layout only; they do not establish Android permission/lifecycle behavior.
 
-CREATE TABLE IF NOT EXISTS phone_tool_events (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL,
-  device_id TEXT NOT NULL DEFAULT '', bot TEXT NOT NULL DEFAULT '',
-  chat_id TEXT NOT NULL DEFAULT '', tool TEXT NOT NULL, event TEXT NOT NULL,
-  detail TEXT NOT NULL DEFAULT '{}'
-);
-CREATE INDEX IF NOT EXISTS phone_tool_events_device ON phone_tool_events (device_id, ts);
-CREATE INDEX IF NOT EXISTS phone_tool_events_ts ON phone_tool_events (ts);
+![Synthetic settings, light](screenshots/phone-tools-settings-light.png)
+![Synthetic settings, dark](screenshots/phone-tools-settings-dark.png)
+![Synthetic request decision](screenshots/phone-tools-request.png)
+
+Larger native system font, hardware keyboard/IME/safe-area and physical lifecycle behavior remain in the
+mobile recipe. Responsive settings and request layouts wrap long names and retain separate switches/buttons.
+
+## Reference comparison and licensing
+
+Reference: Herald `95ca999fa48c1c9de232fe499a174900f0d25272`.
+
+| Reference behavior/source | Winglet implementation | Edge-case evidence | Difference |
+| --- | --- | --- | --- |
+| `PhoneTool.kt` named catalog and off-by-default toggles | Five explicit tools, exact fields, scoped signed grants | Unknown commands rejected, independent sensitive revoke tests | Restricted read-only subset; no unsupported integrations shown. |
+| `PhoneToolsBridge.kt` request identity, bounded running/answered state and cancellation | Authenticated single-socket push, two-phase decision/execute, expiry and one settlement | Replay, concurrency, restart, cancellation, role/socket/bot mismatch | No polling/background queue or phone fan-out. |
+| `PhoneToolAccess.kt` permission/settings repair split | Native permission query/request/settings, immediate rechecks | Runtime permission-revocation and unsupported tests | Foreground permissions only. |
+| `PhoneToolsScreen.kt` capability grouping/recent use/context | Winglet Screen/Sheet/theme, grouped tools and metadata history | Responsive synthetic screenshots and console checks | Explicit per-bot scope; session-only note and one-step revoke. |
+
+Behavior/UI hierarchy and bounded lookup/cancellation patterns were adapted; no upstream file is copied
+verbatim. Required complete MIT text and provenance are in `third_party/notices/herald-phone-tools.md`.
+
+## Checks actually run
+
+| Check | Actual result |
+| --- | --- |
+| Existing hub + trust suites | 77 passed. |
+| Full plugin suite (read-only integration `rooms-env`, private basetemp) | 481 passed, 1 skipped; existing deprecation warnings. This preceded final interrupt/prune/review fixes; focused checks below cover those. |
+| New backend + actual pinned-Hermes registry/context/Stop suites | 24 passed after adding Stop cancellation. |
+| Full app suite | 331 passed before the final small lifecycle review fixes. |
+| New app policy suite | 7 passed; additional actual-runtime/store lifecycle tests added and checked separately below. |
+| `npm run typecheck` | Passed before final review fixes; final recheck recorded below. |
+| Production Expo web export | Passed, `dist-phone-web` (later used for an ignored synthetic UI fixture). |
+| Production Expo Android/Hermes-bytecode export | Passed, `dist-phone-android`; bundling only. |
+| Expo local-module autolink + Android prebuild | Passed; generated projects ignored. |
+| Native Gradle compile | First attempt deliberately stopped under machine RAM pressure before compilation. Retrying with one worker/1024 MB heap and Kotlin in-process; final result below. |
+| Real/emulated Android permission/data/lifecycle checks | NOT RUN — MOBILE VALIDATION PENDING, by instruction. |
+
+Hermes integration tested against exact pin `47676981f55de91231fdeef2f0eec47e7c209e78`, using its actual
+registry, uncached checks, session ContextVars, thread dispatch and interrupt APIs. No upstream pin changes.
+
+## Native toolchain and reproducibility
+
+Private toolchain (not committed):
+`C:/Users/vikas/Documents/winglet-agents/11-phone-tools/.venv/phone-native/`.
+SDK root: `sdk/`, Android platform 36/build-tools 36.0.0.
+Command-line tools: Google's `commandlinetools-win-15859902_latest.zip`, SHA-256
+`90ae805d20434428bffcb699c290860f19bb5f66a67e6b330067e3de801fb04a`, verified against
+https://developer.android.com/studio. JDK:
+`C:/Users/vikas/AppData/Local/Programs/Eclipse Adoptium/jdk-25.0.4.101-hotspot`.
+Gradle 9.3.1 uses a private `gradle-home/`. No admin installation, system PATH edits or device tools were used.
+
+Set process-local `JAVA_HOME`, `ANDROID_HOME`/`ANDROID_SDK_ROOT`, `GRADLE_USER_HOME` to these paths;
+from `app/android/` after `rtk proxy npx expo prebuild --platform android --no-install`, run:
+
+```text
+rtk proxy ./gradlew.bat :winglet-phone-tools:compileDebugKotlin --no-daemon --max-workers=1 -Dorg.gradle.parallel=false "-Dorg.gradle.jvmargs=-Xmx1024m -XX:MaxMetaspaceSize=384m" -Pkotlin.compiler.execution.strategy=in-process
 ```
 
-No global migration number is allocated. Rollback: stop the gateway, then
-`DROP TABLE IF EXISTS phone_tool_events; DROP TABLE IF EXISTS phone_tool_grants;`.
-Nothing else reads these tables, so dropping them loses only grants and their
-metadata log. `Store.prune()` keeps 30 days / 5000 newest event rows.
+The runnable local wrapper is `output/run-phone-gradle.py`, logs in `.venv/phone-native/gradle-compile.log`.
+It is not committed; the command and environment above reproduce it. Native compilation is independent
+of APK installation, signing or runtime testing. No release/version/CI/workflow/generated plugin-web changes.
 
-## 5. Shared files touched (kept minimal)
+## Distinct security review
 
-- `plugin/hub.py`: feature flag, 4 routes + `ROUTE_POLICY` entries, WS
-  dispatch/hello field, device send helper, cancellation hooks on unpair/delete/
-  role change/socket close.
-- `plugin/store.py`: two tables, grant/event helpers, prune rule.
-- `plugin/adapter.py`: construct/install the bridge, clear it on disconnect.
-- `plugin/__init__.py` / `plugin/plugin.yaml`: `provides_tools` + tool
-  registration.
-- `app/src/lib/store.ts`: route `phone_tool.*` events to the feature and send the
-  handshake after `hello`.
-- `app/src/app/_layout.tsx`, `app/src/app/settings.tsx`: mount the request sheet
-  and add the Settings entry.
-- `app/app.config.js`: register the config plugin.
-- New feature-local code lives in `app/src/features/phone-tools/`,
-  `app/modules/winglet-phone-tools/`, `app/plugins/withPhoneTools.js`,
-  `plugin/phone_tools.py`, `plugin/tools.py`.
+Reviewed after implementation: device/chat/bot binding, current-role rechecks, signed mutating routes,
+nonce state transitions, no broadcast/replay queue, lifecycle/Stop cancellation, response-field allowlists,
+OS permission checks, Android query bounds and cancellation, caches/audit payload exclusion and old-server gates.
+Review fixed cached per-phone discovery, decision double-tap cancellation, same-instance multi-bot reconnect,
+explicit connection-close cleanup, stale bot settings responses, native provider cancellation signals and
+permission/lock/expiry error codes. Review entry points: `phone_tools_hermes.py` → `PhoneTools.request/event`
+→ app `PhonePolicy`/runtime → Kotlin `guard/execute`.
 
-No provider/model, pets, theme, navigation-order, release-workflow or CI-pin
-changes.
+## MOBILE VALIDATION PENDING
 
-## 6. UI plan
+Use a combined integration commit that includes this PR and the other reviewed features. Root owns the
+integration SHA, final regenerated web bundle and signed/dev APK; do not use the stopped baseline. Build a
+native app, since Expo Go/old development clients do not include this module. Record exact integration/build
+SHA in the later validation report.
 
-Entry point: Settings → Agent → **Phone tools** (below Agent settings, above
-nothing else), with a status subtitle (“Off”, “3 tools allowed · Pixel 8”).
-Primary action on the screen: the master switch. Turning it on does nothing
-until a per-tool switch is on; turning it off revokes every tool immediately
-(one step) and cancels pending requests.
+1. Disposable Android emulator API 30 and API 35/36, phone and tablet; synthetic profile only. Keep the real
+   phone and real remote Hermes out of the fixture. Start a local gateway with this source and the pinned Hermes.
+   Pair a synthetic Android owner and a second member. Confirm no phone tools are offered before opt-in.
+2. Populate emulator Contacts with three explicitly synthetic entries (e.g. Synthetic Example, `+15550100001`,
+   `synthetic@example.invalid`) and a local test calendar with synthetic events within and outside a two-day range.
+   Use a synthetic fixed emulator location (e.g. 12.34, 56.78). Do not import or sync a real Google account.
+3. Enable each tool independently in Ask mode. From the paired phone's chat ask Hermes for that exact tool.
+   Inspect bot/chat/fields/query/range. Deny: no native result. Allow: only the documented bounded fields.
+   Query contacts by name, number and email; request >31 days and unknown commands: refusal.
+4. Exercise Android permission denial, approximate location, fine-location denial, permanent denial/settings
+   repair and permission revocation while Winglet is open. App grant alone must not bypass OS permission.
+   Precise location must still ask in While open mode. Inspect coarse rounding/accuracy floor.
+5. In-flight requests: revoke that tool, revoke-all, lock Winglet, lock Android, background, disconnect, switch
+   bots, close/reopen, force-stop/restart, unpair and downgrade the device. Expect cancellation and no late result.
+   Replay a synthetic prior decision/answer, wrong nonce/socket/bot, concurrent requests and elapsed deadline.
+6. Confirm While open never reads while closed/offline/locked; reconnect never queues old reads. Same-instance
+   sockets for another bot must not cancel unrelated access. Hermes Stop cancels its waiting phone request.
+7. Inspect SQLite/feature logs for absence of note text, coordinates, contacts and event titles. Audit should
+   contain only metadata. Existing Hermes conversation retention is expected and disclosed.
+8. Light/dark, Android text size 200%, reduced motion, gesture navigation, IME and safe areas: switches and
+   decision buttons stay reachable, errors wrap, permission sheets return without stuck requests.
 
-Hierarchy:
-1. Header card: master switch, one-sentence explanation, platform state
-   (Android ready / permission needed / Android only), last-used line.
-2. Grouped capabilities, one row per tool: title, one-line description, exact
-   fields shared, mode segmented control (While open / Ask every time), switch,
-   and a permission row when Android still needs it (“Allow Contacts”, “Open
-   settings” after a permanent denial).
-3. Scope: “This bot” / “Every bot on this server” (owner only), with a plain
-   sentence about what that means.
-4. Shared note: a small editor for `phone_shared_note` with a character limit.
-5. Recent access: the last 20 metadata-only entries with time, tool and outcome;
-   pull to refresh; “Clear log” is not offered (server-retained audit).
-6. Revoke all: one destructive row with a confirm step.
+Physical hardware is useful later for GPS/provider behavior, OS keyguard/biometric transitions and OEM
+background restrictions. Emulator synthetic data/permissions suffice for most functional checks. Neither
+was executed in this implementation phase.
 
-States: loading skeleton; error with retry; offline banner (“Changes need the
-server; the last saved state is shown”); unsupported (web/iOS); permission
-missing/denied/permanently denied; no grants (empty state explains off-by-default);
-long bot/tool names wrap, never truncate the switch.
+## Final validation / draft blockers
 
-Mobile: single column, 44–48 px rows, sheet for the request decision. Wide
-(≥900 px): the same content in a centred 680 px column; the request sheet becomes
-a centred dialog (existing `Sheet` behavior). Light/dark use theme tokens only.
-
-Request sheet: bot + chat title, “wants to read your …”, a bullet list of exact
-fields, a note that nothing is shared until Allow, “Allow once” primary,
-“Don't allow” secondary, and “Always allow while Winglet is open” as a text
-action. Expired requests close themselves with a short “Request expired” line.
-Reduced motion respected by the existing Sheet.
-
-## 7. Reference comparison (Herald)
-
-| Reference (Herald, snapshot `95ca999`) | Winglet result | Edge cases/tests | Intentional difference / gap |
-| --- | --- | --- | --- |
-| `PhoneTool.kt` enumerates gateway tool ids with title/detail; user settings store enabled ids. | Same idea: `plugin/phone_tools.py` is the single catalog; server stores grants; app renders server text and adds OS state. | Catalog agreement test; unknown tool rejected; UI test that every enabled tool has a description. | Winglet stores grants on the server (per device) so revocation works even if the app cache is stale; Herald keeps them in app settings. |
-| `PhoneToolsBridge.kt` polls the gateway and runs calls only for enabled tools. | Winglet is push-style over the existing authenticated WebSocket; one request bound to the originating chat. | Mismatch, replay, expiry, concurrency, restart tests. | No polling: a request for a closed app returns `phone_offline` instead of being picked up later. |
-| `PhoneToolAccess.kt` separates “missing permission” from “needs system settings”. | Same: `permissionState`/`requestPermission`/`openSettings`, with repair guidance. | Permission-denied answer path test; UI state test. | Only the four Android permissions the feature uses; no Health Connect/accessibility/notification special access. |
-| `PhoneToolsScreen.kt` groups tools with switches and a recent list. | Grouped capability rows + scope + note + recent access + one-step revoke. | Rendered web checks at 320/390/tablet/1440, light/dark. | Winglet uses its own typography/theme and a single master switch, no calls/rings/watch/geofence sections. |
-| Herald contact lookup returns a small field set; calendar is range-limited. | Same field caps and range cap, enforced server-side and again in the app. | Bound tests for 5 contacts / 31 days / 50 events. | Winglet does not implement write operations (no create/move event, no calls). |
-
-Reuse note: no Herald source file is copied verbatim. The tool scoping model,
-permission-repair split and screen information hierarchy are adapted. A notice
-with the upstream license text is included at
-`third_party/notices/herald-phone-tools.md`.
-
-## 8. Test plan
-
-Backend (pytest): grant/deny/revoke; mode while-open vs ask; offline phone;
-expiry and replayed nonce; bot/device mismatch; member vs owner scope; concurrent
-requests; restart (`instance_id`) cancels; unpair/role change cancels; audit
-contains no payload; store migration idempotent; tool registry hides tools when
-no hub; session-context refusal outside Winglet.
-
-App (node:test): protocol validation (shape, bounds, unknown tool), answer
-nonce/expiry logic, grant merge, permission decision, note limits, calendar range,
-expired request cleanup, unsupported platform state, and that a denial never
-executes the native bridge.
-
-Rendered: Playwright at 320, 390, tablet (820) and ~1440 px, light/dark, with a
-local fixture server on port 9311 and Expo web on 8311.
-
-## 9. MOBILE VALIDATION PENDING
-
-Not run in this phase (deliberately): emulator/physical-device permission
-dialogs, real location/contacts/calendar reads, app background/foreground
-lifecycle, and native Gradle compilation if the SDK is unavailable. The recipe,
-environment, synthetic data and expected outcomes are added in the final section
-before handoff.
-
-## 10. Stopped-state record (what is actually in the tree)
-
-The implementation phase was stopped early at the user's request. **Nothing in
-sections 1–9 is implemented yet** except the schema below. No commit, no push,
-no PR.
-
-Present, uncommitted, on branch `codex/major-11-phone-tools` (HEAD
-`b71d93b459e1645e34cd47c80a392b146dca0e04`):
-
-1. `plugin/store.py` (+16 lines): the two `CREATE TABLE IF NOT EXISTS` /
-   `CREATE INDEX IF NOT EXISTS` statements for `phone_tool_grants` and
-   `phone_tool_events` from section 4. No Python helper methods were added, and
-   `Store.prune()` does **not** yet trim `phone_tool_events`. This is inert: no
-   route, tool or code path reads or writes either table.
-2. `docs/agent-handoffs/phone-tools.md` (this document): the planned contract.
-3. `app/node_modules` present from `npm ci` (git-ignored; 624 packages).
-
-Absent (every item still to be built):
-
-- `plugin/phone_tools.py` — catalog, grants, pending requests, decisions,
-  validation, audit, thread↔loop bridge.
-- `plugin/tools.py` and `provides_tools` in `plugin/plugin.yaml`; registration in
-  `plugin/__init__.py`.
-- `plugin/hub.py` — `phone_tools` feature flag, `GET/PUT/DELETE /api/phone-tools`,
-  `GET /api/phone-tools/log`, `ROUTE_POLICY` entries, WS `phone_tools.hello` /
-  `phone_tool.*` dispatch, device-targeted send, cancellation on unpair /
-  device delete / role change / socket close.
-- `plugin/adapter.py` — bridge construction, install and shutdown.
-- `plugin/store.py` — grant and event helper methods, prune rule.
-- `app/src/features/phone-tools/` — types, protocol validation, API, native
-  bridge, store, request handler.
-- `app/src/app/phone-tools.tsx`, the global request sheet, Settings entry,
-  `store.ts` wiring (`hello` handshake + `phone_tool.*` events), `_layout.tsx`
-  mount, `app.config.js` plugin registration.
-- `app/modules/winglet-phone-tools/` (Expo local module: Kotlin status, location,
-  contacts, calendar, permission state/request/settings) and
-  `app/plugins/withPhoneTools.js` (permissions
-  `ACCESS_COARSE_LOCATION`, `ACCESS_FINE_LOCATION`, `READ_CONTACTS`,
-  `READ_CALENDAR`).
-- All pytest and node:test coverage from section 8.
-- `third_party/notices/herald-phone-tools.md` (required before any reused
-  material lands; nothing has been reused yet, so the notice is not yet
-  mandatory, but it is still to be written).
-- The MOBILE VALIDATION PENDING recipe.
-
-### Checks actually executed
-
-| Check | Result |
-| --- | --- |
-| `Store()` creates both tables, columns as designed, and a second open is a no-op — throwaway SQLite file in the OS temp dir, no real data | **Passed** (tables `phone_tool_events`, `phone_tool_grants`; 6 and 8 columns as designed; reopen idempotent) |
-| `npm ci` in `app/` | **Passed** (624 packages) |
-| `python -m pytest tests/test_hub.py` | **Not a valid run** — three attempts executed from the shared checkout instead of this worktree and failed at collection with `ModuleNotFoundError: No module named 'aiohttp'` (system Python has no plugin dependencies). No temp or cache directories were left behind in either checkout. |
-| `npm test`, `npm run typecheck`, `expo export --platform web`, `expo export --platform android` | **Not run** |
-| Full plugin pytest suite, route-policy/trust tests | **Not run** (needs a private venv with `aiohttp`, `cryptography`, `httpx`, `qrcode`) |
-| Playwright UI checks, screenshots | **Not run** — no UI exists yet |
-| Native Gradle compile of the module | **Not run** — module does not exist yet |
+Native build and final focused app/typecheck outcomes will be appended here before final handoff.

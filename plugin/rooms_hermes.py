@@ -2,6 +2,7 @@
 from pathlib import Path
 import json
 import sqlite3
+import threading
 
 
 def build_worker(adapter, db_path: Path, hub):
@@ -57,6 +58,50 @@ def build_worker(adapter, db_path: Path, hub):
             return super().submit(**kwargs)
 
     class Worker(HostedRoomService):
+        _revocation = threading.local()
+
+        def author_allowed(self, room_id):
+            with sqlite3.connect(self.db_path) as db:
+                last = db.execute("SELECT actor_json FROM hosted_room_events WHERE room_id=? AND kind='message.user' ORDER BY seq DESC LIMIT 1",
+                                  (room_id,)).fetchone()
+            if last is None:
+                return True
+            actor_id = json.loads(last[0]).get('id','')
+            actor = hub.store.get_device(actor_id.removeprefix('winglet:')) if actor_id.startswith('winglet:') else None
+            return actor is not None and actor.get('role')=='owner'
+
+        def install_rpc(self, base):
+            worker = self
+
+            class AuthorizedLocalRPC:
+                def __getattr__(self, name):
+                    return getattr(base, name)
+
+                def info(self, **kwargs):
+                    binding = getattr(worker._revocation,'binding',None)
+                    if binding is None:
+                        raise RuntimeError('Room observation has no bound authority')
+                    # prepare_room is not called during an active wait. Recheck
+                    # on the actual observation path, outside any history lock.
+                    if not getattr(worker._revocation,'active',False) and not worker.author_allowed(binding.room_id):
+                        worker._revocation.active=True
+                        try:
+                            worker.stop_room(binding.room_id,cancel_id='winglet-author-revoked')
+                        finally:
+                            worker._revocation.active=False
+                    return base.info(**kwargs)
+
+            # Identity is part of Hermes's local recovery contract. Keep one
+            # stable object shared by the service, runtime and local resolver.
+            self.rpc = self.runtime.rpc = AuthorizedLocalRPC()
+
+        def _resolve_member_transport(self, binding, task):
+            transport = super()._resolve_member_transport(binding,task)
+            if transport is not self.rpc:
+                raise RuntimeError('Winglet rooms only support local bot turns')
+            self._revocation.binding=binding
+            return self.rpc
+
         def bindings(self):
             metadata = db_path.with_name('rooms-meta.sqlite')
             if not metadata.exists():
@@ -68,15 +113,9 @@ def build_worker(adapter, db_path: Path, hub):
         def prepare_room(self, binding):
             # A restart must not resume a queued privileged turn for an unpaired
             # or demoted author. Check on each policy cycle, including live turns.
-            with sqlite3.connect(self.db_path) as db:
-                last = db.execute("SELECT actor_json FROM hosted_room_events WHERE room_id=? AND kind='message.user' ORDER BY seq DESC LIMIT 1",
-                                  (binding.room_id,)).fetchone()
-            if last:
-                actor_id = json.loads(last[0]).get('id','')
-                actor = hub.store.get_device(actor_id.removeprefix('winglet:')) if actor_id.startswith('winglet:') else None
-                if actor is None or actor.get('role')!='owner':
-                    self.stop_room(binding.room_id,cancel_id='winglet-author-revoked')
-                    return
+            if not self.author_allowed(binding.room_id):
+                self.stop_room(binding.room_id,cancel_id='winglet-author-revoked')
+                return
             super().prepare_room(binding)
 
         def local_profiles(self):
@@ -88,6 +127,5 @@ def build_worker(adapter, db_path: Path, hub):
 
     worker = Worker(server, db_path=db_path)
     rpc = RoomRPC(server)
-    worker.rpc = rpc
-    worker.runtime.rpc = rpc
+    worker.install_rpc(rpc)
     return worker

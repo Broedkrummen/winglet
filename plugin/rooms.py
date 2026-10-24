@@ -47,6 +47,8 @@ class Rooms:
         self.hub, self.worker, self.path = hub, worker, str(metadata_path)
         self.key = hub.store.secret('room_identity_key').encode()
         with self._db() as db:
+            from hermes_state_wal import apply_database_pragmas
+            apply_database_pragmas(db, db_label='rooms-meta.sqlite')
             db.executescript(_SCHEMA)
 
     @contextlib.contextmanager
@@ -77,17 +79,17 @@ class Rooms:
     def _opaque(self, device, operation, suffix=''):
         return 'wr-' + hmac.new(self.key, f"{device['id']}:{operation}:{suffix}".encode(), hashlib.sha256).hexdigest()[:40]
 
-    def catalog(self):
+    def catalog(self, fresh=False):
         # The default profile belongs to this gateway. Named profiles must be live,
         # not merely present as configuration directories.
-        state = self.hub.bots_state(fresh=True)
+        state = self.hub.bots_state(fresh=fresh)
         return [{'name': 'default', 'title': self.hub._bot_info().get('title') or 'Main bot', 'served': True}] + [
             {'name': b['name'], 'title': b.get('title') or b['name'], 'served': bool(b.get('served'))}
             for b in state['bots']]
 
     def _members(self, value):
         from gateway.hosted_room_discussion import validate_roster
-        live = {b['name']: b for b in self.catalog() if b['served']}
+        live = {b['name']: b for b in self.catalog(fresh=True) if b['served']}
         if not isinstance(value, list) or not 2 <= len(value) <= 6 or not all(isinstance(x, str) for x in value):
             raise RoomError('Choose between two and six bots on this gateway.', 400)
         if len(set(value)) != len(value) or any(name not in live for name in value):
@@ -102,6 +104,10 @@ class Rooms:
         epochs = json.loads(row['epochs'])
         latest = room_state(self.worker.db_path, room_id=epochs[-1])
         status = self.worker.status(epochs[-1])
+        from gateway.hosted_room_driver import list_tasks
+        turns = [{'profile':task['payload']['target_profile'], 'status':task['status']}
+                 for task in list_tasks(self.worker.db_path,room_id=epochs[-1])
+                 if task['status'] not in {'settled','failed','cancelled'}]
         seen = db.execute('SELECT epoch,seq FROM winglet_room_seen WHERE room=? AND device=?', (row['id'], device['id'])).fetchone()
         latest_cursor = [len(epochs)-1, latest['latest_seq']]
         return {'id': row['id'], 'title': row['title'], 'members': json.loads(row['members']),
@@ -110,8 +116,8 @@ class Rooms:
                 'can_manage': device['role'] == 'owner', 'can_send': device['role'] == 'owner' and not row['archived'],
                 'member_write_supported': False, 'updated_at': row['updated_at'],
                 'unread': seen is None or list(seen) < latest_cursor, 'latest': latest_cursor,
-                'epoch_count': len(epochs), 'driver': self._driver(status),
-                'available_profiles': self.catalog()}
+                'epoch_count': len(epochs), 'driver': {**self._driver(status),'turns':turns},
+                'available_profiles': self.catalog() if device['role']=='owner' else []}
 
     @staticmethod
     def _driver(status):
@@ -158,6 +164,8 @@ class Rooms:
         if not 0 <= epoch < len(epochs) or after < 0:
             raise RoomError('Invalid room cursor.', 400)
         page = read_events(self.worker.db_path, room_id=epochs[epoch], since_seq=after, limit=100)
+        from gateway.hosted_rooms import room_state
+        roster = {m['member_id']:m for m in room_state(self.worker.db_path,room_id=epochs[epoch])['members']}
         allowed = {'message.user', 'message.member', 'turn.failed', 'turn.cancelled',
                    'turn.settled', 'room.stop_requested', 'room.renamed', 'room.activity'}
         events = []
@@ -166,9 +174,17 @@ class Rooms:
                 continue
             payload = event['payload']
             fields = ('text', 'member_id', 'discussion_event_id', 'round_index', 'error', 'reason', 'status', 'passed', 'name')
+            public_payload = {k: payload[k] for k in fields if k in payload}
+            member = roster.get(payload.get('member_id'))
+            if member:
+                public_payload['display_name'] = member.get('display_name') or member['profile']
+            actor = dict(event['actor'])
+            if actor.get('kind')=='user' and actor.get('id','').startswith('winglet:'):
+                device_row = self.hub.store.get_device(actor['id'].removeprefix('winglet:'))
+                actor['label'] = device_row['name'] if device_row else 'Former participant'
             events.append({'id': f"{epoch}:{event['seq']}", 'seq': event['seq'], 'epoch': epoch,
-                           'kind': event['kind'], 'actor': event['actor'], 'created_at': event['created_at'],
-                           'payload': {k: payload[k] for k in fields if k in payload}})
+                           'kind': event['kind'], 'actor': actor, 'created_at': event['created_at'],
+                           'payload': public_payload})
         cursor = [epoch, page['cursor']]
         more = page.get('has_more', False)
         if not more and epoch + 1 < len(epochs):
@@ -286,6 +302,9 @@ class Rooms:
                         self.worker.stop_room(active,cancel_id=event_id)
                         answer = {'status':'stopping' if self.worker.status(active).get('working') else 'stopped'}
                     elif action in ('retry','approve'):
+                        if callable(getattr(self.worker,'author_allowed',None)) and not self.worker.author_allowed(active):
+                            self.worker.stop_room(active,cancel_id='winglet-author-revoked')
+                            raise RoomError('The turn author no longer has owner permission. Start a new addressed discussion.')
                         pending = self.worker.status(active).get('pending_actions') or []
                         fields = ('task_id',) if action=='retry' else ('task_id','member_id','execution_generation','request_id')
                         expected_kind = 'retry' if action=='retry' else 'approval'

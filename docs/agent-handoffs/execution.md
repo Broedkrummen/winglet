@@ -22,7 +22,7 @@ the plan, nested subagents, tool lifecycle and the turn's actual outcome.
 
 Backend (`plugin/execution.py`, ~700 lines):
 
-- **Turn boundaries** from `pre_llm_call` / `post_llm_call`; **cancellation** from `agent_loop_stopped`
+- **Turn boundaries** from `pre_llm_call` / `on_session_end`; **cancellation** from `agent_loop_stopped`
   (using the gateway session key). A turn's `turn_id` is Hermes's; a server-local `turn_index` makes a
   new turn detectable when Hermes supplies none.
 - **Tools** from `pre_tool_call` / `post_tool_call`: identity is `tool_call_id`, duration is
@@ -244,8 +244,8 @@ modifications, full MIT text). Upstream file-specific headers were checked; no a
   Hermes is not installed on this machine and phone/live-server testing is deferred. CI's Hermes job
   imports the plugin against the pin but does not run a real delegated turn. This is the main residual
   integration risk; the exact test is in MOBILE VALIDATION PENDING.
-- A turn that fails without `post_llm_call` cannot be known failed from hooks; the app shows it as
-  running until the chat stops being busy, then `Not confirmed`. No failure is inferred.
+- `on_session_end` supplies completed/failed/interrupted flags; absent flags remain `unknown`.
+  A missing final lifecycle event remains unconfirmed rather than being inferred successful.
 - Outcome summaries only appear when Hermes supplies them; plans may legitimately end with steps still
   in progress, which show as `Unfinished`.
 - No persistence across a gateway restart; snapshots are re-fetched per chat.
@@ -316,3 +316,22 @@ another agent's control work; keep the baseline strip semantics and this sheet.
 
 Everything above is ready for code review. Do not merge this branch from the agent; the orchestrator
 owns integration, the final plugin/web bundle regeneration, the signed APK and device validation.
+
+## Orchestrator review: 24 October 2026
+
+Verified the final hook contract in the pinned Hermes source: `post_llm_call` also fires
+on failed/interrupted turns and carries no terminal flags. Completion now uses
+`on_session_end` and its completed/failed/interrupted fields; a missing outcome is unknown.
+The pinned plugin whitelist accepts that hook. Live model-turn testing remains pending.
+
+Late or repeated tool/subagent starts preserve already observed terminal states and
+timestamps. Child routing includes its exact parent chat and turn, preventing same-ID
+children in different chats from mixing activity. Child mappings are cleared on finish,
+new turn, deletion and eviction. Tracking stays bounded even with more than 32 live
+chats; evicted live observations publish unknown, and a global monotonic turn counter
+ensures returning chats can accept new snapshots without a growing counter map.
+
+Validation: 31 focused execution/adapter tests passed; the complete no-Hermes plugin
+suite passed 327 tests with 17 skips. Tests cover all four final outcomes, delayed
+starts after finishes, concurrent same-ID children, bounded live-chat retention and
+monotonic reopening. Combined integration and native validation remain pending.

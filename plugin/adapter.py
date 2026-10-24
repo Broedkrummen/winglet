@@ -284,6 +284,8 @@ class WingletAdapter(BasePlatformAdapter):
             # when this Hermes lacks the session-store operations it needs.
             from .branching import BranchService
             hub.branching = BranchService(hub, self)
+            from .context_insights import ContextInsights
+            hub.context_insights = ContextInsights(hub, self)
             from .processes import Processes
             hub.processes = Processes(self)
             # A private hosted-room worker reuses Hermes's durable scheduler. It

@@ -36,12 +36,8 @@ from urllib.parse import quote, unquote, urlsplit
 
 from aiohttp import WSMsgType, web
 
-<<<<<<< HEAD
-from . import keys, live_voice, recovery, uploads, webpush
-=======
-from . import checkpoints as checkpoints_api, keys, recovery, uploads, webpush
+from . import checkpoints as checkpoints_api, keys, live_voice, recovery, uploads, webpush
 from .projects import ProjectConflict, ProjectError, Projects
->>>>>>> origin/codex/major-features
 from .store import ROLES, Store, new_id
 
 logger = logging.getLogger(__name__)
@@ -161,13 +157,10 @@ ROUTE_POLICY = {
     "h_mcp_sign_in_cancel": "owner_signed",
     "h_rotate_token": "signed",
     "h_device_update": "owner_signed", "h_device_delete": "owner_signed", "h_pairing_code": "owner_signed",
-<<<<<<< HEAD
     "h_voice_session": "device", "h_voice_transcribe": "device", "h_voice_speak": "device",
     "h_voice_stop": "device", "h_voice_end": "device", "h_voice_audio": "public",
-=======
     # Branching: paired devices, scoped to a chat they can see (same rule as sending a message).
     "h_branch_state": "device", "h_branch_create": "device", "h_branch_regenerate": "device",
->>>>>>> origin/codex/major-features
 }
 
 # Slash commands a member may send: their own conversation and turn, and read-only help. Everything
@@ -269,15 +262,12 @@ class Hub:
         # Hermes functions for model, providers, persona, memory and usage (plugin/hermes_api.py),
         # installed by the adapter; None turns those features off.
         self.hermes: Any = None
-<<<<<<< HEAD
         # The profile's configured speech-to-text/text-to-speech bridge (plugin/hermes_api.py),
         # installed by the adapter; None turns hands-free voice off.
         self.speech: Any = None
-=======
         # Workspace checkpoints (plugin/checkpoints.py), installed by the adapter when Hermes keeps
         # them; None hides the feature entirely.
         self.checkpoints: Optional[checkpoints_api.CheckpointService] = None
->>>>>>> origin/codex/major-features
         # chat id -> the model that chat is really using, when Hermes knows (installed by the adapter).
         self.chat_model: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None
         # chat id -> the standing goal (/goal) its Hermes session is working on (installed by the adapter).
@@ -312,13 +302,10 @@ class Hub:
         self.on_answer: Optional[ResolveFn] = None
         # Installed by the adapter; the hub itself never imports Hermes.
         self.hermes_version: Callable[[], str] = lambda: ""
-<<<<<<< HEAD
         # Turn-based hands-free voice: sessions, signed speech files and cancellation.
         self.voice = live_voice.VoiceBridge(self)
-=======
         # Server-persisted projects (folders). Additive tables, created in place.
         self.projects = Projects(store)
->>>>>>> origin/codex/major-features
         self.store.ensure_chat(HOME_CHAT_ID, "Updates", kind="home")
 
     # -- lifecycle -------------------------------------------------------------------
@@ -765,17 +752,13 @@ class Hub:
 
     def features(self) -> Dict[str, bool]:
         """What this server can do. The app hides anything that isn't listed as true."""
-<<<<<<< HEAD
         handsfree = self.voice.available
-        return {"webpush": True, "ntfy": True, "approvals": True, "questions": True, "uploads": True, "voice": True,
-=======
         checkpoints = self.checkpoints is not None
         branching = bool(self.branching is not None and self._has(self.branching, "available")
                          and self.branching.available())
         return {"rooms": self.rooms is not None and self.rooms.available(),
                 "room_mentions": self.rooms is not None and self.rooms.available(), "rooms_member_write": False,
                 "webpush": True, "ntfy": True, "approvals": True, "questions": True, "uploads": True, "voice": True,
->>>>>>> origin/codex/major-features
                 "replies": True, "export": True, "mute": True, "status_updates": True, "roles": True,
                 "signed_actions": True, "ws_auth": True, "pickers": True, "agent": self.hermes is not None,
                 "control": self.hermes is not None, "goals": self.chat_goal is not None, "search": True, "files": True,
@@ -783,12 +766,9 @@ class Hub:
                 "sessions": self.hermes is not None and self._has(self.hermes, "sessions_available"),
                 "pets": self.hermes is not None and self._has(self.hermes, "pets_available"),
                 "bots": self.bots_provider is not None and self.hermes is not None and self._has(self.hermes, "bots_available"),
-<<<<<<< HEAD
                 # Hands-free voice is the turn loop the app implements. `voice_live` stays false: this
                 # server has no full-duplex audio, and calling the loop "live" would be a lie.
                 "voice_handsfree": handsfree, "voice_live": False, "voice_barge_in": handsfree,
-                "connection_status": True}
-=======
                 # Checkpoints: listing/preview, and the separate live restore this Hermes can do.
                 "checkpoints": checkpoints, "checkpoint_diff": checkpoints,
                 "checkpoint_restore": checkpoints and self.checkpoints.can_restore,
@@ -798,7 +778,6 @@ class Hub:
                 "process_output": self.processes is not None and self.processes.available(),
                 "process_stop": self.processes is not None and self.processes.available(),
                 "connection_status": True, "projects": True}
->>>>>>> origin/codex/major-features
 
     def about(self) -> Dict[str, Any]:
         return {"version": VERSION, "protocol": PROTOCOL, "min_app_protocol": MIN_APP_PROTOCOL,

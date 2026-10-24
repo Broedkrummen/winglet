@@ -255,15 +255,12 @@ class WingletAdapter(BasePlatformAdapter):
             hub.hermes_version = hermes_api.hermes_version
             hub.commands_provider = hermes_api.list_commands
             hub.hermes = hermes_api
-<<<<<<< HEAD
             # Speech-to-text and text-to-speech from this profile's own configuration. The app only sees
             # the capability and provider names; keys and models stay on the server.
             hub.speech = hermes_api.SpeechBackend() if hermes_api.speech_available() else None
-=======
             # Hermes's own workspace snapshots, only where this Hermes keeps them.
             hub.checkpoints = (checkpoints.CheckpointService(hermes_api, busy=hub.busy_chats)
                                if hermes_api.checkpoints_available() else None)
->>>>>>> origin/codex/major-features
             hub.chat_model = self._chat_model
             # Structured task activity is on only when every hook it needs was accepted. Old Hermes
             # versions, or a host that refuses hooks, keep the feature off rather than showing guesses.

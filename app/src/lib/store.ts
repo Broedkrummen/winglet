@@ -38,7 +38,7 @@ export type OutboxEntry = {
   attachments?: Attachment[]; reply_to?: ReplyRef;
 };
 
-export type SendOptions = { retryClientId?: string; attachments?: Attachment[]; replyTo?: ReplyRef };
+export type SendOptions = { clientId?: string; liveOnly?: boolean; retryClientId?: string; attachments?: Attachment[]; replyTo?: ReplyRef };
 
 export type ServerState = {
   status: ConnStatus;
@@ -797,7 +797,19 @@ export const useApp = create<AppState>((set, get) => {
       if (retryClientId && get().runtime[serverId]?.messages[chatId]?.some((m) =>
         !isLocal(m) && m.meta?.client_id === retryClientId)) return;
       // A retry reuses the original id so the server can tell it already has the message.
-      const clientId = retryClientId ?? `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+      const clientId = retryClientId ?? o.clientId ?? `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+      // Hands-free turns belong to this live session. They never enter the durable offline outbox.
+      if (o.liveOnly) {
+        if (!get().network || get().runtime[serverId]?.status !== 'online') throw new ApiError('Reconnect, then speak again.', 0);
+        try {
+          const data = await api<{ message: Message }>(server, `/api/chats/${encodeURIComponent(chatId)}/messages`,
+            { method: 'POST', body: JSON.stringify({ text: text.trim(), client_id: clientId }), timeoutMs: 65000 });
+          if (get().servers.some((s) => s.id === serverId)) upsertMessage(serverId, chatId, data.message);
+        } catch (error) {
+          if (!get().runtime[serverId]?.messages[chatId]?.some((m) => m.meta?.client_id === clientId && !isLocal(m))) throw error;
+        }
+        return;
+      }
       const existing = get().runtime[serverId]?.outbox.find((x) => x.client_id === clientId);
       const entry: OutboxEntry = existing ? { ...existing, failed: false, failure: undefined }
         : { client_id: clientId, chat_id: chatId, text: text.trim(), created_at: Date.now() / 1000,

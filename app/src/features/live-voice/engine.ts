@@ -225,8 +225,9 @@ export class VoiceEngine {
       const last = this.lastPartial.get(key);
       if (last !== undefined && input.seq <= last) return [];
       this.lastPartial.set(key, input.seq);
+      while (this.lastPartial.size > this.maxSeen) this.lastPartial.delete(this.lastPartial.keys().next().value!);
     }
-    const text = input.text.trim();
+    const text = input.text.trim().slice(0, 8000);
     this.set({ partial: text, caption: text || 'Listening…' });
     return [];
   }
@@ -236,12 +237,12 @@ export class VoiceEngine {
   }): VoiceEffect[] {
     if (this.state.turnId !== input.turnId || this.state.utteranceId !== input.utteranceId) return [];
     const turn = this.turn;
-    if (!turn) return [];
+    if (!turn || !['listening', 'transcribing'].includes(this.state.phase)) return [];
     const key = `${input.turnId}:${input.utteranceId}`;
     if (!input.final) return this.partialTranscript(input);
     if (this.seenUtterances.has(key)) return [];
     this.remember(this.seenUtterances, key, this.maxSeen);
-    const text = input.text.trim();
+    const text = input.text.trim().slice(0, 8000);
     if (input.noSpeech || !text) return this.heardNothing(turn);
     this.silenceStreak = 0;
     this.lastPartial.delete(key);
@@ -468,7 +469,7 @@ export class VoiceEngine {
       if (wasListening) {
         this.pendingStart = false;
         this.set({
-          phase: 'idle', turnId: null, utteranceId: null, partial: '', caption: 'Microphone muted',
+          phase: 'idle', generation: this.state.generation + 1, turnId: null, utteranceId: null, partial: '', caption: 'Microphone muted',
           note: 'Microphone muted.', muted: true,
         });
         effects.push({ type: 'cancelCapture' });

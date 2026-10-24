@@ -95,5 +95,5 @@ export function normalizeLevel(level: number): number {
 /** expo-audio's metering is dBFS (-160..0); the VAD wants 0..1. */
 export function dbToLevel(db: number | undefined | null): number {
   if (db === undefined || db === null || !Number.isFinite(db)) return 0;
-  return Math.max(0, Math.min(1, (db + 60) / 60));
+  return Math.max(0, Math.min(1, Math.pow(10, db / 20)));
 }

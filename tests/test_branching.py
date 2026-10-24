@@ -60,7 +60,7 @@ class FakeBridge:
     def source_for(self, chat, device):
         return SimpleNamespace(chat_id=chat["id"], user_id=f"winglet:{device['id']}", chat_type="dm")
 
-    async def rewind_latest(self, chat_id, prompt_text, source, expected_row_index=None):
+    async def rewind_latest(self, chat_id, prompt_text, source, expected_row_index=None, expected_rows=None):
         self.rewinds.append((chat_id, prompt_text, expected_row_index))
         return {"target_text": prompt_text, "turns_undone": 1, "rewound_count": 2}
 
@@ -560,11 +560,42 @@ async def test_real_hermes_bridge_seeds_and_routes_a_branch(tmp_path, monkeypatc
         assert [r["content"] for r in snap.rows] == ["one", "first", "two", "second"]
         new_sid = await bridge.create_branch_session(
             {"id": "child", "title": "Child", "bot": None}, {"id": "dev", "name": "Phone"}, "Child",
-            snap, snap.rows[:2])
-        assert [r["content"] for r in store.load_transcript(new_sid)] == ["one", "first"]
+            snap, [{**snap.rows[0], "message_id": "copied-u1"}, snap.rows[1]])
+        copied = store.load_transcript(new_sid)
+        assert [r["content"] for r in copied] == ["one", "first"]
+        assert copied[0]["message_id"] == "copied-u1"
+        gates = message_capabilities([
+            _msg("copied-u1", "user", "one", position=1),
+            _msg("copied-a1", "bot", "first", position=2),
+        ], copied)
+        assert gates["copied-u1"]["can_edit"] is True
+        assert gates["copied-a1"]["can_regenerate"] is True
         assert store._entries["agent:main:telegram:dm:child"].session_id == new_sid
         child_row = db.get_session(new_sid)
         assert child_row["parent_session_id"] == "parent"
         assert [r["content"] for r in store.load_transcript("parent")] == ["one", "first", "two", "second"]
     finally:
         db.close()
+
+async def test_copied_historical_turns_can_be_branched_and_edited_again(client, hub):
+    phone = await pair_phone(client, hub)
+    add_exchange(hub, "general", "first question", "first answer")
+    second, _ = add_exchange(hub, "general", "second question", "second answer")
+    revision = (await (await state(client, phone)).json())["revision"]
+    response = await branch(client, phone, {
+        "op_id": op(), "message_id": second["id"], "expected_revision": revision,
+        "mode": "edit", "text": "edited second",
+    })
+    assert response.status == 200, await response.text()
+    child = (await response.json())["chat"]
+    copied = hub.store.all_messages(child["id"])
+    device = hub.store.get_device(phone.id)
+    child_state = await hub.branching.state(device, child["id"])
+    assert child_state["messages"][copied[0]["id"]]["can_edit"] is True
+    assert child_state["messages"][copied[1]["id"]]["can_regenerate"] is True
+    again = await hub.branching.branch(device, child, {
+        "op_id": op(), "message_id": copied[0]["id"], "expected_revision": child_state["revision"],
+        "mode": "edit", "text": "another first question",
+    })
+    assert again["chat"]["id"] != child["id"]
+    assert hub.store.all_messages(child["id"])[0]["text"] == "first question"

@@ -7,7 +7,7 @@ that exchange), then either:
 
 * creates a new Winglet chat whose Hermes session is seeded with the parent's real transcript
   prefix (non-destructive: the parent and its later messages are untouched), or
-* rewinds the live Hermes transcript through ``SessionStore.rewind_session`` for an explicit
+* rewinds the reviewed Hermes turn with durable compare-and-swap guards for an explicit
   in-place regeneration of the latest settled exchange.
 
 Hermes' internal API is not stable, so the bridge fails the capability closed if the pinned
@@ -296,6 +296,9 @@ def _branch_row(msg: Dict[str, Any]) -> Dict[str, Any]:
     row = {k: msg.get(k) for k in COPIED_FIELDS}
     row["role"] = msg.get("role", "user")
     row["tool_name"] = msg.get("tool_name") or msg.get("name")
+    if row["role"] == "user":
+        # The service remaps platform IDs to the copied Winglet rows before seeding.
+        row["platform_message_id"] = msg.get("message_id") or msg.get("platform_message_id")
     try:
         from agent.turn_context import extract_api_content_sidecar
         row["api_content"] = extract_api_content_sidecar(msg)
@@ -340,7 +343,9 @@ class HermesBranchBridge:
             if store is None or async_store is None:
                 return False
             for name in ("load_transcript", "rewind_session", "switch_session", "get_or_create_session",
-                         "peek_session_id", "get_model_override", "set_model_override"):
+                         "peek_session_id", "get_model_override", "set_model_override",
+                         "_get_transcript_drain_lock", "_clear_dirty_transcript",
+                         "_follow_reroutes", "_compression_tip_for_session_id"):
                 if not callable(getattr(store, name, None)):
                     return False
             for name in ("get_or_create_session", "switch_session"):
@@ -350,9 +355,12 @@ class HermesBranchBridge:
             if db is None:
                 return False
             for name in ("create_session", "append_messages_batch", "set_session_title", "get_session",
-                         "end_session"):
+                         "end_session", "rewind_user_turn"):
                 if not callable(getattr(db, name, None)):
                     return False
+            import inspect
+            if "warm_history" not in inspect.signature(db.rewind_user_turn).parameters:
+                return False
             return True
         except Exception:
             logger.debug("[winglet] branching unavailable", exc_info=True)
@@ -400,6 +408,8 @@ class HermesBranchBridge:
         if not session_id:
             raise BranchRefused("unsupported", "This chat has no Hermes session yet.")
         try:
+            session_id = await asyncio.to_thread(store._follow_reroutes, session_id)
+            session_id = await asyncio.to_thread(store._compression_tip_for_session_id, session_id)
             rows = await asyncio.to_thread(store.load_transcript, session_id)
         except Exception as exc:
             logger.debug("[winglet] transcript read failed for branch", exc_info=True)
@@ -484,11 +494,14 @@ class HermesBranchBridge:
                 remove(new_session_id)
 
     async def rewind_latest(self, chat_id: str, prompt_text: str, source,
-                            expected_row_index: Optional[int] = None) -> Dict[str, Any]:
+                            expected_row_index: Optional[int] = None,
+                            expected_rows: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         store, async_store = self.store, self.async_store
         if store is None:
             raise BranchRefused("unsupported", "This Hermes can't rewind a session.")
         snap = await self.snapshot(chat_id)
+        if expected_rows is not None and transcript_revision([], snap.rows) != transcript_revision([], expected_rows):
+            raise BranchRefused("stale", "This conversation changed before it could be regenerated.")
         # Verify the target BEFORE Hermes soft-deletes anything: a concurrent turn or a changed
         # prompt must never be truncated by a stale in-place request.
         if expected_row_index is not None:
@@ -498,10 +511,27 @@ class HermesBranchBridge:
             stored = str(snap.rows[expected_row_index].get("content") or "")
             if _normalize(prompt_text) not in _normalize(stored):
                 raise BranchRefused("stale", "The prompt changed before it could be regenerated.")
+        def rewind_reviewed_turn():
+            # The normal gateway writer shares this drain lock. The DB also checks its current
+            # turn lease and active row IDs, so another process cannot commit over this rewind.
+            with store._get_transcript_drain_lock():
+                current = store._compression_tip_for_session_id(store._follow_reroutes(snap.session_id))
+                if current != snap.session_id:
+                    raise BranchRefused("stale", "This session changed before it could be regenerated.")
+                db = self._db_for_session(current)
+                if db is None:
+                    raise BranchRefused("unsupported", "This session database is unavailable.")
+                outcome = db.rewind_user_turn(current, -1, warm_history=expected_rows if expected_rows is not None else snap.rows)
+                store._clear_dirty_transcript(current)
+                return {"rewound_count": outcome.rewound_count, "turns_undone": outcome.turns_undone,
+                        "target_text": outcome.live_text}
+
         try:
-            result = await asyncio.to_thread(store.rewind_session, snap.session_id, 1)
+            result = await asyncio.to_thread(rewind_reviewed_turn)
+        except RuntimeError as exc:
+            raise BranchRefused("stale", "This conversation changed before it could be regenerated.") from exc
         except ValueError as exc:
-            raise BranchRefused("unsupported", str(exc)) from exc
+            raise BranchRefused("busy", "The current turn cannot be rewound safely. Review it and try again.") from exc
         if not result:
             raise BranchRefused("busy", "The session is busy or the newest turn can't be rewound right now.")
         with contextlib.suppress(Exception):
@@ -713,8 +743,11 @@ class BranchService:
                     ids = [a.get("id") for a in (row.get("meta") or {}).get("attachments") or [] if a.get("id")]
                     if ids:
                         self.hub.store.claim_uploads(ids, device["id"], new_chat_id, row["id"])
-                new_session_id = await self.bridge.create_branch_session(new_chat, device, title, snap,
-                                                                        plan.transcript_prefix)
+                copied_ids = {row["meta"]["branch_source_message_id"]: row["id"]
+                              for row in rows if row["role"] == "user"}
+                prefix = [{**row, "message_id": copied_ids.get(str(row.get("message_id") or ""))}
+                          if row.get("role") == "user" else row for row in plan.transcript_prefix]
+                new_session_id = await self.bridge.create_branch_session(new_chat, device, title, snap, prefix)
                 self.hub.store.create_branch(new_chat_id, chat_id, chat.get("title") or "Chat",
                                              plan.message_id, mode, device["id"], revision)
                 final_chat = self.hub.store.get_chat(new_chat_id) or new_chat
@@ -816,7 +849,7 @@ class BranchService:
                     raise BranchRefused("unsupported", "There is no prompt to resend.")
                 source = self.bridge.source_for(chat, device)
                 await self.bridge.rewind_latest(chat_id, plan.send_text, source,
-                                                expected_row_index=plan.user_row_index)
+                                                expected_row_index=plan.user_row_index, expected_rows=snap.rows)
                 # The rewind is real; now remove the dead UI rows after the surviving prompt and
                 # start a new turn from it. Hidden controls after this point no longer apply.
                 prompt_position = plan.prompt.get("position")

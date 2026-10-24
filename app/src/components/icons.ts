@@ -26,6 +26,9 @@ export { default as ChevronRight } from 'lucide-react-native/icons/chevron-right
 export { default as ChevronsDownUp } from 'lucide-react-native/icons/chevrons-down-up';
 export { default as ChevronsUpDown } from 'lucide-react-native/icons/chevrons-up-down';
 export { default as CircleAlert } from 'lucide-react-native/icons/circle-alert';
+export { default as Circle } from 'lucide-react-native/icons/circle';
+export { default as CircleDashed } from 'lucide-react-native/icons/circle-dashed';
+export { default as CircleSlash } from 'lucide-react-native/icons/circle-slash';
 export { default as CircleArrowUp } from 'lucide-react-native/icons/circle-arrow-up';
 export { default as CircleHelp } from 'lucide-react-native/icons/circle-question-mark';
 export { default as CirclePause } from 'lucide-react-native/icons/circle-pause';
@@ -56,6 +59,7 @@ export { default as Info } from 'lucide-react-native/icons/info';
 export { default as Key } from 'lucide-react-native/icons/key';
 export { default as KeyRound } from 'lucide-react-native/icons/key-round';
 export { default as LayoutList } from 'lucide-react-native/icons/layout-list';
+export { default as ListChecks } from 'lucide-react-native/icons/list-checks';
 export { default as Lock } from 'lucide-react-native/icons/lock';
 export { default as MemoryStick } from 'lucide-react-native/icons/memory-stick';
 export { default as MessageCircle } from 'lucide-react-native/icons/message-circle';

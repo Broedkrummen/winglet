@@ -129,6 +129,7 @@ ROUTE_POLICY = {
     "h_agent": "device", "h_picker_select": "owner",
     "h_chat_goal": "device", "h_goals": "device", "h_search": "device", "h_chat_files": "device",
     "h_checkpoints": "owner", "h_checkpoint": "owner", "h_checkpoint_restore": "owner_signed",
+    "h_task": "device",
     "h_projects": "device", "h_project_create": "signed", "h_project_update": "signed",
     "h_project_order": "signed", "h_project_delete": "signed", "h_project_chat_create": "signed",
     "h_project_chat_move": "signed", "h_project_chat_remove": "signed",
@@ -261,6 +262,9 @@ class Hub:
         self.chat_model: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None
         # chat id -> the standing goal (/goal) its Hermes session is working on (installed by the adapter).
         self.chat_goal: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None
+        # Structured task activity (plugin/execution.py), installed by the adapter when Hermes offers
+        # the observer hooks it needs. None keeps the feature off (old server or old Hermes).
+        self.execution: Any = None
         self._pickers: Dict[str, Dict[str, Any]] = {}
         # Restarts and updates outlive this process; jobs started by this one carry its boot id.
         self.boot_id = new_id()
@@ -309,6 +313,7 @@ class Hub:
         r.add_post("/api/chats/{chat_id}/uploads", self.h_upload)
         r.add_get("/api/chats/{chat_id}/export", self.h_export)
         r.add_get("/api/chats/{chat_id}/goal", self.h_chat_goal)
+        r.add_get("/api/task", self.h_task)
         r.add_get("/api/chats/{chat_id}/files", self.h_chat_files)
         r.add_get("/api/checkpoints", self.h_checkpoints)
         r.add_get("/api/checkpoints/{hash}", self.h_checkpoint)
@@ -723,6 +728,7 @@ class Hub:
                 # Checkpoints: listing/preview, and the separate live restore this Hermes can do.
                 "checkpoints": checkpoints, "checkpoint_diff": checkpoints,
                 "checkpoint_restore": checkpoints and self.checkpoints.can_restore,
+                "task_activity": self.execution is not None,
                 "connection_status": True, "projects": True}
 
     def about(self) -> Dict[str, Any]:
@@ -967,6 +973,8 @@ class Hub:
         files = self.store.chat_uploads(chat_id)
         if not self.store.delete_chat(chat_id):
             return _error(404, "no such chat")
+        if self.execution is not None:
+            self.execution.forget_chat(chat_id)
         await asyncio.to_thread(lambda: [self._remove_upload(row) for row in files])
         await self.broadcast({"type": "chat.delete", "chat_id": chat_id, "owner_device": chat.get("owner_device"),
                               "bot": chat.get("bot")})
@@ -1269,6 +1277,24 @@ class Hub:
         device = self._require(request)
         chat = self._visible_chat(device, request.match_info["chat_id"])
         return _json({"goal": await asyncio.to_thread(self._goal_for, chat["id"])})
+
+    async def h_task(self, request: web.Request) -> web.Response:
+        """The bounded structured task snapshot for one chat: plan, tools, subagents and outcome.
+
+        Only facts Hermes supplied are here; a chat this server has no record for answers null. The
+        app pairs this with namespaced ``task.*`` socket events, and uses the snapshot to recover
+        after a reconnect.
+        """
+        device = self._require(request)
+        chat_id = str(request.query.get("chat") or "").strip()
+        if not chat_id:
+            return _error(400, "chat is required")
+        self._visible_chat(device, chat_id)
+        tracker = self.execution
+        if tracker is None:
+            return _json({"available": False, "snapshot": None, "capabilities": {"subagent_stop": False}})
+        return _json({"available": True, "snapshot": tracker.snapshot(chat_id),
+                      "capabilities": tracker.capabilities()})
 
     async def h_goals(self, request: web.Request) -> web.Response:
         """Every chat you can see that has a goal, for the home screen."""

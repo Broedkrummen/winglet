@@ -1,5 +1,8 @@
 export type Bot = { name: string; title: string; description: string };
 
+/** Structured task activity lives in its own feature module; re-exported here for the store and screens. */
+export type { TaskCapabilities, TaskEnvelope, TaskSnapshot, TaskState } from '../features/execution/model';
+
 export type Server = {
   id: string; // server_id reported by the plugin
   url: string; // base URL, no trailing slash

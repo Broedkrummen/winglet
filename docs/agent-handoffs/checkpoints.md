@@ -328,6 +328,21 @@ Combined validation:
 
 No native build or phone/RDP validation was performed for this integration refresh.
 
+## Integration refresh after execution merge (2026-10-24)
+
+Merged integration commit `99b498d573b2684353e721016a2dd5a6b81ceda2` into
+the checkpoint branch. Kept both checkpoint and execution adapter imports, checkpoint
+owner/owner-signed route rules, the device task-read rule, all project route rules,
+and all three feature capability sets. Inspected the automatically merged tracker
+initialization, routes and app state. The safe-restore guard is unchanged.
+
+Validation: the complete plugin suite passed **377 tests, 18 skipped**; app typecheck
+passed; all **310 app tests** passed. The focused actual pinned-Hermes run included
+checkpoint restore safety, checkpoint routes, execution and adapter authority, and
+project routes/transactions: **91 passed**. No focused test hung. The previous
+`c66ddcd` CI run also completed successfully, including Hermes. CI configuration was
+unchanged; this refresh receives its own exact-head checks.
+
 ## Known limitations / unresolved risks
 
 - All chats of a bot share the gateway's terminal folder; snapshots are listed per

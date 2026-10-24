@@ -99,6 +99,21 @@ CREATE TABLE IF NOT EXISTS phone_tool_events (
 );
 CREATE INDEX IF NOT EXISTS phone_tool_events_device ON phone_tool_events (device_id, ts);
 CREATE INDEX IF NOT EXISTS phone_tool_events_ts ON phone_tool_events (ts);
+-- Conversation branching (feature: branching). A branch chat keeps a snapshot of where it came from;
+-- the parent conversation is never rewritten. Older code ignores these tables.
+CREATE TABLE IF NOT EXISTS chat_branches (
+    chat_id TEXT PRIMARY KEY, parent_chat_id TEXT NOT NULL, parent_title TEXT NOT NULL DEFAULT '',
+    from_message_id TEXT NOT NULL DEFAULT '', mode TEXT NOT NULL DEFAULT 'branch',
+    created_at REAL NOT NULL, created_by TEXT NOT NULL DEFAULT '', source_revision TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS chat_branches_parent ON chat_branches (parent_chat_id);
+-- Idempotency and the server-held operation state for branch/regenerate calls.
+CREATE TABLE IF NOT EXISTS branch_operations (
+    op_id TEXT PRIMARY KEY, chat_id TEXT NOT NULL, kind TEXT NOT NULL, device_id TEXT NOT NULL DEFAULT '',
+    state TEXT NOT NULL DEFAULT 'running', result TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '',
+    created_at REAL NOT NULL, updated_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS branch_operations_chat ON branch_operations (chat_id);
 """
 
 # Columns added after v0.3. Existing phones become owners, unverified until they scan a fresh code.
@@ -366,12 +381,97 @@ class Store:
 
     def get_chat(self, chat_id: str) -> Optional[Dict[str, Any]]:
         row = self._one("SELECT * FROM chats WHERE id = ?", (chat_id,))
-        return dict(row) if row else None
+        if row is None:
+            return None
+        return self._with_branch(dict(row))
 
     def list_chats(self, bot: Optional[str] = None) -> List[Dict[str, Any]]:
         """One bot's chats (None: the main bot's)."""
-        return [dict(r) for r in self._all("SELECT * FROM chats WHERE COALESCE(bot, '') = ? ORDER BY updated_at DESC",
-                                           (bot or "",))]
+        return [self._with_branch(dict(r)) for r in
+                self._all("SELECT * FROM chats WHERE COALESCE(bot, '') = ? ORDER BY updated_at DESC", (bot or "",))]
+
+    def _with_branch(self, chat: Dict[str, Any]) -> Dict[str, Any]:
+        """Add the branch snapshot (where this chat came from), if it is one. One cheap indexed lookup."""
+        chat["branch"] = self.branch_info(chat["id"])
+        return chat
+
+    # -- branching ---------------------------------------------------------------
+
+    def create_branch(self, chat_id: str, parent_chat_id: str, parent_title: str, from_message_id: str,
+                      mode: str, created_by: str, source_revision: str) -> None:
+        """Record a branch chat's origin. The chat row itself is created by ``create_chat``."""
+        self._exec("INSERT OR REPLACE INTO chat_branches (chat_id, parent_chat_id, parent_title, from_message_id, "
+                   "mode, created_at, created_by, source_revision) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                   (chat_id, parent_chat_id, (parent_title or "")[:80], from_message_id, mode, _now(),
+                    created_by, source_revision))
+
+    def branch_info(self, chat_id: str) -> Optional[Dict[str, Any]]:
+        row = self._one("SELECT parent_chat_id, parent_title, from_message_id, mode, created_at, source_revision "
+                        "FROM chat_branches WHERE chat_id = ?", (chat_id,))
+        return dict(row) if row else None
+
+    def branch_children(self, chat_id: str) -> List[Dict[str, Any]]:
+        """Branches made from this chat, newest first, with the title they carry now."""
+        rows = self._all("SELECT c.id, c.title, c.created_at FROM chat_branches b JOIN chats c ON c.id = b.chat_id "
+                         "WHERE b.parent_chat_id = ? ORDER BY b.created_at DESC", (chat_id,))
+        return [dict(r) for r in rows]
+
+    def branch_op(self, op_id: str) -> Optional[Dict[str, Any]]:
+        row = self._one("SELECT * FROM branch_operations WHERE op_id = ?", (op_id,))
+        if row is None:
+            return None
+        out = dict(row)
+        out["result"] = json.loads(out["result"]) if out.get("result") else None
+        return out
+
+    def claim_branch_op(self, op_id: str, chat_id: str, kind: str, device_id: str) -> tuple:
+        """Claim an operation id. Returns (existing, None) for a finished op, (None, "in_progress")
+        for one still running, or (None, None) once this caller owns it. A different chat/kind is
+        always a conflict."""
+        with self._lock:
+            now = _now()
+            row = self._one("SELECT * FROM branch_operations WHERE op_id = ?", (op_id,))
+            if row is not None:
+                if (row["chat_id"] != chat_id or row["kind"] != kind
+                        or (row["device_id"] and row["device_id"] != device_id)):
+                    return {"conflict": True}, None
+                if row["state"] == "done":
+                    return self.branch_op(op_id), None
+                # A running row left by a process that died must not block the id forever.
+                if row["state"] == "running" and now - float(row["updated_at"] or 0) < 120:
+                    return None, "in_progress"
+                # A failed op (or an abandoned running one) may be retried with the same id.
+            self._exec("INSERT OR REPLACE INTO branch_operations (op_id, chat_id, kind, device_id, state, result, "
+                       "error, created_at, updated_at) VALUES (?, ?, ?, ?, 'running', '', '', ?, ?)",
+                       (op_id, chat_id, kind, device_id, now, now))
+            return None, None
+
+    def finish_branch_op(self, op_id: str, result: Optional[Dict[str, Any]] = None, error: str = "") -> None:
+        state = "done" if result is not None else "failed"
+        self._exec("UPDATE branch_operations SET state = ?, result = ?, error = ?, updated_at = ? WHERE op_id = ?",
+                   (state, json.dumps(result) if result is not None else "", (error or "")[:500], _now(), op_id))
+
+    def import_messages(self, chat_id: str, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Insert branch copies with their original times and positions in one transaction.
+        Each row needs id, role, text, status, meta, created_at, updated_at."""
+        with self._lock:
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                for row in rows:
+                    self._exec("INSERT INTO messages (id, chat_id, role, text, status, meta, created_at, updated_at) "
+                               "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                               (row["id"], chat_id, row["role"], row.get("text") or "", row.get("status") or "final",
+                                json.dumps(row.get("meta") or {}), row.get("created_at") or _now(),
+                                row.get("updated_at") or row.get("created_at") or _now()))
+                last = rows[-1] if rows else None
+                if last is not None:
+                    self._exec("UPDATE chats SET updated_at = ?, preview = ? WHERE id = ?",
+                               (_now(), preview_of(last.get("text") or ""), chat_id))
+                self._db.commit()
+            except Exception:
+                self._db.rollback()
+                raise
+        return [self.get_message(row["id"]) for row in rows]
 
     def rename_chat(self, chat_id: str, title: str) -> Optional[Dict[str, Any]]:
         title = (title or "").strip()[:80]
@@ -387,6 +487,8 @@ class Store:
                 self._exec("INSERT OR IGNORE INTO message_deletions (id, chat_id, deleted_at) "
                            "SELECT id, chat_id, ? FROM messages WHERE chat_id = ?", (_now(), chat_id))
                 self._exec("DELETE FROM messages WHERE chat_id = ?", (chat_id,))
+                # Branches made from this chat stay: their parent title is snapshotted.
+                self._exec("DELETE FROM chat_branches WHERE chat_id = ?", (chat_id,))
                 removed = self._exec("DELETE FROM chats WHERE id = ?", (chat_id,)) == 1
                 self._db.commit()
                 return removed

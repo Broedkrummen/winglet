@@ -11,7 +11,7 @@ import { VerifyNotice } from '../../components/VerifyPhone';
 import { BotSwitcher } from '../../components/BotSwitcher';
 import { NavigationToggle } from '../../components/AppNavigation';
 import {
-  Activity, BarChart, Bell, Brain, CalendarClock, Cpu, Fingerprint, HeartPulse, Info, Key, MessageCircle, MessageSquareText, Palette, PawPrint, Plug, Plus, ScrollText,
+  Activity, BarChart, Bell, Brain, CalendarClock, Cpu, FileDiff, Fingerprint, HeartPulse, Info, Key, MessageCircle, MessageSquareText, Palette, PawPrint, Plug, Plus, ScrollText,
   ShieldCheck, Smartphone, Sparkles, SquareTerminal, Star, UserRoundPen,
 } from '../../components/icons';
 import { modelName } from '../../lib/modelOptions';
@@ -117,6 +117,10 @@ export default function AgentTab() {
               <ListRow icon={<CalendarClock size={18} color={t.colors.onAccentSoft} />} title="Schedule" subtitle="Routines it runs on its own"
                 onPress={() => router.push('/schedule')} />
               <ListRow icon={<ScrollText size={18} color={t.colors.onAccentSoft} />} title="Logs" onPress={() => router.push('/logs')} />
+              {rt.info?.features?.checkpoints ? (
+                <ListRow icon={<FileDiff size={18} color={t.colors.onAccentSoft} />} title="Checkpoints"
+                  subtitle="Snapshots of the folder it works in" onPress={() => router.push('/checkpoints')} />
+              ) : null}
               {rt.info?.features?.sessions ? (
                 <ListRow icon={<MessageSquareText size={18} color={t.colors.onAccentSoft} />} title="Sessions"
                   subtitle="Every conversation, in any app" onPress={() => router.push('/sessions')} />
@@ -131,6 +135,10 @@ export default function AgentTab() {
             <ListGroup>
               <ListRow icon={<CalendarClock size={18} color={t.colors.onAccentSoft} />} title="Schedule" subtitle="Routines it runs on its own"
                 onPress={() => router.push('/schedule')} />
+              {rt.info?.features?.checkpoints ? (
+                <ListRow icon={<FileDiff size={18} color={t.colors.onAccentSoft} />} title="Checkpoints"
+                  subtitle="Snapshots of the folder it works in" onPress={() => router.push('/checkpoints')} />
+              ) : null}
               {rt.info?.features?.sessions ? (
                 <ListRow icon={<MessageSquareText size={18} color={t.colors.onAccentSoft} />} title="Sessions"
                   subtitle="Its conversations, in any app" onPress={() => router.push('/sessions')} />

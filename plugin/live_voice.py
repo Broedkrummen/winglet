@@ -19,6 +19,7 @@ app asks for a tap instead of quietly opening the microphone again.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -90,6 +91,12 @@ class VoiceSessions:
         self._secret = secret.encode("utf-8")
         self._clock = clock
         self._sessions: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+        # Ephemeral sessions do not survive a restart. Remove only this bridge's generated files.
+        if self.directory.is_dir():
+            for pattern in ("sp_*.*", "voice-upload-*"):
+                for path in self.directory.glob(pattern):
+                    if path.is_file():
+                        self._unlink(str(path))
 
     # -- lifecycle ---------------------------------------------------------------------
 
@@ -104,7 +111,7 @@ class VoiceSessions:
             "device_id": device_id, "chat_id": chat_id, "bot": bot or None,
             "created": now, "expires": now + SESSION_TTL_SECONDS,
             "hard_expires": now + SESSION_MAX_SECONDS, "seq": 0, "busy": None, "synthesizing": False,
-            "turns": OrderedDict(), "results": OrderedDict(), "speech": OrderedDict(),
+            "turns": OrderedDict(), "retired": set(), "results": OrderedDict(), "speech": OrderedDict(),
         }
         self._sessions[session["id"]] = session
         return session
@@ -112,7 +119,7 @@ class VoiceSessions:
     def authorize(self, session_id: str, token: str, device_id: str, bot: Optional[str]) -> Dict[str, Any]:
         session = self._sessions.get(session_id or "")
         now = self._clock()
-        if session is None or session["expires"] < now:
+        if session is None or session["expires"] <= now:
             if session is not None:
                 self.close(session)
             raise VoiceError(404, "This voice session ended. Open live voice again.")
@@ -129,6 +136,8 @@ class VoiceSessions:
     def close(self, session: Dict[str, Any]) -> None:
         for speech in list(session.get("speech", {}).values()):
             self._unlink(speech.get("path"))
+        for turn in session.get("turns", {}).values():
+            turn["status"] = "cancelled"
         session.get("speech", {}).clear()
         self._sessions.pop(session.get("id", ""), None)
 
@@ -155,11 +164,24 @@ class VoiceSessions:
 
     # -- turns -------------------------------------------------------------------------
 
+    def live(self, session: Dict[str, Any]) -> None:
+        if self._sessions.get(session["id"]) is not session or session["expires"] <= self._clock():
+            raise VoiceError(404, "This voice session ended. Reconnect to continue.")
+
     def turn(self, session: Dict[str, Any], turn_id: str, create: bool = True) -> Optional[Dict[str, Any]]:
+        self.live(session)
+        if not turn_id or len(turn_id) > 80:
+            raise VoiceError(400, "Invalid turn id.")
+        if turn_id in session["retired"]:
+            raise VoiceError(409, "That turn has ended.")
         turn = session["turns"].get(turn_id)
         if turn is None and create:
             while len(session["turns"]) >= MAX_TURNS:
                 old_id, old = session["turns"].popitem(last=False)
+                session["retired"].add(old_id)
+                if len(session["retired"]) >= 256:
+                    self.close(session)
+                    raise VoiceError(404, "Voice session limit reached. Reconnect to continue.")
                 for speech_id in list(old["speech"]):
                     self.revoke_speech(session, speech_id)
             turn = {"id": turn_id, "status": "open", "created": self._clock(), "speech": set()}
@@ -192,6 +214,9 @@ class VoiceSessions:
         return cancelled, revoked
 
     def begin_transcription(self, session: Dict[str, Any], turn_id: str, utterance_id: str) -> Optional[Dict[str, Any]]:
+        self.turn(session, turn_id)
+        if self.cancelled(session, turn_id):
+            raise VoiceError(409, "That turn was interrupted.")
         cached = session["results"].get((turn_id, utterance_id))
         if cached is not None:
             session["results"].move_to_end((turn_id, utterance_id))
@@ -205,6 +230,10 @@ class VoiceSessions:
         return None
 
     def complete_transcription(self, session: Dict[str, Any], result: Dict[str, Any]) -> Dict[str, Any]:
+        self.live(session)
+        turn = self.turn(session, result["turn_id"], create=False)
+        if turn is None or turn["status"] == "cancelled":
+            raise VoiceError(409, "That turn was interrupted.")
         session["busy"] = None
         key = (result["turn_id"], result["utterance_id"])
         session["results"][key] = result
@@ -264,7 +293,7 @@ class VoiceSessions:
             if speech is None:
                 continue
             turn = session["turns"].get(speech["turn_id"])
-            if session["expires"] < now or turn is None or turn["status"] == "cancelled" or speech["expires"] < now:
+            if session["expires"] <= now or turn is None or turn["status"] == "cancelled" or speech["expires"] < now:
                 self.revoke_speech(session, speech_id)
                 raise VoiceError(404, "That audio expired.")
             path = Path(speech["path"])
@@ -337,7 +366,7 @@ class VoiceBridge:
         session = self.sessions.authorize(session_id, str(body.get("token") or ""),
                                           device["id"], bot)
         chat = self.hub.store.get_chat(session["chat_id"])
-        if chat is None or not self.hub.can_see(device, chat):
+        if chat is None or not self.hub.can_see(device, chat) or (chat.get("bot") or None) != self.hub.bot_name():
             self.sessions.close(session)
             raise VoiceError(404, "This chat is no longer available.")
         return session
@@ -360,7 +389,7 @@ class VoiceBridge:
             body = await self._body(request)
             chat_id = str(body.get("chat_id") or "")
             chat = self.hub.store.get_chat(chat_id)
-            if chat is None or not self.hub.can_see(device, chat):
+            if chat is None or not self.hub.can_see(device, chat) or (chat.get("bot") or None) != self.hub.bot_name():
                 raise VoiceError(404, "This chat is no longer available.")
             session = self.sessions.open(device["id"], chat_id, self.hub.bot_name())
             status = self.status()
@@ -379,6 +408,7 @@ class VoiceBridge:
     async def h_voice_transcribe(self, request: web.Request) -> web.Response:
         audio_path: Optional[str] = None
         session: Optional[Dict[str, Any]] = None
+        claimed = False
         try:
             self._speech()
             fields, data, mime = await self._read_audio(request)
@@ -387,7 +417,7 @@ class VoiceBridge:
             session = self.sessions.authorize(fields.get("session_id", ""), fields.get("token", ""),
                                               device["id"], bot)
             chat = self.hub.store.get_chat(session["chat_id"])
-            if chat is None or not self.hub.can_see(device, chat):
+            if chat is None or not self.hub.can_see(device, chat) or (chat.get("bot") or None) != self.hub.bot_name():
                 raise VoiceError(404, "This chat is no longer available.")
             turn_id = fields.get("turn_id", "").strip()
             utterance_id = fields.get("utterance_id", "").strip()
@@ -398,6 +428,7 @@ class VoiceBridge:
             cached = self.sessions.begin_transcription(session, turn_id, utterance_id)
             if cached is not None:
                 return _json({**cached, "duplicate": True})
+            claimed = True
             if not data:
                 raise VoiceError(400, "The recording is empty.")
             if len(data) > MAX_AUDIO_BYTES:
@@ -417,15 +448,15 @@ class VoiceBridge:
             }
             return _json(self.sessions.complete_transcription(session, payload))
         except VoiceError as exc:
-            if session is not None:
+            if claimed and session is not None:
                 self.sessions.release_transcription(session)
             return _error(exc)
         except ValueError as exc:
-            if session is not None:
+            if claimed and session is not None:
                 self.sessions.release_transcription(session)
             return _json({"error": str(exc) or "Transcription failed."}, status=400)
         except Exception:
-            if session is not None:
+            if claimed and session is not None:
                 self.sessions.release_transcription(session)
             logger.warning("[winglet] voice transcription failed", exc_info=True)
             return _json({"error": "Transcription failed. Try again."}, status=502)
@@ -434,6 +465,7 @@ class VoiceBridge:
 
     async def h_voice_speak(self, request: web.Request) -> web.Response:
         session: Optional[Dict[str, Any]] = None
+        claimed = False
         try:
             self._speech()
             body = await self._body(request)
@@ -451,6 +483,7 @@ class VoiceBridge:
             if turn is not None and turn["status"] == "cancelled":
                 raise VoiceError(409, "That turn was interrupted.")
             self.sessions.claim_synthesis(session)
+            claimed = True
             audio, mime, provider = await self._speech().speak(text)
             if not audio:
                 raise VoiceError(502, "Speech synthesis returned no audio.")
@@ -466,7 +499,7 @@ class VoiceBridge:
             logger.warning("[winglet] voice synthesis failed", exc_info=True)
             return _json({"error": "Speech synthesis failed. Try again."}, status=502)
         finally:
-            if session is not None:
+            if claimed and session is not None:
                 self.sessions.release_synthesis(session)
 
     async def h_voice_stop(self, request: web.Request) -> web.Response:
@@ -475,8 +508,22 @@ class VoiceBridge:
             session = self._session(request, body)
             turn_id = str(body.get("turn_id") or "").strip() or None
             cancelled, revoked = self.sessions.cancel(session, turn_id)
+            generation_stopped = None
+            if body.get("stop_generation") is True:
+                if self.hub.on_user_message is None:
+                    raise VoiceError(503, "Generation cancellation is unavailable.")
+                device = self.hub._require(request)
+                await self.hub.user_message(device, session["chat_id"], "/stop",
+                                            "voice-stop-" + secrets.token_hex(8), hidden=True)
+                deadline = time.monotonic() + 12
+                while session["chat_id"] in self.hub._typing and time.monotonic() < deadline:
+                    await asyncio.sleep(0.1)
+                # Server typing tracks the actual adapter lifecycle; no client TTL is used as an acknowledgement.
+                generation_stopped = session["chat_id"] not in self.hub._typing
+                if not generation_stopped:
+                    raise VoiceError(409, "Stop requested; the agent has not acknowledged it yet.")
             return _json({"stopped": True, "turn_id": turn_id or "",
-                          "cancelled_turns": cancelled, "revoked_audio": revoked,
+                          "cancelled_turns": cancelled, "revoked_audio": revoked, "generation_stopped": generation_stopped,
                           "already": not cancelled and not revoked})
         except VoiceError as exc:
             return _error(exc)
@@ -492,13 +539,22 @@ class VoiceBridge:
 
     async def h_voice_audio(self, request: web.Request) -> web.StreamResponse:
         try:
+            speech_id = request.match_info["speech_id"]
+            for session in list(self.sessions._sessions.values()):
+                if speech_id not in session["speech"]:
+                    continue
+                device = self.hub.current_device(session["device_id"])
+                chat = self.hub.store.get_chat(session["chat_id"])
+                if device is None or not self.hub.can_see(device, chat) or (chat.get("bot") or None) != session["bot"]:
+                    self.sessions.close(session)
+                    raise VoiceError(404, "That audio expired.")
             exp = int(request.query.get("exp") or 0)
             path, mime = self.sessions.speech_path(request.match_info["speech_id"],
                                                   request.query.get("sig", ""), exp)
         except (ValueError, VoiceError):
             return _json({"error": "not found"}, status=404)
         return web.FileResponse(path, headers={
-            "Cache-Control": "private, max-age=60",
+            "Cache-Control": "no-store",
             "Content-Type": mime,
             "Content-Disposition": "inline",
             "Content-Security-Policy": "default-src 'none'; sandbox",
@@ -519,13 +575,25 @@ class VoiceBridge:
                 break
             if part.name == "audio":
                 mime = (part.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
-                data = await part.read(decode=True)
+                chunks = bytearray()
+                while True:
+                    chunk = await part.read_chunk()
+                    if not chunk:
+                        break
+                    chunks.extend(chunk)
+                    if len(chunks) > MAX_AUDIO_BYTES:
+                        raise VoiceError(413, "That recording is too long.")
+                data = bytes(chunks)
             else:
                 if part.name in fields:
                     continue
                 # Fields are small ids; cap each so a hostile client can't grow memory with text.
-                raw = await part.read(decode=True)
-                fields[part.name] = raw[:2000].decode("utf-8", "replace").strip()
+                if len(fields) >= 8 or part.name not in {"session_id", "token", "turn_id", "utterance_id", "duration_ms"}:
+                    raise VoiceError(400, "Unexpected audio field.")
+                raw = await part.read_chunk()
+                if len(raw) > 2000 or not part.at_eof():
+                    raise VoiceError(400, "Audio field is too large.")
+                fields[part.name] = raw.decode("utf-8", "replace").strip()
         return fields, data, mime
 
     async def _write_temp(self, data: bytes, mime: str) -> str:

@@ -381,3 +381,99 @@ def test_turn_buffer_is_bounded(tmp_path):
 
 def test_new_id_shape():
     assert len(new_id()) == 16 and new_id() != new_id()
+
+async def test_refused_transcription_does_not_release_another_request(client, hub):
+    token = await pair(client, hub)
+    session = await open_session(client, token)
+    hub.speech.gate = asyncio.Event()
+    first = asyncio.create_task(transcribe(client, token, session))
+    await asyncio.sleep(0.03)
+    assert (await transcribe(client, token, session, utterance_id="u2")).status == 429
+    assert (await transcribe(client, token, session, utterance_id="u3")).status == 429
+    hub.speech.gate.set()
+    assert (await first).status == 200
+    assert len(hub.speech.transcripts) == 1
+
+
+async def test_cancel_while_transcribing_refuses_late_result_and_cached_retry(client, hub):
+    token = await pair(client, hub)
+    session = await open_session(client, token)
+    hub.speech.gate = asyncio.Event()
+    pending = asyncio.create_task(transcribe(client, token, session))
+    await asyncio.sleep(0.03)
+    stop = await client.post(f"/api/voice/sessions/{session['session_id']}/stop",
+                            json={"token": session["token"], "turn_id": "t1"}, headers=auth(token))
+    assert stop.status == 200
+    hub.speech.gate.set()
+    assert (await pending).status == 409
+    assert (await transcribe(client, token, session)).status == 409
+    assert not hub.voice.sessions._sessions[session["session_id"]]["results"]
+
+
+async def test_closed_session_cannot_mint_late_audio_or_release_other_synthesis(client, hub):
+    token = await pair(client, hub)
+    session = await open_session(client, token)
+    gate = asyncio.Event()
+    async def held(text):
+        await gate.wait()
+        return b"speech", "audio/mpeg", "edge"
+    hub.speech.speak = held
+    pending = asyncio.create_task(speak(client, token, session))
+    await asyncio.sleep(0.03)
+    assert (await speak(client, token, session, turn_id="t2")).status == 429
+    assert (await speak(client, token, session, turn_id="t3")).status == 429
+    await client.post(f"/api/voice/sessions/{session['session_id']}/end",
+                      json={"token": session["token"]}, headers=auth(token))
+    gate.set()
+    assert (await pending).status == 404
+    assert not list(hub.voice.sessions.directory.glob("sp_*"))
+
+
+async def test_voice_open_requires_matching_chat_bot(client, hub):
+    token = await pair(client, hub)
+    hub.store.ensure_chat("other-chat", "Other", bot="other")
+    response = await client.post("/api/voice/sessions", json={"chat_id": "other-chat"}, headers=auth(token))
+    assert response.status == 404
+
+
+async def test_generation_stop_waits_for_actual_adapter_lifecycle(client, hub):
+    token = await pair(client, hub)
+    session = await open_session(client, token)
+    called = asyncio.Event()
+    release = asyncio.Event()
+    async def inbound(chat, text, device, message, **kwargs):
+        assert text == "/stop" and chat["id"] == "general"
+        called.set()
+        await release.wait()
+        await hub.set_typing("general", False)
+    hub.on_user_message = inbound
+    await hub.set_typing("general", True)
+    pending = asyncio.create_task(client.post(f"/api/voice/sessions/{session['session_id']}/stop",
+        json={"token": session["token"], "turn_id": "t1", "stop_generation": True}, headers=auth(token)))
+    await called.wait()
+    assert not pending.done()
+    release.set()
+    response = await pending
+    assert response.status == 200
+    assert (await response.json())["generation_stopped"] is True
+    assert "general" not in hub._typing
+
+
+async def test_generation_stop_unavailable_is_not_acknowledged(client, hub):
+    token = await pair(client, hub)
+    session = await open_session(client, token)
+    response = await client.post(f"/api/voice/sessions/{session['session_id']}/stop",
+        json={"token": session["token"], "turn_id": "t1", "stop_generation": True}, headers=auth(token))
+    assert response.status == 503
+
+
+def test_evicted_turn_ids_cannot_be_reused(tmp_path):
+    sessions = VoiceSessions(tmp_path / "voice", "secret")
+    session = sessions.open("d", "general", None)
+    sessions.turn(session, "old")
+    sessions.cancel(session, "old")
+    for i in range(20):
+        sessions.turn(session, f"new{i}")
+    with pytest.raises(VoiceError) as e:
+        sessions.begin_transcription(session, "old", "late")
+    assert e.value.status == 409

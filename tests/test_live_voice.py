@@ -477,3 +477,71 @@ def test_evicted_turn_ids_cannot_be_reused(tmp_path):
     with pytest.raises(VoiceError) as e:
         sessions.begin_transcription(session, "old", "late")
     assert e.value.status == 409
+
+@pytest.mark.parametrize("operation", ["transcribe", "speak"])
+@pytest.mark.parametrize("revoke", ["remove", "demote", "delete_chat", "change_bot"])
+async def test_inflight_work_rechecks_current_authority(client, hub, operation, revoke):
+    token = await pair(client, hub)
+    await pair(client, hub, name="Remaining owner")
+    session = await open_session(client, token)
+    device = hub.store.device_for_token(token)
+    gate = asyncio.Event()
+    started = asyncio.Event()
+    async def held(*args):
+        started.set()
+        await gate.wait()
+        if operation == "transcribe":
+            return {"text": "Must not disclose after revocation", "provider": "fixture"}
+        return b"speech", "audio/mpeg", "fixture"
+    setattr(hub.speech, operation, held)
+    pending = asyncio.create_task(transcribe(client, token, session) if operation == "transcribe"
+                                  else speak(client, token, session))
+    await started.wait()
+    if revoke == "remove":
+        hub.store.remove_device(device["id"])
+    elif revoke == "demote":
+        hub.store.update_device(device["id"], role="member")
+    elif revoke == "delete_chat":
+        hub.store.delete_chat("general")
+    else:
+        hub.store._exec("UPDATE chats SET bot = ? WHERE id = ?", ("other", "general"))
+    gate.set()
+    response = await pending
+    assert response.status == 404
+    assert "Must not disclose" not in await response.text()
+    assert session["session_id"] not in hub.voice.sessions._sessions
+    assert not list(hub.voice.sessions.directory.glob("sp_*"))
+
+
+@pytest.mark.parametrize("revoke", ["remove", "demote"])
+async def test_signed_audio_does_not_use_cached_device_authority(client, hub, revoke):
+    token = await pair(client, hub)
+    await pair(client, hub, name="Remaining owner")
+    session = await open_session(client, token)
+    device = hub.store.device_for_token(token)
+    hub.current_device(device["id"])  # prime the hub's two-second cache
+    response = await speak(client, token, session)
+    assert response.status == 200
+    url = (await response.json())["url"]
+    if revoke == "remove":
+        hub.store.remove_device(device["id"])
+    else:
+        hub.store.update_device(device["id"], role="member")
+    assert (await client.get(url)).status == 404
+
+
+@pytest.mark.parametrize("operation", ["transcribe", "speak"])
+async def test_provider_secrets_are_not_returned_or_logged(client, hub, caplog, operation):
+    token = await pair(client, hub)
+    session = await open_session(client, token)
+    secret = "sk-fixture-secret-1234567890 Bearer dummy-private-token password=dummy-password"
+    async def failed(*args):
+        raise ValueError(secret)
+    setattr(hub.speech, operation, failed)
+    response = await (transcribe(client, token, session) if operation == "transcribe"
+                      else speak(client, token, session))
+    assert response.status == 400
+    assert "fixture-secret" not in await response.text()
+    assert "dummy-private" not in caplog.text
+    from plugin.hermes_api import _speech_error
+    assert "dummy" not in _speech_error(secret)

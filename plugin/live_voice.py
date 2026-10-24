@@ -369,7 +369,20 @@ class VoiceBridge:
         if chat is None or not self.hub.can_see(device, chat) or (chat.get("bot") or None) != self.hub.bot_name():
             self.sessions.close(session)
             raise VoiceError(404, "This chat is no longer available.")
+        self._current_authority(session)
         return session
+
+    def _current_authority(self, session: Dict[str, Any]) -> Dict[str, Any]:
+        """Recheck the database after awaited work; cached pairing state is not an ACL."""
+        self.sessions.live(session)
+        device = self.hub.store.get_device(session["device_id"])
+        chat = self.hub.store.get_chat(session["chat_id"])
+        if (device is None or chat is None or not self.hub.can_see(device, chat)
+                or (chat.get("bot") or None) != session["bot"]
+                or (session["bot"] and device.get("role") != "owner")):
+            self.sessions.close(session)
+            raise VoiceError(404, "This voice session is no longer authorized.")
+        return device
 
     async def _body(self, request: web.Request) -> Dict[str, Any]:
         try:
@@ -385,7 +398,10 @@ class VoiceBridge:
     async def h_voice_session(self, request: web.Request) -> web.Response:
         try:
             self._speech()
-            device = self.hub._require(request)
+            paired = self.hub._require(request)
+            device = self.hub.store.get_device(paired["id"])
+            if device is None or (self.hub.bot_name() and device.get("role") != "owner"):
+                raise VoiceError(404, "This device is no longer authorized.")
             body = await self._body(request)
             chat_id = str(body.get("chat_id") or "")
             chat = self.hub.store.get_chat(chat_id)
@@ -425,6 +441,7 @@ class VoiceBridge:
                 raise VoiceError(400, "turn_id and utterance_id are required.")
             if len(turn_id) > 80 or len(utterance_id) > 80:
                 raise VoiceError(400, "invalid turn id")
+            self._current_authority(session)
             cached = self.sessions.begin_transcription(session, turn_id, utterance_id)
             if cached is not None:
                 return _json({**cached, "duplicate": True})
@@ -437,7 +454,9 @@ class VoiceBridge:
                 raise VoiceError(400, "Send an audio recording.")
             self.sessions._unlink(audio_path)
             audio_path = await self._write_temp(data, mime)
+            self._current_authority(session)
             result = await self._speech().transcribe(audio_path, mime)
+            self._current_authority(session)
             transcript = str(result.get("text") or "").strip()
             no_speech = bool(result.get("no_speech")) or not transcript
             payload = {
@@ -454,11 +473,11 @@ class VoiceBridge:
         except ValueError as exc:
             if claimed and session is not None:
                 self.sessions.release_transcription(session)
-            return _json({"error": str(exc) or "Transcription failed."}, status=400)
+            return _json({"error": "Transcription failed. Check the configured speech provider and try again."}, status=400)
         except Exception:
             if claimed and session is not None:
                 self.sessions.release_transcription(session)
-            logger.warning("[winglet] voice transcription failed", exc_info=True)
+            logger.warning("[winglet] voice transcription provider failed")
             return _json({"error": "Transcription failed. Try again."}, status=502)
         finally:
             self.sessions._unlink(audio_path)
@@ -484,7 +503,9 @@ class VoiceBridge:
                 raise VoiceError(409, "That turn was interrupted.")
             self.sessions.claim_synthesis(session)
             claimed = True
+            self._current_authority(session)
             audio, mime, provider = await self._speech().speak(text)
+            self._current_authority(session)
             if not audio:
                 raise VoiceError(502, "Speech synthesis returned no audio.")
             stored = self.sessions.store_speech(session, turn_id, audio, mime, provider, message_id)
@@ -492,11 +513,11 @@ class VoiceBridge:
         except VoiceError as exc:
             return _error(exc)
         except ValueError as exc:
-            return _json({"error": str(exc) or "Speech synthesis failed."}, status=400)
+            return _json({"error": "Speech synthesis failed. Check the configured speech provider and try again."}, status=400)
         except TimeoutError:
             return _json({"error": "Speech synthesis timed out."}, status=504)
         except Exception:
-            logger.warning("[winglet] voice synthesis failed", exc_info=True)
+            logger.warning("[winglet] voice synthesis provider failed")
             return _json({"error": "Speech synthesis failed. Try again."}, status=502)
         finally:
             if claimed and session is not None:
@@ -519,6 +540,7 @@ class VoiceBridge:
                 while session["chat_id"] in self.hub._typing and time.monotonic() < deadline:
                     await asyncio.sleep(0.1)
                 # Server typing tracks the actual adapter lifecycle; no client TTL is used as an acknowledgement.
+                self._current_authority(session)
                 generation_stopped = session["chat_id"] not in self.hub._typing
                 if not generation_stopped:
                     raise VoiceError(409, "Stop requested; the agent has not acknowledged it yet.")
@@ -543,9 +565,9 @@ class VoiceBridge:
             for session in list(self.sessions._sessions.values()):
                 if speech_id not in session["speech"]:
                     continue
-                device = self.hub.current_device(session["device_id"])
+                device = self.hub.store.get_device(session["device_id"])
                 chat = self.hub.store.get_chat(session["chat_id"])
-                if device is None or not self.hub.can_see(device, chat) or (chat.get("bot") or None) != session["bot"]:
+                if device is None or not self.hub.can_see(device, chat) or (chat.get("bot") or None) != session["bot"] or (session["bot"] and device.get("role") != "owner"):
                     self.sessions.close(session)
                     raise VoiceError(404, "That audio expired.")
             exp = int(request.query.get("exp") or 0)

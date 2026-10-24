@@ -76,14 +76,15 @@ def speech_available() -> bool:
         from tools.voice_mode import transcribe_recording
         from tools.tts_tool import text_to_speech_tool
     except Exception:
-        logger.debug("[winglet] speech functions unavailable", exc_info=True)
+        logger.debug("[winglet] speech functions unavailable")
         return False
     return callable(transcribe_recording) and callable(text_to_speech_tool)
 
 
 def _speech_error(message: str) -> str:
     """A user-facing reason, on one line and short enough for a phone toast."""
-    return " ".join(str(message or "Speech failed.").split())[:300]
+    # Provider responses may embed credentials, signed URLs or private request bodies.
+    return "Speech provider failed. Check the configured speech provider and try again."
 
 
 class SpeechBackend:
@@ -105,13 +106,13 @@ class SpeechBackend:
             with _profile_scope():
                 out["stt"]["provider"] = str(stt_provider(_load_stt_config()) or "")
         except Exception:
-            logger.debug("[winglet] could not read the STT provider", exc_info=True)
+            logger.debug("[winglet] could not read the STT provider")
         try:
             from tools.tts_tool import _get_provider as tts_provider, _load_tts_config
             with _profile_scope():
                 out["tts"]["provider"] = str(tts_provider(_load_tts_config()) or "")
         except Exception:
-            logger.debug("[winglet] could not read the TTS provider", exc_info=True)
+            logger.debug("[winglet] could not read the TTS provider")
         return out
 
     async def transcribe(self, path: str, mime: str) -> dict:
@@ -126,7 +127,7 @@ class SpeechBackend:
         try:
             result = await asyncio.to_thread(run)
         except Exception as exc:
-            logger.warning("[winglet] speech-to-text failed: %s", exc)
+            logger.warning("[winglet] speech-to-text provider failed")
             raise ValueError(_speech_error(f"Transcription failed: {exc}")) from exc
         if not isinstance(result, dict):
             raise ValueError("Transcription failed: unexpected response.")

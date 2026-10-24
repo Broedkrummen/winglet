@@ -145,9 +145,12 @@ async def test_failed_stop_is_replayed_for_same_operation_and_a_new_attempt_is_e
     await service.stop({'id':'general'},h,'new-operation-123456')
     await service.close()
     assert service.bridge.calls==2
+    old_replay=await service.stop({'id':'general'},h,'failed-operation-123')
+    assert old_replay==replay and service.bridge.calls==2
 
 
-async def test_older_slow_output_redaction_cannot_roll_back_newer_output(monkeypatch,service):
+@pytest.mark.parametrize('sandbox_counter', [False, True])
+async def test_older_slow_output_redaction_cannot_roll_back_newer_output(monkeypatch,service,sandbox_counter):
     h=await handle(service)
     entered=threading.Event(); release=threading.Event()
     def delayed(value,limit):
@@ -157,16 +160,41 @@ async def test_older_slow_output_redaction_cannot_roll_back_newer_output(monkeyp
         return value[-limit:]
     monkeypatch.setattr(module,'sanitized',delayed)
     item=service.bridge.item
-    item.output_buffer='old'; item.total_output_chars=3
+    item.output_buffer='old'; item.total_output_chars=0 if sandbox_counter else 3
     older=asyncio.create_task(service.detail({'id':'general'},h))
     while not entered.is_set(): await asyncio.sleep(.01)
-    item.output_buffer='old-new'; item.total_output_chars=7
+    item.output_buffer='old-new'; item.total_output_chars=0 if sandbox_counter else 7
     newer=await service.detail({'id':'general'},h)
     release.set()
     late=await older
     assert newer['output']['text']=='old-new'
     assert late['output']['text']=='old-new'
     assert late['output']['cursor']==newer['output']['cursor']
+
+
+async def test_stop_receipts_are_bounded_without_reexecuting_evicted_operations(monkeypatch,service):
+    monkeypatch.setattr(module,'MAX_STOP_RECEIPTS',2)
+    def failed(item):
+        service.bridge.calls+=1
+        return {'status':'error','error':'Process is still running'}
+    service.bridge.stop=failed
+    h=await handle(service)
+    for operation in ['first-operation-123','second-operation-123']:
+        await service.stop({'id':'general'},h,operation)
+        await service.close()
+    with pytest.raises(ProcessRefused) as error:
+        await service.stop({'id':'general'},h,'third-operation-123')
+    assert error.value.code=='stale'
+    assert (await service.stop({'id':'general'},h,'first-operation-123'))['status']=='failed'
+    assert service.bridge.calls==2
+    fresh=await handle(service)
+    assert fresh!=h and len(service._leases)==1
+    with pytest.raises(ProcessRefused):
+        await service.stop({'id':'general'},h,'first-operation-123')
+    assert service.bridge.calls==2
+    await service.stop({'id':'general'},fresh,'third-operation-123')
+    await service.close()
+    assert service.bridge.calls==3
 
 
 @pytest.fixture

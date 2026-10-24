@@ -13,6 +13,7 @@ from typing import Any, Optional
 MAX_PROCESSES = 80
 MAX_HANDLES = 512
 MAX_STOPS = 8
+MAX_STOP_RECEIPTS = 32
 OUTPUT_CHARS = 16_384  # <=64 KiB UTF-8, independently of upstream retention
 HANDLE_TTL = 3600
 
@@ -46,8 +47,12 @@ class Lease:
     revision: int = 0
     previous_revision: int = -1
     delta: Optional[str] = None
-    output_total: int = -1
+    read_sequence: int = 0
+    output_sequence: int = 0
+    truncated: bool = False
+    unavailable: bool = False
     stop: Optional[dict] = None
+    stop_receipts: dict[str, dict] = field(default_factory=dict)
     stop_task: Optional[asyncio.Task] = None
     stop_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -175,6 +180,11 @@ class Processes:
             stamp = generation(item)
             for handle, lease in self._leases.items():
                 if lease.scope == scope and lease.generation == stamp:
+                    # A fresh listing rotates exhausted links. Old request IDs then
+                    # fail closed instead of becoming executable after cache eviction.
+                    if len(lease.stop_receipts) >= MAX_STOP_RECEIPTS and (lease.stop_task is None or lease.stop_task.done()):
+                        self._leases.pop(handle)
+                        break
                     lease.touched = self.clock()
                     self._leases.move_to_end(handle)
                     return lease
@@ -224,13 +234,21 @@ class Processes:
         with item._lock:
             raw = item.output_buffer[-65_536:]
             total = item.total_output_chars
+            unavailable = bool(item.detached) and not raw
+        with self._lock:
+            lease.read_sequence += 1
+            sequence = lease.read_sequence
         # Redact the entire retained tail before deriving a delta, including cross-chunk tokens.
         text = await asyncio.to_thread(sanitized, raw, OUTPUT_CHARS)
         with self._lock:
-            if total < lease.output_total:
+            if sequence < lease.output_sequence:
                 text = lease.output  # an older, slower redaction must not roll back a newer read
             else:
-                lease.output_total = total
+                # Hermes sandbox pollers don't consistently advance total_output_chars.
+                # Order our snapshots independently of that upstream counter.
+                lease.output_sequence = sequence
+                lease.truncated = total > len(raw) or len(raw) > OUTPUT_CHARS
+                lease.unavailable = unavailable
             if text != lease.output:
                 previous = lease.output
                 lease.previous_revision = lease.revision
@@ -242,8 +260,7 @@ class Processes:
             reset = not (same or incremental)
             output = "" if same else lease.delta if incremental else text
             page = {"cursor": str(lease.revision), "reset": reset, "text": output,
-                    "truncated": total > len(raw) or len(raw) > OUTPUT_CHARS,
-                    "unavailable": bool(item.detached) and not raw}
+                    "truncated": lease.truncated, "unavailable": lease.unavailable}
         return {"process": self._public(item, lease), "output": page}
 
     async def stop(self, chat: dict, handle: str, operation_id: str) -> dict:
@@ -252,20 +269,24 @@ class Processes:
             raise ProcessRefused("invalid", "Expected a valid operation ID.", 400)
         item, lease = await asyncio.to_thread(self._resolve, chat, handle)
         async with lease.stop_lock:
+            if operation_id in lease.stop_receipts:
+                return lease.stop_receipts[operation_id]
             if lease.stop_task is not None and not lease.stop_task.done():
                 return lease.stop
-            if lease.stop is not None and lease.stop.get("operation_id") == operation_id:
-                return lease.stop  # replay failed/uncertain outcomes too; a new attempt needs a new ID
             if lease.stop is not None and lease.stop.get("status") in ("stopped", "already_exited"):
                 return lease.stop
+            if len(lease.stop_receipts) >= MAX_STOP_RECEIPTS:
+                raise ProcessRefused("stale", "This process link reached its attempt limit. Reload the process list.")
             if item.exited:
                 lease.stop = {"operation_id": operation_id, "status": "already_exited", "message": "It had already finished."}
+                lease.stop_receipts[operation_id] = lease.stop
                 return lease.stop
             if item.detached and item.process is None and item.env_ref is None and item._pty is None and item.host_start_time is None:
                 raise ProcessRefused("unverifiable", "Hermes can't verify this recovered process's identity. Stop it on the server.")
             if sum(x.stop_task is not None and not x.stop_task.done() for x in self._leases.values()) >= MAX_STOPS:
                 raise ProcessRefused("busy", "Too many processes are being stopped. Try again shortly.")
             lease.stop = {"operation_id": operation_id, "status": "stopping", "message": "Waiting for Hermes to confirm the stop."}
+            lease.stop_receipts[operation_id] = lease.stop
             lease.stop_task = asyncio.create_task(self._stop_work(chat, handle, lease))
             return lease.stop
 
@@ -284,6 +305,7 @@ class Processes:
             answer = {"status": "failed", "message": sanitized(str(exc), 300)}
         with self._lock:
             lease.stop = {"operation_id": lease.stop["operation_id"], **answer}
+            lease.stop_receipts[lease.stop["operation_id"]] = lease.stop
 
     async def close(self):
         # Do not cancel a thread already terminating an owned process. Let it report the result.

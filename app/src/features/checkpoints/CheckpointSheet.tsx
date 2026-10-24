@@ -126,9 +126,9 @@ export function CheckpointSheet({ server, checkpoint, visible, online, busy, onC
   const blocked = preview ? restoreBlocker(preview, { online, busy: preview.busy?.length ? preview.busy : busy }) : '';
   const panelHeight = wide ? Math.min(height - 56, 840) : Math.max(320, height - insets.top - 8);
   const diffHeight = wide ? Math.min(430, Math.round(panelHeight * 0.52)) : Math.max(120, Math.round(panelHeight * 0.4));
-  // On a phone the diff sheet fills the screen; on a wide screen it is a compact dialog. Confirming or
-  // reading a result is always compact.
-  const fullHeight = step === 'preview' && !wide;
+  // Native ScrollView needs a bounded parent height. maxHeight alone lets the
+  // flex body collapse, hiding restore details while leaving the action visible.
+  const sheetHeight = step === 'preview' ? panelHeight : Math.min(panelHeight, step === 'running' ? 320 : 660);
 
   if (!shown) return null;
 
@@ -140,9 +140,9 @@ export function CheckpointSheet({ server, checkpoint, visible, online, busy, onC
           <Tap feedback="none" accessible={false} onPress={close} style={StyleSheet.absoluteFill} />
         </View>
         <View style={[s.panel, wide ? s.panelWide : s.panelPhone,
-          fullHeight ? { height: panelHeight } : { maxHeight: panelHeight }]} accessibilityViewIsModal>
-          <Glass style={[s.glass, wide && { borderRadius: t.radius.xl }, { paddingBottom: wide ? 16 : insets.bottom + 12 },
-            fullHeight && { flex: 1 }]}>
+          { height: sheetHeight }]} accessibilityViewIsModal>
+          <Glass style={[s.glass, wide && { borderRadius: t.radius.xl },
+            { flex: 1, paddingBottom: wide ? 16 : insets.bottom + 12 }]}>
             <View style={s.heading}>
               <View style={{ flex: 1, minWidth: 0 }}>
                 <Text style={s.headingTitle} accessibilityRole="header" numberOfLines={2}>

@@ -119,7 +119,7 @@ export function actionHint(mode: BranchMode, later: number, where: BranchWhere =
     return `Your original message and ${later - 1} later ${later - 1 === 1 ? 'message stay' : 'messages stay'} in the original chat.`;
   }
   if (where === 'in_place') return 'Replaces this reply in the current chat. This cannot be undone.';
-  return 'The prompt and this reply are copied to a new chat; the original chat stays exactly as it is.';
+  return 'The prompt is sent again in a new chat using the earlier context. Your original reply stays in the original chat.';
 }
 
 export function destinationNote(mode: BranchMode, where: BranchWhere = 'new'): string {

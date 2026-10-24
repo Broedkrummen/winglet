@@ -1,3 +1,4 @@
+import { phoneHello, phoneEvent, phoneDisconnect, phoneVisibility } from '../features/phone-tools/runtime';
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import { Platform } from 'react-native';
@@ -334,6 +335,7 @@ export const useApp = create<AppState>((set, get) => {
   const handleEvent = (serverId: string, ev: any) => {
     const server = get().servers.find((s) => s.id === serverId);
     if (!server) return;
+    if (typeof ev.type === 'string' && ev.type.startsWith('phone_tool.')) { phoneEvent(serverId, ev); return; }
     switch (ev.type) {
       case 'hello': {
         const chats: Record<string, Chat> = {};
@@ -370,6 +372,7 @@ export const useApp = create<AppState>((set, get) => {
           get().loadMessages(serverId, vis.chatId);
           get().loadTask(serverId, vis.chatId, true);
         }
+        if (info.features.phone_tools) phoneHello(server, event => connections.get(serverId)?.send(event));
         flushOutbox(serverId);
         break;
       }
@@ -477,7 +480,7 @@ export const useApp = create<AppState>((set, get) => {
       onStatus: (status, why) => {
         patch(server.id, () => ({ status }));
         note(server.id, status, why);
-        if (status !== 'online') sendPaused.add(server.id);
+        if (status !== 'online') { sendPaused.add(server.id); phoneDisconnect(server.id); }
       },
       onDetail: (detail) => patch(server.id, (s) => ({ conn: { ...s.conn, ...detail } })),
       onRecovering: (on) => {
@@ -662,6 +665,7 @@ export const useApp = create<AppState>((set, get) => {
     setForeground: (fg) => {
       set({ foreground: fg, ...(!fg ? { toasts: [] } : {}) });
       coordinator.setForeground(fg);
+      phoneVisibility(fg);
       connections.forEach((c) => c.presence(fg));
       if (fg) connections.forEach((c) => c.ensureOpen());
     },

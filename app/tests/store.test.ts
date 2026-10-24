@@ -72,6 +72,7 @@ function harness(os = 'web') {
     'zustand/react/shallow': { useShallow: (fn: any) => fn },
     'react-native': { Platform: { OS: os } },
     './recovery': { RecoveryCoordinator: FakeCoordinator },
+    '../features/phone-tools/runtime': { phoneHello: () => {}, phoneEvent: () => {}, phoneDisconnect: () => {}, phoneVisibility: () => {} },
     './messages': helpers,
     '../features/projects/logic': projectHelpers,
     './api': { api: (...args: any[]) => request(...args), ApiError, wsUrl: (s: any) => s.url,

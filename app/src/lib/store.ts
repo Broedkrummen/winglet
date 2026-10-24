@@ -8,7 +8,8 @@ import { cacheGet, cacheRemove, cacheSet } from './cache';
 import { isNotifiable, markFailed, mergeMessages } from './messages';
 import { getJSON, setJSON } from './storage';
 import { NEEDS_VERIFY } from './verify';
-import type { Attachment, BotRow, Chat, ConnStatus, DraftFile, InboxItem, Job, Me, Message, PauseState, PetSheet, Project, ProjectSnapshot, ReplyRef, Server, ServerInfo } from './types';
+import type { Attachment, BotRow, Chat, ConnStatus, DraftFile, InboxItem, Job, Me, Message, PauseState, PetSheet, Project, ProjectSnapshot, ReplyRef, Server, ServerInfo, TaskCapabilities, TaskEnvelope, TaskSnapshot } from './types';
+import { applyEvent, applySnapshot } from '../features/execution/model';
 import { applyOrder, EMPTY_PROJECTS, readSnapshot } from '../features/projects/logic';
 
 const SERVERS_KEY = 'winglet.servers';
@@ -62,6 +63,10 @@ export type ServerState = {
   job?: Job;
   /** The agent's pet, its animated face: null when it has none, undefined until known. */
   pet?: PetSheet | null;
+  /** Structured task activity per chat, from the server's `task.*` events and snapshots. */
+  tasks: Record<string, TaskSnapshot>;
+  /** What this server lets a client do to a delegated task; absent means unsupported. */
+  taskCaps?: TaskCapabilities;
   /** Server-persisted folders for this bot's chats; undefined on a server without the feature. */
   projects?: ProjectSnapshot;
 };
@@ -97,6 +102,8 @@ type AppState = {
   loadMessages: (serverId: string, chatId: string, older?: boolean) => Promise<boolean>;
   loadInbox: (serverId: string) => Promise<void>;
   loadPet: (serverId: string) => Promise<void>;
+  /** Fetch the bounded structured task snapshot for a chat (after opening it, reconnecting, or starting work). */
+  loadTask: (serverId: string, chatId: string, force?: boolean) => Promise<void>;
   /** Match a server's other bots to the list it sent: add new ones, drop removed ones, keep names current. */
   syncBots: (serverId: string, bots: BotRow[]) => Promise<void>;
   sendMessage: (serverId: string, chatId: string, text: string, opts?: string | SendOptions) => Promise<void>;
@@ -126,7 +133,7 @@ type AppState = {
 
 export const emptyRuntime = (): ServerState => ({
   status: 'connecting', conn: { recovering: false, history: [] }, chats: {}, messages: {}, deleted: {}, loaded: {},
-  inbox: {}, pending: 0, typing: {}, outbox: [],
+  inbox: {}, pending: 0, typing: {}, outbox: [], tasks: {},
 });
 
 export const draftKey = (serverId: string, chatId: string) => `${serverId}:${chatId}`;
@@ -141,6 +148,8 @@ const connections = new Map<string, Connection>();
 const coordinator = new RecoveryCoordinator();
 /** Per-bot send queue: keeps messages in order, and stops at the first one the network loses. */
 const sendChains = new Map<string, Promise<void>>();
+/** Last structured-task fetch per server+chat, so opening a sheet repeatedly doesn't hammer the server. */
+const taskLoads = new Map<string, number>();
 const sendPaused = new Set<string>();
 
 /** A network failure is worth retrying later; an HTTP error from the server is not. */
@@ -244,7 +253,8 @@ export const useApp = create<AppState>((set, get) => {
       const { [chatId]: _deleted, ...deleted } = s.deleted;
       const { [chatId]: _loaded, ...loaded } = s.loaded;
       const { [chatId]: _typing, ...typing } = s.typing;
-      return { chats, messages, deleted, loaded, typing, outbox: s.outbox.filter((o) => o.chat_id !== chatId) };
+      const { [chatId]: _task, ...tasks } = s.tasks;
+      return { chats, messages, deleted, loaded, typing, tasks, outbox: s.outbox.filter((o) => o.chat_id !== chatId) };
     });
     const key = draftKey(serverId, chatId);
     set((state) => {
@@ -336,7 +346,9 @@ export const useApp = create<AppState>((set, get) => {
           : info.protocol < MIN_SERVER_PROTOCOL ? 'update-server' as const : undefined;
         const projects = ev.projects ? readSnapshot(ev.projects) : undefined;
         patch(serverId, () => ({ status: 'online', chats, typing, pending: ev.pending ?? 0, loaded: {}, info, compat,
-          me: ev.me as Me | undefined, paused: (ev.paused ?? null) as PauseState, projects }));
+          me: ev.me as Me | undefined, paused: (ev.paused ?? null) as PauseState, projects,
+          // A fresh connection may be a restarted server: drop old task snapshots and refetch when visible.
+          tasks: {}, taskCaps: { subagent_stop: info.features.subagent_stop === true } }));
         // From now on, send the token in the socket's first frame rather than the URL.
         if (server && info.features.ws_auth && !server.wsAuth) get().updateServer(serverId, { wsAuth: true });
         cacheSet(`chats:${serverId}`, chats);
@@ -352,8 +364,25 @@ export const useApp = create<AppState>((set, get) => {
         const sel = get().selection;
         if (sel.serverId === serverId && sel.chatId && !chats[sel.chatId]) get().select(serverId, homeChat(get().runtime[serverId]));
         const vis = get().visibleChat;
-        if (vis?.serverId === serverId) get().loadMessages(serverId, vis.chatId);
+        if (vis?.serverId === serverId) {
+          get().loadMessages(serverId, vis.chatId);
+          get().loadTask(serverId, vis.chatId, true);
+        }
         flushOutbox(serverId);
+        break;
+      }
+      case 'task.snapshot': {
+        const snapshot = ev.snapshot as TaskSnapshot | undefined;
+        if (!snapshot || snapshot.chat_id !== ev.chat_id) break;
+        patch(serverId, (s) => ({ tasks: { ...s.tasks, [ev.chat_id]: applySnapshot(s.tasks[ev.chat_id], snapshot) } }));
+        break;
+      }
+      case 'task.event': {
+        const event = ev.event;
+        if (!event || typeof ev.turn_index !== 'number') break;
+        const envelope: TaskEnvelope = { chat_id: ev.chat_id, turn_id: ev.turn_id ?? null,
+          turn_index: ev.turn_index, seq: Number(ev.seq) || 0, event };
+        patch(serverId, (s) => ({ tasks: { ...s.tasks, [ev.chat_id]: applyEvent(s.tasks[ev.chat_id], envelope) } }));
         break;
       }
       case 'message.new':
@@ -712,6 +741,28 @@ export const useApp = create<AppState>((set, get) => {
       if (petLoads.get(serverId) !== load) return;
       patch(serverId, () => ({ pet }));
       cacheSet(`pet:${serverId}`, pet);
+    },
+
+    loadTask: async (serverId, chatId, force = false) => {
+      const server = get().servers.find((s) => s.id === serverId);
+      if (!server || !chatId) return;
+      if (!get().runtime[serverId]?.info?.features?.task_activity) return;
+      const key = `${serverId}:${chatId}`;
+      const last = taskLoads.get(key) ?? 0;
+      if (!force && Date.now() - last < 2000) return;
+      taskLoads.set(key, Date.now());
+      try {
+        const data = await api<{ available?: boolean; snapshot: TaskSnapshot | null; capabilities?: TaskCapabilities }>(
+          server, `/api/task?chat=${encodeURIComponent(chatId)}`);
+        if (get().servers.find((s) => s.id === serverId) !== server) return;
+        patch(serverId, (s) => {
+          if (!data?.snapshot) return {};
+          const tasks = { ...s.tasks, [chatId]: applySnapshot(s.tasks[chatId], data.snapshot) };
+          return { tasks, taskCaps: data.capabilities ?? s.taskCaps };
+        });
+      } catch {
+        // Offline or an older server without the route: keep what live events gave us; the sheet labels it.
+      }
     },
 
     loadInbox: async (serverId) => {

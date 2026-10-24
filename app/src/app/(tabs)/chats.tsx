@@ -9,9 +9,10 @@ import { ChatView } from '../../components/ChatView';
 import { ChatMenu } from '../../components/ChatMenu';
 import { ChatFilters } from '../../components/ChatFilters';
 import { ConnectionBanner } from '../../components/ConnectionBanner';
-import { Archive, Hash, MessageSquarePlus, MoreHorizontal, Pin, Search, Sparkles, X } from '../../components/icons';
+import { Archive, Folder, Hash, MessageSquarePlus, MoreHorizontal, Pin, Search, Sparkles, X } from '../../components/icons';
 import { useTabBarSpace } from '../../components/TabBar';
-import { Button, IconButton, SectionHeader, Skeleton, Tap } from '../../components/ui';
+import { Button, Chip, IconButton, SectionHeader, Skeleton, Tap } from '../../components/ui';
+import { projectChatIds } from '../../features/projects/logic';
 import { ago } from '../../lib/agent';
 import { api } from '../../lib/api';
 import { startNewChat } from '../../lib/actions';
@@ -57,6 +58,7 @@ function ChatList({ server, activeChatId }: { server: Server; activeChatId?: str
   const [query, setQuery] = useState('');
   const [menu, setMenu] = useState<Chat | null>(null);
   const [filter, setFilter] = useState<ChatFilter | 'archived'>('all');
+  const [projectId, setProjectId] = useState<string | null>(null);
   const archived = filter === 'archived';
   const activeFilter = filter === 'running' || filter === 'needs-you';
   const now = useActivityClock({ [server.id]: rt?.typing ?? {} });
@@ -65,33 +67,51 @@ function ChatList({ server, activeChatId }: { server: Server; activeChatId?: str
   const replyTo = useApp((st) => st.replyTo);
   const pinnedChats = usePrefs((st) => st.prefs.pinnedChats);
   const archivedChats = usePrefs((st) => st.prefs.archivedChats);
+  const projects = useApp((st) => st.runtime[server.id]?.projects);
+  const project = projectId ? projects?.projects.find((p) => p.id === projectId) : undefined;
+  const projectIds = projectId ? projectChatIds(projects, projectId) : null;
 
   const q = query.trim().toLowerCase();
   const draftOf = (c: Chat) => draftPreview(drafts[`${server.id}:${c.id}`], draftFiles[`${server.id}:${c.id}`], !!replyTo[`${server.id}:${c.id}`]);
   const match = (c: Chat) => !q || `${c.title} ${c.preview} ${draftOf(c) ?? ''}`.toLowerCase().includes(q);
   const mainId = homeChat(rt);
   const groups = useMemo(() => organizeChats(Object.values(rt?.chats ?? {}), server.id, mainId, pinnedChats, archivedChats), [rt?.chats, server.id, mainId, pinnedChats, archivedChats]);
-  const actionable = Object.values(rt?.chats ?? {}).filter((chat) => chat.kind === 'chat');
+  const inScope = (list: Chat[]) => projectIds ? list.filter((chat) => projectIds.has(chat.id)) : list;
+  const pinned = inScope(groups.pinned);
+  const recent = inScope(groups.recent);
+  const actionable = inScope(Object.values(rt?.chats ?? {}).filter((chat) => chat.kind === 'chat'));
   const states = new Map(actionable.map((chat) => [chat.id, chatActivity(rt, chat.id, now)]));
   const counts = { running: actionable.filter((c) => states.get(c.id)?.running).length,
     pending: actionable.filter((c) => (states.get(c.id)?.pending ?? 0) > 0).length };
   const filtered = activeFilter ? actionable.filter((c) => matchesChatFilter(filter, states.get(c.id)!)).sort((a, b) => b.updated_at - a.updated_at) : [];
-  const side = archived ? groups.archived : activeFilter ? filtered : [...groups.pinned, ...groups.recent];
-  const general = rt?.chats[mainId];
-  const recents = useMemo(() => [...groups.recent, ...(general ? [general] : [])].sort((a, b) => b.updated_at - a.updated_at), [groups.recent, general]);
+  const side = archived ? inScope(groups.archived) : activeFilter ? filtered : [...pinned, ...recent];
+  const general = projectId ? undefined : rt?.chats[mainId];
+  const recents = useMemo(() => [...recent, ...(general ? [general] : [])].sort((a, b) => b.updated_at - a.updated_at), [recent, general]);
   const resume = recents[0];
-  const updates = rt?.chats.home;
+  const updates = projectId ? undefined : rt?.chats.home;
+  const projectChips = (projects?.projects ?? []).filter((p) => !p.archived);
+  const archivedCount = inScope(groups.archived).length;
   const loading = !rt || (rt.status !== 'online' && !Object.keys(rt.chats).length);
   const found = useMessageSearch(server, rt?.info?.features?.search ? query : '');
   const scopedIds = new Set(side.map((c) => c.id));
-  const results = found.results.filter((r) => scopedIds.has(r.chat.id) || (!archived && !activeFilter && (r.chat.id === mainId || r.chat.id === 'home')));
-  useEffect(() => { setMenu(null); setQuery(''); setFilter('all'); }, [server.id]);
+  const results = found.results.filter((r) => scopedIds.has(r.chat.id)
+    || (!projectId && !archived && !activeFilter && (r.chat.id === mainId || r.chat.id === 'home')));
+  useEffect(() => { setMenu(null); setQuery(''); setFilter('all'); setProjectId(null); }, [server.id]);
+  useEffect(() => { if (projectId && projects && !project) setProjectId(null); }, [projectId, projects, project]);
 
   const open = (id: string) => {
     if (wide) select(server.id, id);
     else router.push(`/chat/${server.id}/${id}`);
   };
-  const newChat = () => startNewChat(server.id, open);
+  const newChat = async () => {
+    if (!projectId) return startNewChat(server.id, open);
+    try {
+      const chat = await useApp.getState().createChatInProject(server.id, projectId);
+      if (chat) open(chat.id);
+    } catch (e) {
+      useApp.getState().toast({ serverId: server.id, title: "Couldn't start a chat", body: (e as Error).message });
+    }
+  };
   const row = (c: Chat, pinned = false) => (
     <Animated.View key={c.id} entering={FadeIn.duration(200)} layout={LinearTransition.duration(220).easing(easeOut)}>
       <ChatRow icon={c.id === mainId ? <AgentFace server={server} size={32} still /> : pinned ? <Pin size={17} color={t.colors.onAccentSoft} /> : archived ? <Archive size={17} color={t.colors.textSecondary} /> : <Hash size={17} color={t.colors.onAccentSoft} />}
@@ -107,7 +127,12 @@ function ChatList({ server, activeChatId }: { server: Server; activeChatId?: str
       <ScrollView contentContainerStyle={{ paddingTop: insets.top + 8, paddingBottom: wide ? 24 : tabSpace + 8, paddingHorizontal: 16 }} keyboardShouldPersistTaps="handled">
         <View style={s.topRow}>
           <NavigationToggle />
-          <IconButton label="New chat" variant="filled" onPress={newChat}><MessageSquarePlus size={20} color={t.colors.text} /></IconButton>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+            {rt?.info?.features?.projects ? <IconButton label="Projects" onPress={() => router.push('/projects')}>
+              <Folder size={21} color={t.colors.text} /></IconButton> : null}
+            <IconButton label={project ? `New chat in ${project.name}` : 'New chat'} variant="filled" onPress={newChat}>
+              <MessageSquarePlus size={20} color={t.colors.text} /></IconButton>
+          </View>
         </View>
         <Text style={s.title} accessibilityRole="header">Chats</Text>
         <View style={s.search}>
@@ -117,9 +142,19 @@ function ChatList({ server, activeChatId }: { server: Server; activeChatId?: str
           {query ? <IconButton label="Clear search" size={32} onPress={() => setQuery('')}><X size={16} color={t.colors.textSecondary} /></IconButton> : null}
         </View>
         <ConnectionBanner server={server} compact />
-        <ChatFilters value={filter} onChange={setFilter} counts={counts} archived={groups.archived.length} />
+        <ChatFilters value={filter} onChange={setFilter} counts={counts} archived={archivedCount} />
+        {projectChips.length ? (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.chipRow} style={s.chipScroll} accessibilityLabel="Filter by project">
+            <Chip label="All chats" selected={!projectId} onPress={() => setProjectId(null)} />
+            {projectChips.map((p) => (
+              <Chip key={p.id} label={p.name} selected={projectId === p.id} icon={<Folder size={14} color={projectId === p.id ? t.colors.onAccentSoft : t.colors.textSecondary} />}
+                accessibilityLabel={`${p.name} project, ${p.chat_count} ${p.chat_count === 1 ? 'chat' : 'chats'}`}
+                onPress={() => setProjectId(projectId === p.id ? null : p.id)} />
+            ))}
+          </ScrollView>
+        ) : null}
         <View style={s.filters}>
-          <Text style={s.filterText}>{archived ? 'On this device' : activeFilter ? `${filtered.length} ${filtered.length === 1 ? 'chat' : 'chats'}` : `${actionable.length} chats`}</Text>
+          <Text style={s.filterText} numberOfLines={1}>{archived ? 'On this device' : activeFilter ? `${filtered.length} ${filtered.length === 1 ? 'chat' : 'chats'}` : project ? `Project · ${project.name}` : `${actionable.length} chats`}</Text>
           <View style={{ flex: 1 }} />
           {updates ? <Tap accessibilityLabel="Open updates" onPress={() => open('home')} feedback="selection" style={s.updates}>
             <Sparkles size={16} color={t.colors.textSecondary} /><Text style={s.updateLabel} numberOfLines={1}>Updates</Text>
@@ -132,15 +167,17 @@ function ChatList({ server, activeChatId }: { server: Server; activeChatId?: str
           </View>
         ) : (
           <>
-            {!archived && !activeFilter && groups.pinned.some(match) ? <><SectionHeader title="Pinned" style={s.section} />{groups.pinned.filter(match).map((c) => row(c, true))}</> : null}
+            {!archived && !activeFilter && pinned.some(match) ? <><SectionHeader title="Pinned" style={s.section} />{pinned.filter(match).map((c) => row(c, true))}</> : null}
             {!archived && !activeFilter && resume && match(resume) ? <><SectionHeader title="Continue" style={s.section} />{row(resume)}</> : null}
             {(archived || activeFilter ? side : recents.slice(1)).some(match) ? <SectionHeader title={archived ? 'Archived chats' : filter === 'running' ? 'Running' : filter === 'needs-you' ? 'Needs you' : 'Recent'} style={s.section} /> : null}
             {(archived || activeFilter ? side : recents.slice(1)).filter(match).map((c) => row(c))}
             {q && !archived && !activeFilter && updates && match(updates) ? <ChatRow icon={<Sparkles size={17} color={t.colors.textSecondary} />} tint={t.colors.surfaceSunken} title="Updates" subtitle={plainText(updates.preview)} time={updates.updated_at} onPress={() => open('home')} /> : null}
-            {!(archived || activeFilter ? side.length : recents.length || groups.pinned.length) && !q ? (
+            {!(archived || activeFilter ? side.length : recents.length || pinned.length) && !q ? (
               <View style={s.empty}>
-                <Text style={s.emptyText}>{archived ? 'No archived chats' : filter === 'running' ? 'No tasks running.' : filter === 'needs-you' ? 'Nothing waiting on you.' : 'No chats yet'}</Text>
-                {!archived && !activeFilter ? <Button title="New chat" variant="tonal" icon={<Hash size={16} color={t.colors.onAccentSoft} />} onPress={newChat} /> : null}
+                <Text style={s.emptyText}>{archived ? 'No archived chats' : filter === 'running' ? 'No tasks running.' : filter === 'needs-you' ? 'Nothing waiting on you.'
+                  : project ? `No chats in ${project.name} yet` : 'No chats yet'}</Text>
+                {!archived && !activeFilter ? <Button title={project ? 'New chat here' : 'New chat'} variant="tonal" icon={<Hash size={16} color={t.colors.onAccentSoft} />} onPress={newChat} /> : null}
+                {project ? <Button title="Show all chats" variant="ghost" onPress={() => setProjectId(null)} /> : null}
               </View>
             ) : null}
             {results.length ? (
@@ -152,8 +189,10 @@ function ChatList({ server, activeChatId }: { server: Server; activeChatId?: str
                 ))}
               </>
             ) : null}
-            {q && !side.some(match) && !(!archived && !activeFilter && ((general && match(general)) || (updates && match(updates)))) && !results.length && !found.busy
+            {q && !side.some(match) && !projectId && !(!archived && !activeFilter && ((general && match(general)) || (updates && match(updates)))) && !results.length && !found.busy
               ? <Text style={s.emptyText}>Nothing matches “{query}”.</Text> : null}
+            {q && projectId && !side.length && !results.length && !found.busy
+              ? <Text style={s.emptyText}>Nothing in {project?.name ?? 'this project'} matches “{query}”.</Text> : null}
           </>
         )}
       </ScrollView>
@@ -259,7 +298,9 @@ const useStyles = makeStyles((t) => ({
   topRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 48 },
   title: { ...t.type.display, color: t.colors.text, marginTop: 6, marginBottom: 10 },
   section: { paddingTop: 12, paddingBottom: 4 },
-  filters: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 4, borderBottomWidth: 1, borderBottomColor: t.colors.border },
+  chipScroll: { marginTop: 10, marginHorizontal: -16 },
+  chipRow: { flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingBottom: 2 },
+  filters: { flexDirection: 'row', alignItems: 'center', gap: 14, marginTop: 6, marginBottom: 4, borderBottomWidth: 1, borderBottomColor: t.colors.border },
   filterText: { ...t.type.callout, fontFamily: t.fonts.medium, color: t.colors.textSecondary },
   updates: { flexDirection: 'row', gap: 5, alignItems: 'center', minHeight: 44, flexShrink: 1 },
   updateLabel: { ...t.type.caption, fontFamily: t.fonts.medium, color: t.colors.textSecondary, flexShrink: 1 },

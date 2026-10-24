@@ -202,6 +202,28 @@ class Store:
         with self._lock:
             return self._db.execute(sql, args).rowcount
 
+    @contextlib.contextmanager
+    def transaction(self):
+        """Run several statements as one atomic write; nested use joins the outer transaction.
+
+        The connection runs in autocommit mode, so ``BEGIN IMMEDIATE`` is what makes the block
+        atomic. When a caller already opened a transaction (the event journal does, so a change and
+        its replay row commit together) this only joins it and leaves the commit to that owner.
+        """
+        own = not self._db.in_transaction
+        with self._lock:
+            if own:
+                self._db.execute("BEGIN IMMEDIATE")
+            try:
+                yield
+            except BaseException:
+                if own:
+                    self._db.rollback()
+                raise
+            else:
+                if own:
+                    self._db.commit()
+
     # -- key/value ---------------------------------------------------------------
 
     def get_kv(self, key: str) -> Optional[str]:
@@ -365,18 +387,11 @@ class Store:
         return self.get_chat(chat_id)
 
     def delete_chat(self, chat_id: str) -> bool:
-        with self._lock:
-            self._db.execute("BEGIN IMMEDIATE")
-            try:
-                self._exec("INSERT OR IGNORE INTO message_deletions (id, chat_id, deleted_at) "
-                           "SELECT id, chat_id, ? FROM messages WHERE chat_id = ?", (_now(), chat_id))
-                self._exec("DELETE FROM messages WHERE chat_id = ?", (chat_id,))
-                removed = self._exec("DELETE FROM chats WHERE id = ?", (chat_id,)) == 1
-                self._db.commit()
-                return removed
-            except Exception:
-                self._db.rollback()
-                raise
+        with self.transaction():
+            self._exec("INSERT OR IGNORE INTO message_deletions (id, chat_id, deleted_at) "
+                       "SELECT id, chat_id, ? FROM messages WHERE chat_id = ?", (_now(), chat_id))
+            self._exec("DELETE FROM messages WHERE chat_id = ?", (chat_id,))
+            return self._exec("DELETE FROM chats WHERE id = ?", (chat_id,)) == 1
 
     def _touch_chat(self, chat_id: str, preview: str, meta: Optional[Dict[str, Any]] = None) -> None:
         # Model/thinking controls are recorded for sync, but opening settings is not conversation activity.
@@ -414,18 +429,12 @@ class Store:
             return {**current, "text": text, "status": status, "meta": json.loads(json.dumps(meta)), "updated_at": now}
 
     def delete_message(self, message_id: str) -> Optional[Dict[str, Any]]:
-        with self._lock:
+        with self.transaction():
             current = self.get_message(message_id)
             if current is not None:
-                self._db.execute("BEGIN IMMEDIATE")
-                try:
-                    self._exec("INSERT OR IGNORE INTO message_deletions (id, chat_id, deleted_at) VALUES (?, ?, ?)",
-                               (message_id, current["chat_id"], _now()))
-                    self._exec("DELETE FROM messages WHERE id = ?", (message_id,))
-                    self._db.commit()
-                except Exception:
-                    self._db.rollback()
-                    raise
+                self._exec("INSERT OR IGNORE INTO message_deletions (id, chat_id, deleted_at) VALUES (?, ?, ?)",
+                           (message_id, current["chat_id"], _now()))
+                self._exec("DELETE FROM messages WHERE id = ?", (message_id,))
             return current
 
     def deleted_message_ids(self, chat_id: str) -> List[str]:

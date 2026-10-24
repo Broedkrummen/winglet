@@ -7,7 +7,7 @@ export type Room = {
   available_profiles: RoomBot[];
 };
 export type RoomBot = { name: string; title: string; served: boolean };
-export type RoomEvent = { id: string; seq: number; epoch: number; kind: string; actor: { kind: string; id: string }; created_at: number; payload: Record<string, any> };
+export type RoomEvent = { id: string; seq: number; epoch: number; kind: string; actor: { kind: string; id: string; label?: string }; created_at: number; payload: Record<string, any> };
 export type Cursor = [number, number];
 export type RoomPage = { events: RoomEvent[]; cursor: Cursor; older: Cursor | null; has_more: boolean };
 export type RoomList = { rooms: Room[]; bots: RoomBot[]; can_create: boolean; member_write_supported: boolean };

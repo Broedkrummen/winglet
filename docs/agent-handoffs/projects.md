@@ -291,10 +291,9 @@ Representative synthetic screenshots are committed under `docs/agent-handoffs/pr
 - No per-chat working directory, by design (see above).
 - The project list pane is fixed at 360 px on wide screens. Tested at 1024 and 1440; narrower
   landscape windows around the 900 px breakpoint have a smaller chat column but no overflow.
-- Idempotency covers the ordinary lost-reply retry. If the process crashes in the narrow window
-  between a mutation commit and the idempotency-result insert, a retry can duplicate a
-  `project.chat.create` or receive a 409 for a create that already committed. Chats themselves and
-  messages are never lost; a future transaction-level op journal can close this window.
+- Project mutations, revision checks and their durable retry result commit in one SQLite
+  transaction. Journal failures roll back chat creation and membership/layout changes. Retry
+  identities are bound to the actual route target and current device role.
 - Web emits Reanimated's unsupported-easing warning for the shared `easeOut` layout transition; this
   is pre-existing in Chats, not a project regression.
 - Native behavior (safe areas, keyboard, rotation, background/reconnect, notification taps) is
@@ -428,8 +427,22 @@ The fixture is disposable and must stay outside the repository:
 - **Checks not run:** native Android build, emulator/device testing, audio/permission/keyboard/
   safe-area/notification tests, live Hermes routine execution.
 - **Outstanding:** MOBILE VALIDATION PENDING as above; optional future drag-and-drop and
-  session-swap UI; transaction-level idempotency journal; no intentional native blockers known.
+  session-swap UI; no intentional native blockers known.
 - **Review first:** `plugin/projects.py` and `tests/test_projects.py`, then the store project
   actions and `ProjectDetail` offline/conflict states.
 
 **For Codex orchestrator review.**
+
+## Codex review corrections — 24 October 2026
+
+- Made mutation + retry-result persistence atomic and serialized revision checks across connections.
+- Bound retry fingerprints to route project IDs and the device's current role.
+- Prevented stale reads, failed optimistic updates and old conflict responses from overwriting newer
+  socket state. Late responses for removed bots no longer recreate project cache entries.
+- Added seven backend regression cases and five app-store race cases.
+- Revalidation: project tests 20 passed; full local plugin suite 316 passed / 17 optional skips;
+  app suite 286 passed; TypeScript typecheck and production web export passed. Android bundle export
+  is checked separately in the PR's latest CI. Existing UI screenshots remain representative because
+  these corrections change transaction/state ordering, not layout.
+- Physical Android device authorization was verified by Codex; this PR has not yet had its native
+  project screens validated. Integrated native testing remains a separate step.

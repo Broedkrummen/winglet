@@ -225,6 +225,9 @@ class WingletAdapter(BasePlatformAdapter):
             hub.hermes_version = hermes_api.hermes_version
             hub.commands_provider = hermes_api.list_commands
             hub.hermes = hermes_api
+            # Speech-to-text and text-to-speech from this profile's own configuration. The app only sees
+            # the capability and provider names; keys and models stay on the server.
+            hub.speech = hermes_api.SpeechBackend() if hermes_api.speech_available() else None
             hub.chat_model = self._chat_model
             # The app only offers goals when this Hermes has them (features.goals).
             hub.chat_goal = self._chat_goal if hermes_api.goals_available() else None

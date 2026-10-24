@@ -36,7 +36,7 @@ from urllib.parse import quote, unquote, urlsplit
 
 from aiohttp import WSMsgType, web
 
-from . import keys, recovery, uploads, webpush
+from . import keys, live_voice, recovery, uploads, webpush
 from .store import ROLES, Store, new_id
 
 logger = logging.getLogger(__name__)
@@ -148,6 +148,8 @@ ROUTE_POLICY = {
     "h_mcp_sign_in_cancel": "owner_signed",
     "h_rotate_token": "signed",
     "h_device_update": "owner_signed", "h_device_delete": "owner_signed", "h_pairing_code": "owner_signed",
+    "h_voice_session": "device", "h_voice_transcribe": "device", "h_voice_speak": "device",
+    "h_voice_stop": "device", "h_voice_end": "device", "h_voice_audio": "public",
 }
 
 # Slash commands a member may send: their own conversation and turn, and read-only help. Everything
@@ -249,6 +251,9 @@ class Hub:
         # Hermes functions for model, providers, persona, memory and usage (plugin/hermes_api.py),
         # installed by the adapter; None turns those features off.
         self.hermes: Any = None
+        # The profile's configured speech-to-text/text-to-speech bridge (plugin/hermes_api.py),
+        # installed by the adapter; None turns hands-free voice off.
+        self.speech: Any = None
         # chat id -> the model that chat is really using, when Hermes knows (installed by the adapter).
         self.chat_model: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None
         # chat id -> the standing goal (/goal) its Hermes session is working on (installed by the adapter).
@@ -276,6 +281,8 @@ class Hub:
         self.on_answer: Optional[ResolveFn] = None
         # Installed by the adapter; the hub itself never imports Hermes.
         self.hermes_version: Callable[[], str] = lambda: ""
+        # Turn-based hands-free voice: sessions, signed speech files and cancellation.
+        self.voice = live_voice.VoiceBridge(self)
         self.store.ensure_chat(HOME_CHAT_ID, "Updates", kind="home")
 
     # -- lifecycle -------------------------------------------------------------------
@@ -313,6 +320,12 @@ class Hub:
         r.add_get("/api/push/ntfy", self.h_ntfy)
         r.add_post("/api/push/test", self.h_push_test)
         r.add_get("/api/media/{media_id}/{name}", self.h_media)
+        r.add_post("/api/voice/sessions", self.voice.h_voice_session)
+        r.add_post("/api/voice/transcribe", self.voice.h_voice_transcribe)
+        r.add_post("/api/voice/speak", self.voice.h_voice_speak)
+        r.add_post("/api/voice/sessions/{session_id}/stop", self.voice.h_voice_stop)
+        r.add_post("/api/voice/sessions/{session_id}/end", self.voice.h_voice_end)
+        r.add_get("/api/voice/audio/{speech_id}", self.voice.h_voice_audio)
         r.add_get("/api/server-key", self.h_server_key)
         r.add_get("/api/address-check", self.h_address_check)
         r.add_get("/api/devices", self.h_devices)
@@ -417,6 +430,7 @@ class Hub:
                 self.expire_jobs()
                 self.store.prune()
                 self._prune_memory()
+                self.voice.sweep()
             except Exception:
                 logger.warning("[winglet] cleanup failed", exc_info=True)
             await asyncio.sleep(JANITOR_SECONDS)
@@ -619,6 +633,11 @@ class Hub:
         info.setdefault("description", "")
         return info
 
+    @staticmethod
+    def bot_name() -> Optional[str]:
+        """The other bot this request is about, or None for the profile the gateway runs as."""
+        return _BOT.get()
+
     def server_id(self) -> str:
         return self.store.secret("server_id", lambda: secrets.token_hex(6))
 
@@ -690,6 +709,7 @@ class Hub:
 
     def features(self) -> Dict[str, bool]:
         """What this server can do. The app hides anything that isn't listed as true."""
+        handsfree = self.voice.available
         return {"webpush": True, "ntfy": True, "approvals": True, "questions": True, "uploads": True, "voice": True,
                 "replies": True, "export": True, "mute": True, "status_updates": True, "roles": True,
                 "signed_actions": True, "ws_auth": True, "pickers": True, "agent": self.hermes is not None,
@@ -698,6 +718,9 @@ class Hub:
                 "sessions": self.hermes is not None and self._has(self.hermes, "sessions_available"),
                 "pets": self.hermes is not None and self._has(self.hermes, "pets_available"),
                 "bots": self.bots_provider is not None and self.hermes is not None and self._has(self.hermes, "bots_available"),
+                # Hands-free voice is the turn loop the app implements. `voice_live` stays false: this
+                # server has no full-duplex audio, and calling the loop "live" would be a lie.
+                "voice_handsfree": handsfree, "voice_live": False, "voice_barge_in": handsfree,
                 "connection_status": True}
 
     def about(self) -> Dict[str, Any]:

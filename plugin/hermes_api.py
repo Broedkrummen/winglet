@@ -56,6 +56,128 @@ async def cache_media(path: str, name: str, mime: str, voice: bool = False):
     return cached.path, cached.media_type, cached.kind
 
 
+# -- hands-free voice: the profile's own speech-to-text and text-to-speech --------------------
+#
+# Winglet's live voice is turn-based: the app records one utterance, this server transcribes it
+# with the same provider chain Hermes uses for voice notes, the transcript becomes a normal chat
+# message, and the finished reply is synthesized with the same TTS chain as `/speak`. The app
+# never receives provider keys. Both operations run off the event loop under the profile's scope.
+
+_SPEECH_MIME_BY_EXT = {
+    ".mp3": "audio/mpeg", ".ogg": "audio/ogg", ".opus": "audio/ogg", ".wav": "audio/wav",
+    ".flac": "audio/flac", ".m4a": "audio/mp4", ".aac": "audio/aac",
+}
+
+
+def speech_available() -> bool:
+    """Whether this Hermes has the two functions the voice loop calls. A missing one leaves the
+    capability false rather than half-working."""
+    try:
+        from tools.voice_mode import transcribe_recording
+        from tools.tts_tool import text_to_speech_tool
+    except Exception:
+        logger.debug("[winglet] speech functions unavailable", exc_info=True)
+        return False
+    return callable(transcribe_recording) and callable(text_to_speech_tool)
+
+
+def _speech_error(message: str) -> str:
+    """A user-facing reason, on one line and short enough for a phone toast."""
+    return " ".join(str(message or "Speech failed.").split())[:300]
+
+
+class SpeechBackend:
+    """One object the hub can call without importing Hermes itself (plugin/live_voice.py)."""
+
+    def __init__(self) -> None:
+        self._available: Optional[bool] = None
+
+    def available(self) -> bool:
+        if self._available is None:
+            self._available = speech_available()
+        return self._available
+
+    def status(self) -> dict:
+        """Configured provider names for the app's explicit provider choice (never secrets)."""
+        out = {"stt": {"provider": ""}, "tts": {"provider": ""}}
+        try:
+            from tools.transcription_tools import _get_provider as stt_provider, _load_stt_config
+            with _profile_scope():
+                out["stt"]["provider"] = str(stt_provider(_load_stt_config()) or "")
+        except Exception:
+            logger.debug("[winglet] could not read the STT provider", exc_info=True)
+        try:
+            from tools.tts_tool import _get_provider as tts_provider, _load_tts_config
+            with _profile_scope():
+                out["tts"]["provider"] = str(tts_provider(_load_tts_config()) or "")
+        except Exception:
+            logger.debug("[winglet] could not read the TTS provider", exc_info=True)
+        return out
+
+    async def transcribe(self, path: str, mime: str) -> dict:
+        """A whole utterance as text. An empty transcript is silence, not a failure."""
+        import asyncio
+
+        def run() -> dict:
+            with _profile_scope():
+                from tools.voice_mode import transcribe_recording
+                return transcribe_recording(path)
+
+        try:
+            result = await asyncio.to_thread(run)
+        except Exception as exc:
+            logger.warning("[winglet] speech-to-text failed: %s", exc)
+            raise ValueError(_speech_error(f"Transcription failed: {exc}")) from exc
+        if not isinstance(result, dict):
+            raise ValueError("Transcription failed: unexpected response.")
+        if not result.get("success"):
+            error = str(result.get("error") or "Transcription failed.")
+            # Hermes's own audio bridge treats "empty transcript" as silence: a quiet room should
+            # re-listen, not show a failure card.
+            if "empty transcript" in error.lower():
+                return {"text": "", "provider": str(result.get("provider") or ""), "no_speech": True}
+            raise ValueError(_speech_error(error))
+        text = str(result.get("transcript") or "").strip()
+        return {"text": text, "provider": str(result.get("provider") or ""), "no_speech": not text}
+
+    async def speak(self, text: str) -> tuple:
+        """Synthesized audio as (bytes, mime, provider). The temporary file is always removed."""
+        import asyncio
+
+        def run() -> tuple:
+            import os
+            from pathlib import Path
+
+            with _profile_scope():
+                from tools.tts_tool import text_to_speech_tool
+                raw = text_to_speech_tool(text=text)
+                try:
+                    payload = json.loads(raw) if isinstance(raw, str) else raw
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("Speech synthesis returned an unreadable response.") from exc
+                if not isinstance(payload, dict) or not payload.get("success"):
+                    error = payload.get("error") if isinstance(payload, dict) else ""
+                    raise ValueError(_speech_error(str(error or "Speech synthesis failed.")))
+                paths = [p for p in (payload.get("file_paths") or [payload.get("file_path")]) if p]
+                if not paths:
+                    raise ValueError("Speech synthesis returned no audio.")
+                first = Path(paths[0])
+                try:
+                    data = first.read_bytes()
+                finally:
+                    for name in paths:
+                        try:
+                            os.unlink(name)
+                        except OSError:
+                            pass
+                if not data:
+                    raise ValueError("Speech synthesis returned empty audio.")
+                mime = _SPEECH_MIME_BY_EXT.get(first.suffix.lower(), "audio/mpeg")
+                return data, mime, str(payload.get("provider") or "")
+
+        return await asyncio.to_thread(run)
+
+
 def list_commands() -> list:
     """Gateway slash commands and skill commands, for the app's command palette."""
     with _profile_scope():  # each bot has its own skills, so its own commands

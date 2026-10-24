@@ -105,15 +105,23 @@ function useKeyboardHeight(active: boolean): number {
   return height;
 }
 
-/** One action row inside a sheet. */
-export function SheetAction({ icon, label, onPress, destructive }: { icon?: ReactNode; label: string; onPress: () => void; destructive?: boolean }) {
+/** One action row inside a sheet. A disabled row keeps its explanation visible instead of
+ * silently disappearing (offline, busy, an older server). */
+export function SheetAction({ icon, label, onPress, destructive, disabled, hint }: {
+  icon?: ReactNode; label: string; onPress: () => void; destructive?: boolean; disabled?: boolean; hint?: string;
+}) {
   const t = useTheme();
   const s = useStyles();
   return (
-    <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={() => { haptic.selection(); onPress(); }}
-      style={({ pressed }) => [s.action, pressed && { backgroundColor: t.colors.pressed }]}>
+    <Pressable accessibilityRole="button" accessibilityLabel={hint ? `${label}. ${hint}` : label}
+      accessibilityState={{ disabled: !!disabled }} disabled={!!disabled}
+      onPress={() => { haptic.selection(); onPress(); }}
+      style={({ pressed }) => [s.action, disabled && { opacity: 0.5 }, pressed && !disabled && { backgroundColor: t.colors.pressed }]}>
       {icon}
-      <Text style={[s.actionText, destructive && { color: t.colors.danger }]}>{label}</Text>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={[s.actionText, destructive && { color: t.colors.danger }]}>{label}</Text>
+        {hint ? <Text style={[s.actionHint, destructive && { color: t.colors.danger }]}>{hint}</Text> : null}
+      </View>
     </Pressable>
   );
 }
@@ -135,4 +143,5 @@ const useStyles = makeStyles((t) => ({
   content: { flexShrink: 1, minHeight: 0 },
   action: { flexDirection: 'row', alignItems: 'center', gap: 14, minHeight: 52, paddingHorizontal: 12, borderRadius: t.radius.md },
   actionText: { ...t.type.body, fontFamily: t.fonts.medium, color: t.colors.text },
+  actionHint: { ...t.type.caption, color: t.colors.textSecondary, marginTop: 2 },
 }));

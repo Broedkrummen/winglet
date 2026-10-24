@@ -165,3 +165,13 @@ app/ios/
 app/dist-android/
 expo-env.d.ts
 .metro-health-check*
+
+# Feature-agent preview and test scratch (not part of the app)
+.pytest-tmp-*/
+.playwright-cli/
+output/
+app/dist-web-preview/
+
+# Event replay private validation outputs
+.pytest-replay-*/
+app/dist-replay-*/

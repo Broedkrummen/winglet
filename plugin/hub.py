@@ -36,7 +36,8 @@ from urllib.parse import quote, unquote, urlsplit
 
 from aiohttp import WSMsgType, web
 
-from . import keys, recovery, uploads, webpush
+from . import checkpoints as checkpoints_api, keys, recovery, uploads, webpush
+from .projects import ProjectConflict, ProjectError, Projects
 from .event_replay import EventStream
 from .store import ROLES, Store, new_id
 
@@ -118,6 +119,8 @@ class Forbidden(PermissionError):
 #   signed        any verified device, with a signed request
 #   owner_signed  an owner's verified device, with a signed request: every control action
 ROUTE_POLICY = {
+    "h_rooms": "paired", "h_room_state": "paired", "h_room_log": "paired",
+    "h_room_create": "owner_signed", "h_room_action": "signed",
     "h_info": "public", "h_pair": "public", "h_ws": "public", "h_static": "public", "h_media": "public",
     "h_vapid": "public", "h_inbox_respond": "public", "h_server_key": "public", "h_address_check": "public",
     "h_me": "device", "h_connection": "device", "h_connection_status": "device", "h_unpair": "device", "h_chats": "device",
@@ -128,6 +131,12 @@ ROUTE_POLICY = {
     "h_devices": "owner", "h_audit": "owner",
     "h_agent": "device", "h_picker_select": "owner",
     "h_chat_goal": "device", "h_goals": "device", "h_search": "device", "h_chat_files": "device",
+    "h_checkpoints": "owner", "h_checkpoint": "owner", "h_checkpoint_restore": "owner_signed",
+    "h_task": "device",
+    "h_process_list": "owner", "h_process_detail": "owner", "h_process_stop": "owner_signed",
+    "h_projects": "device", "h_project_create": "signed", "h_project_update": "signed",
+    "h_project_order": "signed", "h_project_delete": "signed", "h_project_chat_create": "signed",
+    "h_project_chat_move": "signed", "h_project_chat_remove": "signed",
     "h_models": "owner", "h_providers": "owner", "h_identity": "owner", "h_memory": "owner", "h_usage": "owner",
     "h_model_default": "owner_signed", "h_provider_key": "owner_signed", "h_provider_key_delete": "owner_signed",
     "h_identity_put": "owner_signed", "h_memory_edit": "owner_signed",
@@ -150,6 +159,8 @@ ROUTE_POLICY = {
     "h_rotate_token": "signed",
     "h_sync_snapshot": "device",
     "h_device_update": "owner_signed", "h_device_delete": "owner_signed", "h_pairing_code": "owner_signed",
+    # Branching: paired devices, scoped to a chat they can see (same rule as sending a message).
+    "h_branch_state": "device", "h_branch_create": "device", "h_branch_regenerate": "device",
 }
 
 # Slash commands a member may send: their own conversation and turn, and read-only help. Everything
@@ -255,10 +266,18 @@ class Hub:
         # Hermes functions for model, providers, persona, memory and usage (plugin/hermes_api.py),
         # installed by the adapter; None turns those features off.
         self.hermes: Any = None
+        # Workspace checkpoints (plugin/checkpoints.py), installed by the adapter when Hermes keeps
+        # them; None hides the feature entirely.
+        self.checkpoints: Optional[checkpoints_api.CheckpointService] = None
         # chat id -> the model that chat is really using, when Hermes knows (installed by the adapter).
         self.chat_model: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None
         # chat id -> the standing goal (/goal) its Hermes session is working on (installed by the adapter).
         self.chat_goal: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None
+        # Structured task activity (plugin/execution.py), installed by the adapter when Hermes offers
+        # the observer hooks it needs. None keeps the feature off (old server or old Hermes).
+        self.execution: Any = None
+        self.processes = None
+        self.rooms = None
         self._pickers: Dict[str, Dict[str, Any]] = {}
         # Restarts and updates outlive this process; jobs started by this one carry its boot id.
         self.boot_id = new_id()
@@ -276,18 +295,23 @@ class Hub:
         self.mcp_changed = False
         # Set by the adapter when it can cap every turn's final toolsets, which members' tool limits need.
         self.limits_members = False
+        # Conversation branching (installed by the adapter; None when this Hermes can't do it).
+        self.branching: Any = None
         # Hermes-side callbacks, installed by the adapter.
         self.on_user_message: Optional[InboundFn] = None
         self.on_approval: Optional[ResolveFn] = None
         self.on_answer: Optional[ResolveFn] = None
         # Installed by the adapter; the hub itself never imports Hermes.
         self.hermes_version: Callable[[], str] = lambda: ""
+        # Server-persisted projects (folders). Additive tables, created in place.
+        self.projects = Projects(store)
         self.store.ensure_chat(HOME_CHAT_ID, "Updates", kind="home")
 
     # -- lifecycle -------------------------------------------------------------------
 
     def build_app(self) -> web.Application:
         app = web.Application(client_max_size=2 * 1024 * 1024, middlewares=[self._cors, self._policy])
+        app["hub"] = self
         r = app.router
         r.add_get("/api/info", self.h_info)
         r.add_post("/api/pair", self.h_pair)
@@ -305,9 +329,21 @@ class Hub:
         r.add_post("/api/chats/{chat_id}/uploads", self.h_upload)
         r.add_get("/api/chats/{chat_id}/export", self.h_export)
         r.add_get("/api/chats/{chat_id}/goal", self.h_chat_goal)
+        r.add_get("/api/task", self.h_task)
         r.add_get("/api/chats/{chat_id}/files", self.h_chat_files)
+        r.add_get("/api/checkpoints", self.h_checkpoints)
+        r.add_get("/api/checkpoints/{hash}", self.h_checkpoint)
+        r.add_post("/api/checkpoints/{hash}/restore", self.h_checkpoint_restore)
         r.add_get("/api/goals", self.h_goals)
         r.add_get("/api/search", self.h_search)
+        r.add_get("/api/projects", self.h_projects)
+        r.add_post("/api/projects", self.h_project_create)
+        r.add_put("/api/projects/order", self.h_project_order)
+        r.add_patch("/api/projects/{project_id}", self.h_project_update)
+        r.add_delete("/api/projects/{project_id}", self.h_project_delete)
+        r.add_post("/api/projects/{project_id}/chats", self.h_project_chat_create)
+        r.add_post("/api/projects/{project_id}/chats/{chat_id}", self.h_project_chat_move)
+        r.add_delete("/api/projects/{project_id}/chats/{chat_id}", self.h_project_chat_remove)
         r.add_get("/api/commands", self.h_commands)
         r.add_get("/api/push/prefs", self.h_push_prefs)
         r.add_put("/api/push/prefs", self.h_push_prefs_put)
@@ -391,6 +427,13 @@ class Hub:
         r.add_delete("/api/mcp/{name}", self.h_mcp_remove)
         r.add_post("/api/mcp/{name}/test", self.h_mcp_test)
         r.add_post("/api/mcp/{name}/sign-in", self.h_mcp_sign_in)
+        if self.branching is not None:
+            from .branching_routes import register_routes as _register_branch_routes
+            _register_branch_routes(app)
+        from .processes_routes import register_routes as _register_process_routes
+        _register_process_routes(app)
+        from . import rooms_routes
+        rooms_routes.register_routes(app)
         r.add_get("/{tail:.*}", self.h_static)
         app.on_startup.append(self._start_janitor)
         app.on_shutdown.append(self._close_sockets)
@@ -697,7 +740,12 @@ class Hub:
 
     def features(self) -> Dict[str, bool]:
         """What this server can do. The app hides anything that isn't listed as true."""
-        return {"webpush": True, "ntfy": True, "approvals": True, "questions": True, "uploads": True, "voice": True,
+        checkpoints = self.checkpoints is not None
+        branching = bool(self.branching is not None and self._has(self.branching, "available")
+                         and self.branching.available())
+        return {"rooms": self.rooms is not None and self.rooms.available(),
+                "room_mentions": self.rooms is not None and self.rooms.available(), "rooms_member_write": False,
+                "webpush": True, "ntfy": True, "approvals": True, "questions": True, "uploads": True, "voice": True,
                 "replies": True, "export": True, "mute": True, "status_updates": True, "roles": True,
                 "signed_actions": True, "ws_auth": True, "pickers": True, "agent": self.hermes is not None,
                 "control": self.hermes is not None, "goals": self.chat_goal is not None, "search": True, "files": True,
@@ -705,7 +753,15 @@ class Hub:
                 "sessions": self.hermes is not None and self._has(self.hermes, "sessions_available"),
                 "pets": self.hermes is not None and self._has(self.hermes, "pets_available"),
                 "bots": self.bots_provider is not None and self.hermes is not None and self._has(self.hermes, "bots_available"),
-                "connection_status": True, "event_replay": True}
+                # Checkpoints: listing/preview, and the separate live restore this Hermes can do.
+                "checkpoints": checkpoints, "checkpoint_diff": checkpoints,
+                "checkpoint_restore": checkpoints and self.checkpoints.can_restore,
+                "chat_branching": branching, "message_editing": branching, "regeneration": branching,
+                "task_activity": self.execution is not None,
+                "processes": self.processes is not None and self.processes.available(),
+                "process_output": self.processes is not None and self.processes.available(),
+                "process_stop": self.processes is not None and self.processes.available(),
+                "connection_status": True, "projects": True, "event_replay": True}
 
     def about(self) -> Dict[str, Any]:
         return {"version": VERSION, "protocol": PROTOCOL, "min_app_protocol": MIN_APP_PROTOCOL,
@@ -959,8 +1015,84 @@ class Hub:
         gone = await self.publish(delete, lambda info: {"type": "chat.delete", **info})
         if gone is None:
             return _error(404, "no such chat")
+        if self.execution is not None:
+            self.execution.forget_chat(chat_id)
         await asyncio.to_thread(lambda: [self._remove_upload(row) for row in files])
         return _json({"ok": True})
+
+    # -- projects (folders) -----------------------------------------------------------------
+
+    async def _project_body(self, request: web.Request) -> Dict[str, Any]:
+        """Mutation fields from the JSON body, with query fallbacks for DELETE clients."""
+        body = await self._body(request)
+        for key in ("revision", "client_id", "from_revision", "from_project_id"):
+            if key not in body and request.query.get(key):
+                body[key] = request.query[key]
+        return body
+
+    async def _project_change(self, request: web.Request, action: str, summary: str, call) -> web.Response:
+        device = self._require(request)
+        try:
+            result = call()
+        except ProjectConflict as exc:
+            # A stale revision: hand back the current snapshot so the phone can roll back and redraw.
+            return _json({"error": str(exc),
+                          "projects": self.projects.snapshot(device, _BOT.get())}, status=exc.status)
+        except ProjectError as exc:
+            return _error(exc.status, str(exc))
+        await self.broadcast_projects(_BOT.get())
+        self.audit(action, device, summary)
+        return _json({**result, "projects": self.projects.snapshot(device, _BOT.get())})
+
+    async def h_projects(self, request: web.Request) -> web.Response:
+        device = self._require(request)
+        return _json({"projects": self.projects.snapshot(device, _BOT.get())})
+
+    async def h_project_create(self, request: web.Request) -> web.Response:
+        body = await self._project_body(request)
+        return await self._project_change(request, "project.create",
+                                          f"project “{str(body.get('name') or '')[:60]}”",
+                                          lambda: self.projects.create(self._require(request), _BOT.get(), body))
+
+    async def h_project_update(self, request: web.Request) -> web.Response:
+        body = await self._project_body(request)
+        project_id = request.match_info["project_id"]
+        verb = "renamed" if "name" in body else "archived" if body.get("archived") is True else "restored"
+        return await self._project_change(request, "project.update", f"{verb} project {project_id}",
+                                          lambda: self.projects.update(self._require(request), _BOT.get(), project_id, body))
+
+    async def h_project_order(self, request: web.Request) -> web.Response:
+        body = await self._project_body(request)
+        return await self._project_change(request, "project.order", "reordered projects",
+                                          lambda: self.projects.reorder(self._require(request), _BOT.get(), body))
+
+    async def h_project_delete(self, request: web.Request) -> web.Response:
+        body = await self._project_body(request)
+        project_id = request.match_info["project_id"]
+        return await self._project_change(request, "project.delete", f"deleted project {project_id}",
+                                          lambda: self.projects.delete(self._require(request), _BOT.get(),
+                                                                       project_id, body))
+
+    async def h_project_chat_create(self, request: web.Request) -> web.Response:
+        body = await self._project_body(request)
+        project_id = request.match_info["project_id"]
+        return await self._project_change(request, "project.chat.create", f"new chat in project {project_id}",
+                                          lambda: self.projects.create_chat(self._require(request), _BOT.get(),
+                                                                            project_id, body))
+
+    async def h_project_chat_move(self, request: web.Request) -> web.Response:
+        body = await self._project_body(request)
+        project_id, chat_id = request.match_info["project_id"], request.match_info["chat_id"]
+        return await self._project_change(request, "project.chat.move", f"moved chat {chat_id} to {project_id}",
+                                          lambda: self.projects.move_chat(self._require(request), _BOT.get(),
+                                                                          project_id, chat_id, body))
+
+    async def h_project_chat_remove(self, request: web.Request) -> web.Response:
+        body = await self._project_body(request)
+        project_id, chat_id = request.match_info["project_id"], request.match_info["chat_id"]
+        return await self._project_change(request, "project.chat.remove", f"removed chat {chat_id} from {project_id}",
+                                          lambda: self.projects.remove_chat(self._require(request), _BOT.get(),
+                                                                            project_id, chat_id, body))
 
     async def h_messages(self, request: web.Request) -> web.Response:
         device = self._require(request)
@@ -1187,6 +1319,24 @@ class Hub:
         chat = self._visible_chat(device, request.match_info["chat_id"])
         return _json({"goal": await asyncio.to_thread(self._goal_for, chat["id"])})
 
+    async def h_task(self, request: web.Request) -> web.Response:
+        """The bounded structured task snapshot for one chat: plan, tools, subagents and outcome.
+
+        Only facts Hermes supplied are here; a chat this server has no record for answers null. The
+        app pairs this with namespaced ``task.*`` socket events, and uses the snapshot to recover
+        after a reconnect.
+        """
+        device = self._require(request)
+        chat_id = str(request.query.get("chat") or "").strip()
+        if not chat_id:
+            return _error(400, "chat is required")
+        self._visible_chat(device, chat_id)
+        tracker = self.execution
+        if tracker is None:
+            return _json({"available": False, "snapshot": None, "capabilities": {"subagent_stop": False}})
+        return _json({"available": True, "snapshot": tracker.snapshot(chat_id),
+                      "capabilities": tracker.capabilities()})
+
     async def h_goals(self, request: web.Request) -> web.Response:
         """Every chat you can see that has a goal, for the home screen."""
         device = self._require(request)
@@ -1212,7 +1362,15 @@ class Hub:
         query = " ".join((request.query.get("q") or "").split())[:200]
         if len(query) < 2:
             return _json({"results": []})
-        chats = {c["id"]: c for c in self.visible_chats(device)}
+        project_id = (request.query.get("project_id") or "").strip()
+        if project_id:
+            try:
+                allowed = set(self.projects.project_chat_ids(device, project_id, _BOT.get()))
+            except ProjectError as exc:
+                return _error(exc.status, str(exc))
+            chats = {c["id"]: c for c in self.visible_chats(device) if c["id"] in allowed}
+        else:
+            chats = {c["id"]: c for c in self.visible_chats(device)}
         found = self.store.search_messages(query, list(chats), limit=60)
         results = [{"message": {k: m[k] for k in ("id", "chat_id", "role", "created_at", "position")},
                     "chat": {"id": m["chat_id"], "title": chats[m["chat_id"]]["title"], "kind": chats[m["chat_id"]]["kind"]},
@@ -1224,6 +1382,78 @@ class Hub:
         device = self._require(request)
         chat = self._visible_chat(device, request.match_info["chat_id"])
         return _json({"files": self.store.chat_attachments(chat["id"])})
+
+    # -- workspace checkpoints: Hermes's snapshots of the folder it works in ---------------------
+    #
+    # Owners only: a checkpoint names files on the server and a restore changes them. Reading is a
+    # plain owner request; restoring is a signed owner action and never part of the offline outbox.
+
+    def _checkpoints(self) -> "checkpoints_api.CheckpointService":
+        if self.checkpoints is None:
+            raise web.HTTPNotFound(text=json.dumps({"error": "This server can't show checkpoints."}),
+                                   content_type="application/json")
+        return self.checkpoints
+
+    @staticmethod
+    def _checkpoint_refusal(exc: "checkpoints_api.CheckpointError") -> web.Response:
+        payload: Dict[str, Any] = {"error": str(exc), **exc.extra}
+        if exc.needs:
+            payload["needs"] = exc.needs
+        return _json(payload, status=exc.status)
+
+    async def h_checkpoints(self, request: web.Request) -> web.Response:
+        """The workspace's checkpoints, with the exact folder and whether restoring is possible."""
+        self._require(request)
+        service = self._checkpoints()
+        try:
+            return _json(await service.listing())
+        except checkpoints_api.CheckpointError as exc:
+            return self._checkpoint_refusal(exc)
+        except Exception:
+            logger.warning("[winglet] could not list checkpoints", exc_info=True)
+            return _error(502, "Hermes couldn't read its checkpoints just now. Try again.")
+
+    async def h_checkpoint(self, request: web.Request) -> web.Response:
+        """One checkpoint: what changed since, bounded, with the revision a restore must match."""
+        self._require(request)
+        service = self._checkpoints()
+        try:
+            return _json(await service.preview(request.match_info["hash"]))
+        except checkpoints_api.CheckpointError as exc:
+            return self._checkpoint_refusal(exc)
+        except Exception:
+            logger.warning("[winglet] could not preview a checkpoint", exc_info=True)
+            return _error(502, "Hermes couldn't read those changes just now. Try again.")
+
+    async def h_checkpoint_restore(self, request: web.Request) -> web.Response:
+        """Put the workspace back as it was at a checkpoint, after it was previewed and signed for."""
+        device = self._require(request)
+        service = self._checkpoints()
+        body = await self._body(request)
+        # A safe restore is the default; anything but an explicit JSON false keeps it safe.
+        safe = body.get("safe", True)
+        if not isinstance(safe, bool):
+            safe = True
+        try:
+            result = await service.restore(
+                request.match_info["hash"], revision=str(body.get("revision") or ""),
+                safe=safe, operation_id=str(body.get("operation_id") or ""),
+                device=device["name"])
+        except checkpoints_api.CheckpointError as exc:
+            self.audit("checkpoint.restore", device, f"refused: {exc}", outcome="refused")
+            return self._checkpoint_refusal(exc)
+        except Exception:
+            logger.warning("[winglet] could not restore a checkpoint", exc_info=True)
+            return _error(502, "Hermes couldn't restore that checkpoint just now.")
+        if result.get("ok"):
+            self.audit("checkpoint.restore", device, result.get("message") or "restored a checkpoint")
+        else:
+            self.audit("checkpoint.restore", device, f"failed: {result.get('error') or 'unknown error'}",
+                       outcome="failed")
+        # Other owners' phones refresh their list; members never receive checkpoint events.
+        await self.broadcast({"type": "checkpoint.restored", "bot": _BOT.get(), "at": time.time(),
+                              "result": result, "by": device["name"]})
+        return _json({"result": result})
 
     async def h_commands(self, request: web.Request) -> web.Response:
         """Slash commands this Hermes accepts from the app, with their hints."""
@@ -1385,8 +1615,18 @@ class Hub:
     async def delete_message(self, message_id: str) -> bool:
         gone = await self.publish(
             lambda: self.store.delete_message(message_id),
-            lambda row: {"type": "message.delete", "chat_id": row["chat_id"], "message_id": message_id})
+            lambda row: [{"type": "message.delete", "chat_id": row["chat_id"], "message_id": message_id},
+                         {"type": "chat.update", "chat": self.store.get_chat(row["chat_id"])}])
         return gone is not None
+
+    def busy_chats(self) -> List[str]:
+        """This bot's chats with a reply running now, by name. A workspace restore waits for them."""
+        names = []
+        for chat_id in self._typing:
+            chat = self.store.get_chat(chat_id)
+            if chat is not None and (chat.get("bot") or None) == _BOT.get():
+                names.append(str(chat.get("title") or chat_id))
+        return sorted(names)
 
     async def set_typing(self, chat_id: str, on: bool) -> None:
         """``on`` is re-sent every few seconds while the agent works; the app expires it after ~8s."""
@@ -1446,6 +1686,7 @@ class Hub:
     async def h_ws(self, request: web.Request) -> web.StreamResponse:
         legacy = bool(request.query.get("token")) or request.headers.get("Authorization", "").lower().startswith("bearer ")
         device = self._device(request) if legacy else None
+        socket_token = request.query.get("token") or request.headers.get("Authorization", "").removeprefix("Bearer ")
         if legacy and device is None:
             return _error(401, "not paired")
         ws = web.WebSocketResponse(heartbeat=25, max_msg_size=1024 * 1024)
@@ -1459,7 +1700,8 @@ class Hub:
             except (asyncio.TimeoutError, ValueError, TypeError):
                 data = {}
             if isinstance(data, dict) and data.get("type") == "auth":
-                device = self.store.device_for_token(str(data.get("token") or ""))
+                socket_token = str(data.get("token") or "")
+                device = self.store.device_for_token(socket_token)
             if device is None:
                 await ws.close(code=4401, message=b"not paired")
                 return ws
@@ -1467,24 +1709,25 @@ class Hub:
         if problem is not None:
             await ws.close(code=4404, message=b"no such bot")
             return ws
-        self._sockets[ws] = {"device": device, "bot": bot}
         try:
-            with self._bot_context(bot):
-                # The stream head is read before the snapshot below on purpose: an event committed
-                # after this point is either after the watermark (and sent live, because the socket
-                # is registered already) or in the resume reply. Read afterwards, an event could
-                # fall between the snapshot and the watermark and be lost.
-                stream = {"epoch": self.events.epoch(), "watermark": self.events.head(bot),
-                          **self.events.retention()}
-                hello = {"type": "hello", "server_id": self.server_id(), "bot": self.bot(), "device": device,
-                         "me": self.me(device), **self.about(), "chats": self.visible_chats(device),
-                         "typing": sorted(c for c in self._typing if self._in_bot(c)
-                                          and self.can_see(device, self.store.get_chat(c))),
-                         "pending": self.pending_for(device), "paused": self.paused_for(device),
-                         "event_stream": stream}
-                if device.get("role") == "owner" and bot is None:
-                    hello["bots"] = self.bots()
-                await ws.send_json(hello)
+            async with self._publish_lock:
+                self._sockets[ws] = {"device": device, "bot": bot, "auth_token": socket_token}
+                with self._bot_context(bot):
+                    # The stream head is read before the snapshot below on purpose: an event committed
+                    # after this point is either after the watermark (and sent live, because the socket
+                    # is registered already) or in the resume reply. Read afterwards, an event could
+                    # fall between the snapshot and the watermark and be lost.
+                    stream = {"epoch": self.events.epoch(), "watermark": self.events.head(bot),
+                              **self.events.retention(), "scope": self._replay_scope(device)}
+                    hello = {"type": "hello", "server_id": self.server_id(), "bot": self.bot(), "device": device,
+                             "me": self.me(device), **self.about(), "chats": self.visible_chats(device),
+                             "typing": sorted(c for c in self._typing if self._in_bot(c)
+                                              and self.can_see(device, self.store.get_chat(c))),
+                             "pending": self.pending_for(device), "paused": self.paused_for(device),
+                             "projects": self.projects.snapshot(device, bot), "event_stream": stream}
+                    if device.get("role") == "owner" and bot is None:
+                        hello["bots"] = self.bots()
+                    await asyncio.wait_for(ws.send_json(hello), timeout=2.0)
             async for msg in ws:
                 if msg.type != WSMsgType.TEXT:
                     continue
@@ -1499,9 +1742,12 @@ class Hub:
         return ws
 
     async def _on_ws(self, ws: web.WebSocketResponse, device: Dict[str, Any], data: Dict[str, Any]) -> None:
-        device = self.store.get_device(device["id"])
-        if device is None:
+        meta = self._sockets.get(ws, {})
+        device = self.store.device_for_token(meta["auth_token"]) if meta.get("auth_token") else self.store.get_device(device["id"])
+        if device is None or (_BOT.get() is not None and device.get("role") != "owner"):
             await ws.close(code=4401, message=b"unpaired")
+            return
+        if not isinstance(data, dict):
             return
         kind = data.get("type")
         if kind == "ping":
@@ -1535,6 +1781,10 @@ class Hub:
             out = {**out, "paused": self._member_pause(out.get("paused"))}
         return out
 
+    def _replay_scope(self, device: Dict[str, Any]) -> str:
+        value = json.dumps([self.server_id(), _BOT.get(), device["id"], device.get("role")])
+        return hashlib.sha256(value.encode()).hexdigest()[:32]
+
     async def _resume(self, ws: web.WebSocketResponse, device: Dict[str, Any], data: Dict[str, Any]) -> None:
         """Answer a phone's "what did I miss": events after its cursor, or why it must snapshot.
 
@@ -1542,15 +1792,41 @@ class Hub:
         already in force when the retained rows are filtered.
         """
         chats: Dict[str, Optional[Dict[str, Any]]] = {}
+        if data.get("scope") != self._replay_scope(device):
+            await ws.send_json({"type": "resume", "ok": False, "reason": "cursor",
+                                "epoch": self.events.epoch(), "watermark": self.events.head(_BOT.get())})
+            return
         reply = self.events.replay(
             _BOT.get(), after=data.get("cursor"), epoch=data.get("epoch"),
             visible=lambda event: self._event_visible(device, event, chats),
             page=data.get("limit") if isinstance(data.get("limit"), int) else None)
         if reply.get("events"):
             latest = self.pending_for(device)
-            reply["events"] = [self._shape(device, event, latest if "pending" in event else None)
-                               for event in reply["events"]]
-        await ws.send_json({"type": "resume", **reply})
+            shaped = []
+            for event in reply["events"]:
+                # Retained notifications never resurrect old/deleted message text or an answered card.
+                # Their sequence is historical; their authoritative content is current.
+                if event.get("type") in {"message.new", "message.update"}:
+                    message_id = (event.get("message") or {}).get("id")
+                    current = self.store.get_message(message_id) if message_id else None
+                    event = ({**event, "message": current} if current else
+                             {"type": "message.delete", "chat_id": event.get("chat_id"),
+                              "message_id": message_id, "event_seq": event["event_seq"]})
+                elif event.get("type") == "chat.update":
+                    previous = event.get("chat") or {}
+                    current = self.store.get_chat(previous.get("id"))
+                    event = ({**event, "chat": current} if current else
+                             {"type": "chat.delete", "chat_id": previous.get("id"),
+                              "owner_device": previous.get("owner_device"), "event_seq": event["event_seq"]})
+                elif event.get("type") in {"inbox.new", "inbox.update"}:
+                    current = self.store.get_inbox((event.get("item") or {}).get("id"))
+                    if current is None:
+                        event = {"type": "sync.hint", "reason": "inbox", "event_seq": event["event_seq"]}
+                    else:
+                        event = {**event, "item": current}
+                shaped.append(self._shape(device, event, latest if "pending" in event else None))
+            reply["events"] = shaped
+        await ws.send_json({"type": "resume", "scope": self._replay_scope(device), **reply})
 
     def sync_snapshot(self, device: Dict[str, Any]) -> Dict[str, Any]:
         """What this device may see right now, with the watermark it is authoritative as of.
@@ -1568,13 +1844,14 @@ class Hub:
         items = [i for i in items if self.can_see(device, by_id.get(i["chat_id"]))]
         # Deletions repaired for chats this phone can see: a message removed while it was offline.
         deletions: Dict[str, List[str]] = {}
-        for chat in chats[:200]:
-            ids = self.store.deleted_message_ids(chat["id"])[-200:]
+        for chat in chats:
+            ids = self.store.deleted_message_ids(chat["id"])
             if ids:
                 deletions[chat["id"]] = ids
-        return {"server_id": self.server_id(), "bot": self.bot(), "epoch": self.events.epoch(),
+        return {"server_id": self.server_id(), "bot": _BOT.get(), "scope": self._replay_scope(device), "epoch": self.events.epoch(),
                 "watermark": watermark, "chats": chats, "inbox": items, "pending": self.pending_for(device),
                 "paused": self.paused_for(device), "me": self.me(device), "deletions": deletions,
+                "projects": self.projects.snapshot(device, _BOT.get()),
                 "retention": self.events.retention()}
 
     async def h_sync_snapshot(self, request: web.Request) -> web.Response:
@@ -1593,7 +1870,7 @@ class Hub:
             return True
         if event.get("type") == "system.paused":
             return True
-        if str(event.get("type") or "").startswith("system."):
+        if str(event.get("type") or "").startswith(("system.", "checkpoint.")):
             return False
         if event.get("type") == "chat.delete":
             return event.get("owner_device") == device["id"]
@@ -1605,7 +1882,7 @@ class Hub:
                     chat_id = value.get("id") if key == "chat" else value.get("chat_id")
                     break
         if chat_id is None:
-            return True
+            return event.get("type") in {"pet.update", "system.bots"}
         if chats is None:
             return self.can_see(device, self.store.get_chat(chat_id))
         if chat_id not in chats:
@@ -1650,13 +1927,32 @@ class Hub:
                 if result is not None:
                     built = event_of(result)
                     for payload in built if isinstance(built, list) else [built]:
-                        seq = self.events.append(_BOT.get(), payload)
-                        events.append({**payload, "seq": seq} if seq is not None else payload)
-            for event in events:
-                await self.broadcast(event)
+                        bot = self._event_bot(payload)
+                        scopes = [bot] if bot is not _ANY_BOT else list({None, *[b["name"] for b in self.bots()]})
+                        for scope in scopes:
+                            seq = self.events.append(scope, payload)
+                            events.append(({**payload, "event_seq": seq} if seq is not None else payload, scope))
+            for event, scope in events:
+                await self._broadcast(event, scope=scope)
         return result
 
     async def broadcast(self, event: Dict[str, Any]) -> None:
+        """Journal additive feature events without changing their namespaced payloads.
+
+        These already-committed external feature mutations are at-least-once notifications;
+        only publish(write, event_of) provides an atomic mutation + journal transaction.
+        """
+        async with self._publish_lock:
+            bot = self._event_bot(event)
+            scopes = [bot] if bot is not _ANY_BOT else list({None, *[b["name"] for b in self.bots()]})
+            for scope in scopes:
+                seq = self.events.append(scope, event)
+                payload = {**event, "event_seq": seq} if seq is not None else event
+                await self._broadcast(payload, scope=scope if seq is not None else _ANY_BOT)
+                if seq is None:
+                    break
+
+    async def _broadcast(self, event: Dict[str, Any], scope=_ANY_BOT) -> None:
         """Send ``event`` to every socket that may see it. What's the same for every socket (the event's bot
         and chat, its JSON, a pending count) is worked out once, not per socket: this runs on each streamed edit."""
         dead = []
@@ -1665,11 +1961,13 @@ class Hub:
         pending: Dict[tuple, int] = {}
         encoded: Dict[int, str] = {}
         for ws, meta in list(self._sockets.items()):
-            device = self.current_device(meta["device"]["id"])
+            device = self.store.device_for_token(meta["auth_token"]) if meta.get("auth_token") else self.store.get_device(meta["device"]["id"])
             if device is None:
                 dead.append(ws)
                 with contextlib.suppress(Exception):
                     await ws.close(code=4401, message=b"unpaired")
+                continue
+            if scope is not _ANY_BOT and scope != meta.get("bot"):
                 continue
             if not self._event_visible(device, event, chats):
                 continue
@@ -1690,7 +1988,31 @@ class Hub:
                 if out is event:
                     encoded[id(out)] = text
             try:
-                await ws.send_str(text)
+                await asyncio.wait_for(ws.send_str(text), timeout=2.0)
+            except Exception:
+                dead.append(ws)
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(ws.close(code=1013, message=b"resync required"), timeout=0.2)
+        for ws in dead:
+            self._sockets.pop(ws, None)
+
+    async def broadcast_projects(self, bot: Optional[str]) -> None:
+        """Send this bot's project snapshot to each socket, tailored to what that device may see.
+
+        Project events carry private member projects and chat counts, so unlike a plain broadcast the
+        payload differs per device. Sockets on other bots never hear it.
+        """
+        dead = []
+        for ws, meta in list(self._sockets.items()):
+            if meta.get("bot") != bot:
+                continue
+            device = self.store.device_for_token(meta["auth_token"]) if meta.get("auth_token") else self.store.get_device(meta["device"]["id"])
+            if device is None:
+                dead.append(ws)
+                continue
+            try:
+                await asyncio.wait_for(ws.send_json({"type": "project.sync", "bot": bot,
+                                    "projects": self.projects.snapshot(device, bot)}), timeout=2.0)
             except Exception:
                 dead.append(ws)
         for ws in dead:
@@ -3015,6 +3337,10 @@ class Hub:
         return self._http
 
     async def aclose(self) -> None:
+        if self.rooms is not None:
+            await self.rooms.close()
+        if self.processes is not None:
+            await self.processes.close()
         if self._recovery_task:
             self._recovery_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

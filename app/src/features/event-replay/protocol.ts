@@ -9,6 +9,7 @@
 
 /** What `hello.event_stream` promises. Absent on servers before the feature. */
 export type EventStreamInfo = {
+  scope: string;
   epoch: string;
   watermark: number;
   /** Retention, for explaining a refusal: "the oldest events fell off". */
@@ -20,14 +21,16 @@ export type EventStreamInfo = {
 export type RefusalReason = 'epoch' | 'cursor' | 'gap' | 'journal';
 
 /** An event as the server committed it. `seq` orders it within the bot's stream. */
-export type JournalEvent = { type: string; seq: number; chat_id?: string; [key: string]: unknown };
+export type JournalEvent = { type: string; event_seq: number; chat_id?: string; [key: string]: unknown };
 
 export type ResumeReply =
-  | { ok: true; epoch: string; watermark: number; cursor: number; events: JournalEvent[]; has_more: boolean }
+  | { ok: true; scope: string; epoch: string; watermark: number; cursor: number; events: JournalEvent[]; has_more: boolean }
   | { ok: false; epoch?: string; watermark: number; reason: RefusalReason };
 
 /** The authoritative scoped state behind `GET /api/sync/snapshot`. */
 export type SyncSnapshot = {
+  scope: string;
+  projects?: any;
   server_id: string;
   bot: string | null;
   epoch: string;
@@ -50,18 +53,19 @@ const object = (value: unknown): value is Record<string, any> =>
 
 /** A committed sequence number: a whole number, one or more. */
 const seqOf = (value: unknown): value is number =>
-  typeof value === 'number' && Number.isInteger(value) && value > 0;
+  typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 
 /** A count that may be zero (a watermark, a retention bound). */
 const count = (value: unknown): value is number =>
-  typeof value === 'number' && Number.isInteger(value) && value >= 0;
+  typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 
 export function eventStreamInfo(value: unknown): EventStreamInfo | undefined {
   if (!object(value)) return undefined;
   const epoch = value.epoch;
   // A stream without a generation can't be trusted with a saved cursor: leave it to a snapshot.
-  if (typeof epoch !== 'string' || !epoch || !count(value.watermark)) return undefined;
+  if (typeof value.scope !== 'string' || !value.scope || typeof epoch !== 'string' || !epoch || !count(value.watermark)) return undefined;
   return {
+    scope: value.scope,
     epoch,
     watermark: value.watermark,
     keep_events: count(value.keep_events) ? value.keep_events : DEFAULT_KEEP_EVENTS,
@@ -71,7 +75,7 @@ export function eventStreamInfo(value: unknown): EventStreamInfo | undefined {
 
 /** A live frame or replayed event, if it carries the seq that makes it resumable. */
 export function journalEvent(value: unknown): JournalEvent | undefined {
-  if (!object(value) || typeof value.type !== 'string' || !seqOf(value.seq)) return undefined;
+  if (!object(value) || typeof value.type !== 'string' || !seqOf(value.event_seq)) return undefined;
   return value as JournalEvent;
 }
 
@@ -83,8 +87,8 @@ export function journalEvent(value: unknown): JournalEvent | undefined {
 export function orderJournalEvents(events: JournalEvent[]): JournalEvent[] {
   const seen = new Set<number>();
   return [...events]
-    .sort((a, b) => a.seq - b.seq)
-    .filter((event) => (seen.has(event.seq) ? false : seen.add(event.seq) > 0));
+    .sort((a, b) => a.event_seq - b.event_seq)
+    .filter((event) => (seen.has(event.event_seq) ? false : (seen.add(event.event_seq), true)));
 }
 
 export function resumeReply(value: unknown): ResumeReply | undefined {
@@ -92,12 +96,13 @@ export function resumeReply(value: unknown): ResumeReply | undefined {
   const watermark = count(value.watermark) ? value.watermark : undefined;
   if (watermark === undefined) return undefined;
   if (value.ok === true) {
-    if (typeof value.epoch !== 'string' || !value.epoch || !count(value.cursor) || !Array.isArray(value.events)) {
+    if (typeof value.scope !== 'string' || !value.scope || typeof value.epoch !== 'string' || !value.epoch || !count(value.cursor) || !Array.isArray(value.events)) {
       return undefined;
     }
-    if (value.cursor > watermark) return undefined;
+    if (value.cursor > watermark || value.events.some((e: unknown) => !journalEvent(e)) || value.events.some((e: JournalEvent) => e.event_seq > value.cursor)) return undefined;
     return {
       ok: true,
+      scope: value.scope,
       epoch: value.epoch,
       watermark,
       cursor: value.cursor,
@@ -115,7 +120,7 @@ export function resumeReply(value: unknown): ResumeReply | undefined {
 
 export function syncSnapshot(value: unknown): SyncSnapshot | undefined {
   if (!object(value)) return undefined;
-  if (typeof value.server_id !== 'string' || typeof value.epoch !== 'string' || !value.epoch) return undefined;
+  if (typeof value.scope !== 'string' || !value.scope || typeof value.server_id !== 'string' || typeof value.epoch !== 'string' || !value.epoch) return undefined;
   if (!count(value.watermark) || !Array.isArray(value.chats) || !Array.isArray(value.inbox)) return undefined;
   if (!count(value.pending)) return undefined;
   const deletions: Record<string, string[]> = {};
@@ -126,6 +131,8 @@ export function syncSnapshot(value: unknown): SyncSnapshot | undefined {
     }
   }
   return {
+    scope: value.scope,
+    projects: value.projects,
     server_id: value.server_id,
     bot: typeof value.bot === 'string' ? value.bot : null,
     epoch: value.epoch,

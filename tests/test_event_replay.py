@@ -86,7 +86,7 @@ def test_replay_returns_events_after_the_cursor_in_order(store):
         stream.append(None, message_event(message_id=f"m{i}"))
     reply = replay(stream, after=1)
     assert reply["ok"] is True
-    assert [e["seq"] for e in reply["events"]] == [2, 3]
+    assert [e["event_seq"] for e in reply["events"]] == [2, 3]
     assert [e["message"]["id"] for e in reply["events"]] == ["m1", "m2"]
     assert reply["watermark"] == reply["cursor"] == 3 and reply["has_more"] is False
     assert reply["epoch"] == stream.epoch()
@@ -133,12 +133,12 @@ def test_replay_pages_and_reports_how_far_the_page_reached(store):
     for i in range(5):
         stream.append(None, message_event(message_id=f"m{i}"))
     first = replay(stream, after=0)
-    assert [e["seq"] for e in first["events"]] == [1, 2]
+    assert [e["event_seq"] for e in first["events"]] == [1, 2]
     assert first["has_more"] is True and first["cursor"] == 2 and first["watermark"] == 5
     second = replay(stream, after=first["cursor"])
-    assert [e["seq"] for e in second["events"]] == [3, 4]
+    assert [e["event_seq"] for e in second["events"]] == [3, 4]
     third = replay(stream, after=second["cursor"])
-    assert [e["seq"] for e in third["events"]] == [5]
+    assert [e["event_seq"] for e in third["events"]] == [5]
     assert third["has_more"] is False and third["cursor"] == third["watermark"] == 5
 
 
@@ -159,7 +159,7 @@ def test_an_oversize_payload_is_journaled_as_a_hint_under_the_same_seq(store):
     huge = {"type": "message.update", "chat_id": "c1", "message": {"id": "m1", "text": "x" * 70_000}}
     assert stream.append(None, huge) == 1
     assert replay(stream, after=0)["events"] == [
-        {"type": "sync.hint", "chat_id": "c1", "reason": "oversize", "seq": 1}]
+        {"type": "sync.hint", "chat_id": "c1", "reason": "oversize", "event_seq": 1}]
 
 
 def test_events_are_kept_per_bot_and_do_not_mix(store):
@@ -226,7 +226,7 @@ async def test_hello_announces_the_stream_and_the_capability(client, hub):
     hello = await ws.receive_json()
     stream = hello["event_stream"]
     assert hello["features"]["event_replay"] is True
-    assert set(stream) == {"epoch", "watermark", "keep_events", "keep_seconds"}
+    assert set(stream) == {"epoch", "watermark", "keep_events", "keep_seconds", "scope"}
     assert stream["watermark"] == 0 and stream["epoch"]
     assert stream["keep_events"] > 0 and stream["keep_seconds"] > 0
     await ws.close()
@@ -239,8 +239,8 @@ async def test_live_frames_carry_a_seq_and_presence_does_not(client, hub):
     await ws.send_json({"type": "message.send", "chat_id": "general", "text": "one"})
     new = await ws.receive_json()
     chat = await ws.receive_json()
-    assert new["type"] == "message.new" and new["seq"] == 1
-    assert chat["type"] == "chat.update" and chat["seq"] == 2
+    assert new["type"] == "message.new" and new["event_seq"] == 1
+    assert chat["type"] == "chat.update" and chat["event_seq"] == 2
 
     await hub.set_typing("general", True)
     typing = await ws.receive_json()
@@ -257,16 +257,16 @@ async def test_resume_replays_what_was_missed_while_offline(client, hub):
     hello = await ws.receive_json()
     assert hello["event_stream"]["watermark"] == 4  # two messages, two chat rows
 
-    await ws.send_json({"type": "resume", "cursor": 0, "epoch": hello["event_stream"]["epoch"]})
+    await ws.send_json({"type": "resume", "scope": hello["event_stream"]["scope"], "cursor": 0, "epoch": hello["event_stream"]["epoch"]})
     reply = await ws.receive_json()
     assert reply["type"] == "resume" and reply["ok"] is True and reply["has_more"] is False
     assert [e["type"] for e in reply["events"]] == ["message.new", "chat.update"] * 2
-    assert [e["seq"] for e in reply["events"]] == [1, 2, 3, 4]
+    assert [e["event_seq"] for e in reply["events"]] == [1, 2, 3, 4]
     assert [e["message"]["text"] for e in reply["events"] if e["type"] == "message.new"] == ["first", "second"]
     assert reply["cursor"] == reply["watermark"] == 4
 
     # Caught up: the same call is a safe no-op, which is what a reconnect storm sends.
-    await ws.send_json({"type": "resume", "cursor": reply["watermark"], "epoch": reply["epoch"]})
+    await ws.send_json({"type": "resume", "scope": hello["event_stream"]["scope"], "cursor": reply["watermark"], "epoch": reply["epoch"]})
     again = await ws.receive_json()
     assert again["ok"] is True and again["events"] == [] and again["watermark"] == 4
     await ws.close()
@@ -278,7 +278,7 @@ async def test_a_wrong_epoch_sends_the_phone_to_a_snapshot(client, hub):
     hub.events.rotate_epoch()
     ws = await client.ws_connect(f"/api/ws?token={token}")
     hello = await ws.receive_json()
-    await ws.send_json({"type": "resume", "cursor": 0, "epoch": "the-old-generation"})
+    await ws.send_json({"type": "resume", "scope": hello["event_stream"]["scope"], "cursor": 0, "epoch": "the-old-generation"})
     reply = await ws.receive_json()
     assert reply["ok"] is False and reply["reason"] == "epoch"
     assert reply["epoch"] == hello["event_stream"]["epoch"] and reply["watermark"] == 2
@@ -292,11 +292,11 @@ async def test_retention_that_ran_out_sends_the_phone_to_a_snapshot(client, hub)
     token = await pair(client, hub)
     ws = await client.ws_connect(f"/api/ws?token={token}")
     hello = await ws.receive_json()
-    await ws.send_json({"type": "resume", "cursor": 0, "epoch": hello["event_stream"]["epoch"]})
+    await ws.send_json({"type": "resume", "scope": hello["event_stream"]["scope"], "cursor": 0, "epoch": hello["event_stream"]["epoch"]})
     assert (await ws.receive_json())["reason"] == "gap"
-    await ws.send_json({"type": "resume", "cursor": 2, "epoch": hello["event_stream"]["epoch"]})
+    await ws.send_json({"type": "resume", "scope": hello["event_stream"]["scope"], "cursor": 2, "epoch": hello["event_stream"]["epoch"]})
     reply = await ws.receive_json()
-    assert reply["ok"] is True and [e["seq"] for e in reply["events"]] == [3, 4]
+    assert reply["ok"] is True and [e["event_seq"] for e in reply["events"]] == [3, 4]
     await ws.close()
 
 
@@ -337,25 +337,25 @@ async def test_a_member_replays_only_their_own_chats(client, hub):
 
     ws = await client.ws_connect(f"/api/ws?token={member_token}")
     hello = await ws.receive_json()
-    await ws.send_json({"type": "resume", "cursor": 0, "epoch": hello["event_stream"]["epoch"]})
+    await ws.send_json({"type": "resume", "scope": hello["event_stream"]["scope"], "cursor": 0, "epoch": hello["event_stream"]["epoch"]})
     reply = await ws.receive_json()
     chats = {e.get("chat_id") or (e.get("chat") or {}).get("id") for e in reply["events"]}
     assert chats == {mine}
-    assert [e["seq"] for e in reply["events"]] == [1, 2]
+    assert [e["event_seq"] for e in reply["events"]] == [1, 2]
     assert reply["watermark"] == 4  # the other member's two rows exist; they were filtered out
     await ws.close()
 
     ws = await client.ws_connect(f"/api/ws?token={owner}")
     hello = await ws.receive_json()
-    await ws.send_json({"type": "resume", "cursor": 0, "epoch": hello["event_stream"]["epoch"]})
+    await ws.send_json({"type": "resume", "scope": hello["event_stream"]["scope"], "cursor": 0, "epoch": hello["event_stream"]["epoch"]})
     owner_reply = await ws.receive_json()
     assert len(owner_reply["events"]) == 4
     await ws.close()
 
     ws = await client.ws_connect(f"/api/ws?token={other_token}")
     hello = await ws.receive_json()
-    await ws.send_json({"type": "resume", "cursor": 0, "epoch": hello["event_stream"]["epoch"]})
-    assert {e["seq"] for e in (await ws.receive_json())["events"]} == {3, 4}
+    await ws.send_json({"type": "resume", "scope": hello["event_stream"]["scope"], "cursor": 0, "epoch": hello["event_stream"]["epoch"]})
+    assert {e["event_seq"] for e in (await ws.receive_json())["events"]} == {3, 4}
     await ws.close()
 
 
@@ -369,16 +369,24 @@ async def test_a_role_change_applies_to_rows_already_in_the_journal(client, hub)
     ws = await client.ws_connect(f"/api/ws?token={member_token}")
     hello = await ws.receive_json()
     epoch = hello["event_stream"]["epoch"]
-    await ws.send_json({"type": "resume", "cursor": 0, "epoch": epoch})
+    await ws.send_json({"type": "resume", "scope": hello["event_stream"]["scope"], "cursor": 0, "epoch": epoch})
     assert (await ws.receive_json())["events"] == []
 
     hub.store.update_device(member["id"], role="owner")
-    await ws.send_json({"type": "resume", "cursor": 0, "epoch": epoch})
+    await ws.send_json({"type": "resume", "scope": hello["event_stream"]["scope"], "cursor": 0, "epoch": epoch})
     promoted = await ws.receive_json()
-    assert [e["seq"] for e in promoted["events"]] == [1, 2]
+    assert promoted["ok"] is False  # role changes invalidate scope, even on an old socket
+    await ws.close()
+    ws = await client.ws_connect(f"/api/ws?token={member_token}")
+    hello = await ws.receive_json()
+    await ws.send_json({"type": "resume", "scope": hello["event_stream"]["scope"], "cursor": 0, "epoch": epoch})
+    assert [e["event_seq"] for e in (await ws.receive_json())["events"]] == [1, 2]
 
     hub.store.update_device(member["id"], role="member")
-    await ws.send_json({"type": "resume", "cursor": 0, "epoch": epoch})
+    await ws.close()
+    ws = await client.ws_connect(f"/api/ws?token={member_token}")
+    hello = await ws.receive_json()
+    await ws.send_json({"type": "resume", "scope": hello["event_stream"]["scope"], "cursor": 0, "epoch": epoch})
     assert (await ws.receive_json())["events"] == []
     await ws.close()
 
@@ -393,7 +401,7 @@ async def test_owner_only_detail_is_rewritten_for_a_member_on_replay(client, hub
 
     ws = await client.ws_connect(f"/api/ws?token={member_token}")
     hello = await ws.receive_json()
-    await ws.send_json({"type": "resume", "cursor": 0, "epoch": hello["event_stream"]["epoch"]})
+    await ws.send_json({"type": "resume", "scope": hello["event_stream"]["scope"], "cursor": 0, "epoch": hello["event_stream"]["epoch"]})
     reply = await ws.receive_json()
     paused = next(e for e in reply["events"] if e["type"] == "system.paused")
     assert paused["paused"] == {"reason": None, "engaged_at": 10.0}
@@ -405,9 +413,9 @@ async def test_owner_only_detail_is_rewritten_for_a_member_on_replay(client, hub
 async def test_an_unpaired_device_cannot_resume(client, hub):
     member, member_token = hub.store.add_device("Member", role="member")
     ws = await client.ws_connect(f"/api/ws?token={member_token}")
-    await ws.receive_json()
+    hello = await ws.receive_json()
     hub.store.remove_device(member["id"])
-    await ws.send_json({"type": "resume", "cursor": 0, "epoch": hub.events.epoch()})
+    await ws.send_json({"type": "resume", "scope": hello["event_stream"]["scope"], "cursor": 0, "epoch": hub.events.epoch()})
     await ws.receive()
     assert ws.close_code == 4401
     assert (await client.get("/api/sync/snapshot", headers={"Authorization": f"Bearer {member_token}"})).status == 401
@@ -431,7 +439,7 @@ async def test_the_snapshot_is_scoped_and_carries_the_watermark(client, hub):
     auth = {"Authorization": f"Bearer {member_token}"}
     snap = await (await client.get("/api/sync/snapshot", headers=auth)).json()
     assert snap["epoch"] == hello["event_stream"]["epoch"]
-    assert snap["watermark"] == hub.events.head(None) == 4
+    assert snap["watermark"] == hub.events.head(None) == 5
     ids = {c["id"] for c in snap["chats"]}
     assert mine in ids and HOME_CHAT_ID not in ids
     assert [i["chat_id"] for i in snap["inbox"]] == [mine]
@@ -441,7 +449,7 @@ async def test_the_snapshot_is_scoped_and_carries_the_watermark(client, hub):
     # The watermark is read before the state: take a snapshot, then assert what came after it is
     # still ahead of the phone (it would arrive live or in the next resume).
     later = await hub.post_message(mine, "after the snapshot", push=False)
-    assert hub.events.head(None) == 6 > snap["watermark"]
+    assert hub.events.head(None) == 7 > snap["watermark"]
     assert later["text"] == "after the snapshot"
 
 
@@ -478,7 +486,7 @@ async def test_concurrent_writes_get_distinct_ordered_seqs(client, hub):
     seqs = [r["seq"] for r in hub.store._all("SELECT seq FROM event_log ORDER BY seq")]
     assert seqs == list(range(1, 21))
     reply = replay(hub.events)
-    assert [e["seq"] for e in reply["events"]] == seqs
+    assert [e["event_seq"] for e in reply["events"]] == seqs
 
 
 async def test_every_journaled_kind_has_a_shape_the_client_can_apply(client, hub):
@@ -491,3 +499,105 @@ async def test_every_journaled_kind_has_a_shape_the_client_can_apply(client, hub
     kinds = {r["kind"] for r in hub.store._all("SELECT kind FROM event_log")}
     assert kinds <= JOURNAL_KINDS
     assert {"message.new", "message.update", "chat.update", "inbox.new"} <= kinds
+
+
+def test_internal_hole_and_corrupt_payload_require_snapshot(store):
+    stream = EventStream(store)
+    for i in range(3): stream.append(None, message_event(message_id=str(i)))
+    store._exec("DELETE FROM event_log WHERE seq = 2")
+    assert replay(stream)["reason"] == "gap"
+    stream.reset()
+    stream.append(None, message_event())
+    store._exec("UPDATE event_log SET payload = 'broken'")
+    assert replay(stream)["reason"] == "journal"
+
+
+def test_journal_restart_and_threaded_writes_are_durable(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    path = tmp_path / "restart.db"
+    first = Store(path)
+    stream = EventStream(first)
+    epoch = stream.epoch()
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(lambda i: stream.append(None, message_event(message_id=str(i))), range(50)))
+    first.close()
+    second = Store(path)
+    restored = EventStream(second)
+    assert restored.epoch() == epoch
+    reply = replay(restored)
+    assert [e["event_seq"] for e in reply["events"]] == list(range(1, 51))
+    second.close()
+
+
+async def test_namespaced_events_keep_their_own_seq(client, hub):
+    token = await pair(client, hub)
+    ws = await client.ws_connect(f"/api/ws?token={token}")
+    hello = await ws.receive_json()
+    await hub.broadcast({"type": "task.event", "chat_id": "general", "seq": 17, "event": {"kind": "todo"}})
+    live = await ws.receive_json()
+    assert live["seq"] == 17 and live["event_seq"] == 1
+    await ws.send_json({"type": "resume", "scope": hello["event_stream"]["scope"], "epoch": hub.events.epoch(), "cursor": 0})
+    reply = await ws.receive_json()
+    assert reply["events"][0]["seq"] == 17 and reply["events"][0]["event_seq"] == 1
+    await ws.close()
+
+
+async def test_cursor_scope_is_bound_to_device_bot_and_role(client, hub):
+    token = await pair(client, hub)
+    _, other_token = hub.store.add_device("Other", role="owner")
+    first = await client.ws_connect(f"/api/ws?token={token}")
+    hello = await first.receive_json()
+    second = await client.ws_connect(f"/api/ws?token={other_token}")
+    other = await second.receive_json()
+    assert other["event_stream"]["scope"] != hello["event_stream"]["scope"]
+    await second.send_json({"type": "resume", "scope": hello["event_stream"]["scope"], "epoch": hub.events.epoch(), "cursor": 0})
+    assert (await second.receive_json())["reason"] == "cursor"
+    await first.close(); await second.close()
+
+
+async def test_rotated_token_cannot_replay_on_existing_socket(client, hub):
+    token = await pair(client, hub)
+    device = hub.store.device_for_token(token)
+    ws = await client.ws_connect(f"/api/ws?token={token}")
+    hello = await ws.receive_json()
+    hub.store.rotate_token(device["id"])
+    await ws.send_json({"type": "resume", "scope": hello["event_stream"]["scope"], "epoch": hub.events.epoch(), "cursor": 0})
+    await ws.receive()
+    assert ws.close_code == 4401
+
+
+async def test_unknown_unscoped_namespaced_events_are_owner_only(client, hub):
+    member, token = hub.store.add_device("Member", role="member")
+    await hub.broadcast({"type": "context.private", "secret": "owner only"})
+    ws = await client.ws_connect(f"/api/ws?token={token}")
+    hello = await ws.receive_json()
+    await ws.send_json({"type": "resume", "scope": hello["event_stream"]["scope"], "epoch": hub.events.epoch(), "cursor": 0})
+    assert (await ws.receive_json())["events"] == []
+    await ws.close()
+
+
+async def test_replay_never_resurrects_deleted_text_or_old_inbox_status(client, hub):
+    token = await pair(client, hub)
+    message = await hub.post_message("general", "old private text", push=False)
+    await hub.delete_message(message["id"])
+    ws = await client.ws_connect(f"/api/ws?token={token}")
+    hello = await ws.receive_json()
+    await ws.send_json({"type": "resume", "scope": hello["event_stream"]["scope"], "epoch": hub.events.epoch(), "cursor": 0})
+    reply = await ws.receive_json()
+    assert "old private text" not in json.dumps(reply["events"])
+    assert reply["events"][0]["type"] == "message.delete"
+    await ws.close()
+
+
+async def test_slow_socket_is_closed_with_resync_instead_of_blocking_publication(hub):
+    device, token = hub.store.add_device("Slow", role="owner")
+    class SlowSocket:
+        closed = False
+        code = None
+        async def send_str(self, text): await asyncio.Event().wait()
+        async def close(self, *, code, message): self.closed = True; self.code = code
+    ws = SlowSocket()
+    hub._sockets[ws] = {"device": device, "bot": None, "auth_token": token}
+    await asyncio.wait_for(hub.post_message("general", "durable despite a slow phone", push=False), timeout=4)
+    assert ws.closed and ws.code == 1013 and ws not in hub._sockets
+    assert hub.events.head(None) == 2

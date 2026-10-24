@@ -7,7 +7,8 @@ import { createStore } from 'zustand/vanilla';
 
 class ApiError extends Error {
   status: number;
-  constructor(message: string, status: number) { super(message); this.status = status; }
+  data?: any;
+  constructor(message: string, status: number, data?: any) { super(message); this.status = status; this.data = data; }
 }
 
 // Exercise the real store and helper with only transport/storage replaced. Expo native imports
@@ -64,26 +65,38 @@ function harness(os = 'web') {
     return exports;
   }
   const helpers = compile('../src/lib/messages.ts', {});
+  const taskModel = compile('../src/features/execution/model.ts', {});
+  const replayProtocol = compile('../src/features/event-replay/protocol.ts', {});
+  const replaySession = compile('../src/features/event-replay/session.ts', { './protocol': replayProtocol });
+  const replayMerge = compile('../src/features/event-replay/merge.ts', {});
+  const projectHelpers = compile('../src/features/projects/logic.ts', {});
   const { useApp: store } = compile('../src/lib/store.ts', {
     zustand: { create: (fn: any) => createStore(fn) },
     'zustand/react/shallow': { useShallow: (fn: any) => fn },
     'react-native': { Platform: { OS: os } },
     './recovery': { RecoveryCoordinator: FakeCoordinator },
     './messages': helpers,
-    './api': { api: (...args: any[]) => request(...args), ApiError, wsUrl: (s: any) => s.url },
+    '../features/projects/logic': projectHelpers,
+    '../features/event-replay/session': replaySession,
+    '../features/event-replay/merge': replayMerge,
+    './api': { api: (...args: any[]) => request(...args), ApiError, wsUrl: (s: any) => s.url,
+      signedApi: (server: any, method: string, path: string, data?: unknown) =>
+        request(server, path, { method, body: data === undefined ? undefined : JSON.stringify(data) }) },
     './cache': {
       cacheGet: async (key: string, fallback: any) => (cache.has(key) ? structuredClone(cache.get(key)) : fallback),
+      cacheSetStrict: async (key: string, value: any) => { cache.set(key, structuredClone(value)); },
       cacheSet: async (key: string, value: any) => { cache.set(key, structuredClone(value)); },
       cacheRemove: async (prefix: string) => { for (const k of [...cache.keys()]) if (k.startsWith(prefix)) cache.delete(k); },
     },
     './verify': { NEEDS_VERIFY: 'Verify this phone to do that.' },
+    '../features/execution/model': taskModel,
     './sounds': { sound: { reply: () => played.push('reply'), needsYou: () => played.push('needsYou'), tap: () => {}, sent: () => {} } },
     './storage': { getJSON: async (key: string, fallback: any) => (key === 'winglet.servers' && persisted) || fallback,
       setJSON: async (key: string, value: any) => { if (key === 'winglet.servers') persisted = value; } },
   });
   const tick = () => new Promise(resolve => setImmediate(resolve));
   return {
-    store, cache, played, setRequest: (fn: typeof request) => { request = fn; },
+    store, cache, played, taskModel, setRequest: (fn: typeof request) => { request = fn; },
     setRecovery: (fn: typeof recoveryRequest) => { recoveryRequest = fn; },
     disconnect: () => { socket.readyState = 3; socket.onclose?.({ code: 1006 }); },
     retry: () => timers.shift()?.(), timers, sockets, persisted: () => persisted, socket: () => socket, tick,
@@ -657,6 +670,91 @@ test('an inbox snapshot cannot revive an answered request or hide a question rec
   assert.equal(h.store.getState().runtime.s.pending, 1);
 });
 
+const projectSnapshot = (name = 'Launch', revision = 1, layout = 2) => ({
+  projects: [{ id: 'p1', name, position: 1000, archived: false, revision, private: false, can_manage: true,
+    chat_count: 1, created_at: 1, updated_at: 1 }],
+  threads: [{ chat_id: 'general', project_id: 'p1', position: 1000 }],
+  layout_revision: layout,
+});
+
+test('hello and project.sync carry server project structure into the store and its cache', async () => {
+  const h = harness();
+  await h.connect();
+  h.event({ type: 'hello', chats: [{ id: 'general', kind: 'chat', title: 'General' }], pending: 0,
+    features: { projects: true }, projects: projectSnapshot() });
+  await h.tick();
+  assert.equal(h.store.getState().runtime.s.projects?.projects[0].name, 'Launch');
+  assert.equal(h.store.getState().runtime.s.projects?.threads[0].chat_id, 'general');
+  h.event({ type: 'project.sync', projects: projectSnapshot('Renamed', 2, 2) });
+  await h.tick();
+  assert.equal(h.store.getState().runtime.s.projects?.projects[0].name, 'Renamed');
+  assert.equal(h.cache.get('projects:s').projects[0].name, 'Renamed');
+});
+
+test('a stale project rename rolls back and adopts the server snapshot', async () => {
+  const h = harness();
+  await h.connect();
+  h.event({ type: 'hello', chats: [{ id: 'general', kind: 'chat', title: 'General' }], pending: 0,
+    features: { projects: true }, projects: projectSnapshot() });
+  await h.tick();
+  h.setRequest(async () => { throw new ApiError('changed elsewhere', 409, { projects: projectSnapshot('Theirs', 3, 2) }); });
+  await assert.rejects(h.store.getState().renameProject('s', 'p1', 'Mine'));
+  assert.equal(h.store.getState().runtime.s.projects?.projects[0].name, 'Theirs');
+  assert.equal(h.store.getState().runtime.s.projects?.projects[0].revision, 3);
+});
+
+test('moving a chat sends both revisions and puts the old membership back if the server refuses', async () => {
+  const h = harness();
+  await h.connect();
+  h.event({ type: 'hello', chats: [{ id: 'general', kind: 'chat', title: 'General' },
+    { id: 'c1', kind: 'chat', title: 'Topic' }], pending: 0,
+    features: { projects: true }, projects: {
+      projects: [{ ...projectSnapshot().projects[0] },
+        { ...projectSnapshot().projects[0], id: 'p2', name: 'Other', position: 2000, chat_count: 0 }],
+      threads: [{ chat_id: 'c1', project_id: 'p1', position: 1000 }], layout_revision: 2 } });
+  await h.tick();
+  const calls: any[] = [];
+  h.setRequest(async (_server: any, route: string, init: any) => { calls.push({ route, body: JSON.parse(init.body) }); throw new ApiError('offline', 0); });
+  await assert.rejects(h.store.getState().moveChatToProject('s', 'c1', 'p2'));
+  assert.equal(h.store.getState().runtime.s.projects?.threads.find((t) => t.chat_id === 'c1')?.project_id, 'p1');
+  assert.equal(calls[0].route, '/api/projects/p2/chats/c1');
+  assert.equal(calls[0].body.from_project_id, 'p1');
+  assert.equal(calls[0].body.from_revision, 1);
+});
+
+test('starting a chat inside a project sends its revision and keeps the new chat', async () => {
+  const h = harness();
+  await h.connect();
+  h.event({ type: 'hello', chats: [{ id: 'general', kind: 'chat', title: 'General' }], pending: 0,
+    features: { projects: true }, projects: projectSnapshot('Launch', 2, 2) });
+  await h.tick();
+  const calls: any[] = [];
+  const after = { ...projectSnapshot('Launch', 3, 2), threads: [{ chat_id: 'c-new', project_id: 'p1', position: 1000 }] };
+  h.setRequest(async (_server: any, route: string, init: any) => {
+    calls.push({ route, body: JSON.parse(init.body) });
+    return { chat: { id: 'c-new', title: 'Fresh', kind: 'chat', created_at: 1, updated_at: 1, preview: '' }, projects: after };
+  });
+  const chat = await h.store.getState().createChatInProject('s', 'p1', 'Fresh');
+  assert.equal(chat?.id, 'c-new');
+  assert.equal(calls[0].route, '/api/projects/p1/chats');
+  assert.equal(calls[0].body.revision, 2);
+  assert.equal(calls[0].body.title, 'Fresh');
+  assert.equal(h.store.getState().runtime.s.chats['c-new'].title, 'Fresh');
+  assert.equal(h.store.getState().runtime.s.projects?.threads[0].chat_id, 'c-new');
+});
+
+test('project snapshots never disturb an unsent draft', async () => {
+  const h = harness();
+  await h.connect();
+  h.store.getState().setDraft('s', 'general', 'unsent words');
+  h.event({ type: 'hello', chats: [{ id: 'general', kind: 'chat', title: 'General' }], pending: 0,
+    features: { projects: true }, projects: projectSnapshot() });
+  await h.tick();
+  h.event({ type: 'project.sync', projects: projectSnapshot('Moved', 4, 3) });
+  await h.tick();
+  assert.equal(h.store.getState().drafts['s:general'], 'unsent words');
+});
+
 test('overlapping inbox loads apply only the latest requested snapshot', async () => {
   const h = harness();
   await h.connect(); await h.hello();
@@ -670,4 +768,131 @@ test('overlapping inbox loads apply only the latest requested snapshot', async (
   await first;
   assert.equal(h.store.getState().runtime.s.pending, 0);
   assert.equal(Object.keys(h.store.getState().runtime.s.inbox).length, 0);
+});
+
+test('task activity stays per chat, ignores a stale snapshot, and starts fresh on hello', async () => {
+  const h = harness();
+  await h.connect();
+  const base = h.taskModel.emptyTask('general');
+  h.event({ type: 'task.snapshot', chat_id: 'general',
+    snapshot: { ...base, turn_index: 1, turn_id: 't1', state: 'running', started_at: 1, updated_at: 2, seq: 1 } });
+  const tool = { id: 'call-1', name: 'terminal', preview: 'ls', status: 'running', started_at: 2,
+    ended_at: null, duration_ms: null, error: null, started_known: true };
+  h.event({ type: 'task.event', chat_id: 'general', turn_id: 't1', turn_index: 1, seq: 2,
+    event: { kind: 'tool.started', tool } });
+  assert.equal(h.store.getState().runtime.s.tasks.general.tools[0].id, 'call-1');
+
+  // A slow refetch that predates the live fact cannot erase it.
+  h.event({ type: 'task.snapshot', chat_id: 'general',
+    snapshot: { ...base, turn_index: 1, turn_id: 't1', state: 'running', updated_at: 3, seq: 1 } });
+  assert.equal(h.store.getState().runtime.s.tasks.general.tools.length, 1);
+
+  // Another chat's task is independent.
+  h.event({ type: 'task.snapshot', chat_id: 'side',
+    snapshot: { ...h.taskModel.emptyTask('side'), turn_index: 1, state: 'completed', updated_at: 3, ended_at: 3, seq: 1 } });
+  assert.equal(h.store.getState().runtime.s.tasks.side.state, 'completed');
+  assert.equal(h.store.getState().runtime.s.tasks.general.tools.length, 1);
+
+  // A newer snapshot settles this chat.
+  h.event({ type: 'task.snapshot', chat_id: 'general',
+    snapshot: { ...base, turn_index: 1, turn_id: 't1', state: 'completed', updated_at: 4, ended_at: 4, seq: 3 } });
+  assert.equal(h.store.getState().runtime.s.tasks.general.state, 'completed');
+
+  await h.hello();
+  assert.equal(Object.keys(h.store.getState().runtime.s.tasks).length, 0);
+});
+
+test('a late project read cannot roll back live project changes', async () => {
+  const h = harness();
+  await h.connect();
+  h.event({ type: 'hello', chats: [], features: { projects: true }, projects: projectSnapshot() });
+  await h.tick();
+  let resolve!: (value: any) => void;
+  h.setRequest(() => new Promise((done) => { resolve = done; }));
+  const loading = h.store.getState().loadProjects('s');
+  h.event({ type: 'project.sync', projects: projectSnapshot('Live', 4, 2) });
+  resolve({ projects: projectSnapshot('Old', 1, 2) });
+  await loading;
+  assert.equal(h.store.getState().runtime.s.projects?.projects[0].name, 'Live');
+});
+
+test('failed optimistic project changes preserve a newer socket snapshot', async () => {
+  const h = harness();
+  await h.connect();
+  h.event({ type: 'hello', chats: [], features: { projects: true }, projects: projectSnapshot() });
+  await h.tick();
+  let reject!: (reason: any) => void;
+  h.setRequest(() => new Promise((_, fail) => { reject = fail; }));
+  const renaming = h.store.getState().renameProject('s', 'p1', 'Mine');
+  h.event({ type: 'project.sync', projects: projectSnapshot('Newest', 5, 2) });
+  reject(new ApiError('lost connection', 0));
+  await assert.rejects(renaming);
+  assert.equal(h.store.getState().runtime.s.projects?.projects[0].name, 'Newest');
+  assert.equal(h.cache.get('projects:s').projects[0].name, 'Newest');
+});
+
+test('a stale conflict response cannot replace a newer live project snapshot', async () => {
+  const h = harness();
+  await h.connect();
+  h.event({ type: 'hello', chats: [], features: { projects: true }, projects: projectSnapshot() });
+  await h.tick();
+  let reject!: (reason: any) => void;
+  h.setRequest(() => new Promise((_, fail) => { reject = fail; }));
+  const renaming = h.store.getState().renameProject('s', 'p1', 'Mine');
+  h.event({ type: 'project.sync', projects: projectSnapshot('Newest', 5, 2) });
+  reject(new ApiError('old conflict', 409, { projects: projectSnapshot('Older', 3, 2) }));
+  await assert.rejects(renaming);
+  assert.equal(h.store.getState().runtime.s.projects?.projects[0].name, 'Newest');
+});
+
+test('a late project response cannot recreate a removed bot cache', async () => {
+  const h = harness();
+  await h.connect();
+  h.event({ type: 'hello', chats: [], features: { projects: true }, projects: projectSnapshot() });
+  await h.tick();
+  let resolve!: (value: any) => void;
+  h.setRequest(() => new Promise((done) => { resolve = done; }));
+  const loading = h.store.getState().loadProjects('s');
+  await h.store.getState().removeServer('s', false);
+  resolve({ projects: projectSnapshot('Late', 2, 2) });
+  await loading;
+  assert.equal(h.store.getState().runtime.s, undefined);
+  assert.equal(h.cache.has('projects:s'), false);
+});
+
+test('overlapping project reads only apply the latest requested snapshot', async () => {
+  const h = harness();
+  await h.connect();
+  h.event({ type: 'hello', chats: [], features: { projects: true }, projects: projectSnapshot() });
+  await h.tick();
+  const resolves: ((value: any) => void)[] = [];
+  h.setRequest(() => new Promise((done) => resolves.push(done)));
+  const first = h.store.getState().loadProjects('s');
+  const second = h.store.getState().loadProjects('s');
+  resolves[1]({ projects: projectSnapshot('Latest', 3, 2) });
+  await second;
+  resolves[0]({ projects: projectSnapshot('Old', 2, 2) });
+  await first;
+  assert.equal(h.store.getState().runtime.s.projects?.projects[0].name, 'Latest');
+});
+
+
+test('real socket replay persists applied messages with its cursor and suppresses catch-up alerts', async () => {
+  const h = harness(); await h.connect();
+  h.cache.set('replay:s', { cursor: { scope: 'scope', epoch: 'epoch', cursor: 0 }, state: {
+    chats: { general: { id: 'general', kind: 'chat', title: 'General' } }, messages: {}, deleted: {}, loaded: {},
+    inbox: {}, pending: 0, tasks: {},
+  } });
+  await h.store.getState().init();
+  h.setRequest(async (_, route) => route === '/api/inbox' ? { items: [], pending: 0 } : { messages: [], deleted_ids: [] });
+  h.event({ type: 'hello', chats: [{ id: 'general', kind: 'chat', title: 'General' }], pending: 0,
+    features: { event_replay: true }, event_stream: { scope: 'scope', epoch: 'epoch', watermark: 1 } });
+  await h.tick();
+  assert.equal(h.socket().sent.at(-1).type, 'resume');
+  h.event({ type: 'resume', ok: true, scope: 'scope', epoch: 'epoch', watermark: 1, cursor: 1, has_more: false,
+    events: [{ type: 'message.new', event_seq: 1, chat_id: 'general', message: msg(9) }] });
+  await h.tick();
+  const checkpoint = h.cache.get('replay:s');
+  assert.equal(checkpoint.cursor.cursor, 1); assert.equal(checkpoint.state.messages.general[0].id, 'm9');
+  assert.equal(h.store.getState().runtime.s.sync.phase, 'idle'); assert.equal(h.played.length, 0);
 });

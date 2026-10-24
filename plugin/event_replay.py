@@ -167,7 +167,7 @@ class EventStream:
         would be invisible to every phone that reconnects, which is worse than a retry.
         """
         kind = str(event.get("type") or "")
-        if kind not in JOURNAL_KINDS:
+        if kind in {"typing", "pet.update", "system.bots", "system.job", "pong", "hello", "resume", "project.sync"} or "." not in kind:
             return None
         scope = bot or ""
         payload = encode(event)
@@ -175,6 +175,14 @@ class EventStream:
         if len(payload.encode("utf-8")) > MAX_PAYLOAD:
             payload = encode({"type": "sync.hint", "chat_id": _chat_id_of(event), "reason": "oversize"})
             hint = True
+        if not hint:
+            # Content lives in authoritative tables, not in a second retained copy. A replay reads
+            # the current record, so edits, answers, deletion and redaction apply retroactively.
+            reference = dict(event)
+            key = "message" if kind in {"message.new", "message.update"} else "item" if kind in {"inbox.new", "inbox.update"} else "chat" if kind == "chat.update" else None
+            if key and isinstance(event.get(key), dict):
+                reference[key] = {k: event[key][k] for k in ("id", "chat_id", "bot", "owner_device") if k in event[key]}
+                payload = encode(reference)
         now = time.time()
         with self.transaction():
             row = self.store._one("SELECT next_seq FROM event_streams WHERE bot = ?", (scope,))
@@ -235,27 +243,43 @@ class EventStream:
                 # Rows the client still needed are gone: trimmed by the retention bound, or the whole
                 # journal emptied by a reset. Either way only a snapshot can repair it.
                 return {"ok": False, "reason": "gap", **base}
-            limit = max(1, int(page or self.page))
+            limit = min(PAGE, max(1, int(page or self.page)))
             rows = self.store._all(
                 "SELECT seq, payload FROM event_log WHERE bot = ? AND seq > ? AND seq <= ? ORDER BY seq LIMIT ?",
                 (scope, after, head, limit + 1))
         except Exception:
             logger.exception("[winglet] couldn't read the event journal; asking for a snapshot")
             return {"ok": False, "reason": "journal", **base}
+        expected = after + 1
+        for row in rows:
+            if int(row["seq"]) != expected:
+                return {"ok": False, "reason": "gap", **base}
+            expected += 1
+        if not rows and after < head:
+            return {"ok": False, "reason": "gap", **base}
+        if rows and len(rows) <= limit and int(rows[-1]["seq"]) != head:
+            return {"ok": False, "reason": "gap", **base}
         more = len(rows) > limit
         events: List[Dict[str, Any]] = []
-        scanned = head
+        scanned = after
+        payload_bytes = 0
         for row in rows[:limit]:
+            if payload_bytes + len(row["payload"].encode("utf8")) > 512 * 1024:
+                more = True
+                break
+            payload_bytes += len(row["payload"].encode("utf8"))
             scanned = int(row["seq"])
             try:
                 event = json.loads(row["payload"])
             except ValueError:
-                continue
-            if not isinstance(event, dict) or not visible(event):
+                return {"ok": False, "reason": "journal", **base}
+            if not isinstance(event, dict):
+                return {"ok": False, "reason": "journal", **base}
+            if not visible(event):
                 continue
             # The same shape as the live frame (which carries its seq), so a client applies both
             # through one path and can page from the last event or from the page cursor.
-            events.append({**event, "seq": int(row["seq"])})
+            events.append({**event, "event_seq": int(row["seq"])})
         return {"ok": True, "events": events, "has_more": more, "cursor": scanned, **base}
 
     # -- maintenance ---------------------------------------------------------------------

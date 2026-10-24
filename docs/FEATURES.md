@@ -22,9 +22,11 @@ The [README](../README.md#what-it-does) has the overview. This page lists everyt
 - **A quieter conversation.** Tool progress folds into expandable activity rows, with replies kept in view.
   Long approval commands expand when you need the details. Rename, mute and export use the same menu
   in the chat list and inside a chat.
-- **Keep the current task in reach.** A strip above the message box shows current activity or the request
-  waiting for you. Open its details or stop the task while reading or typing. Stop requires a live
-  connection and never waits in the offline outbox.
+- **Keep the current task in reach.** A strip above the message box shows the current activity, the plan step in
+  hand, or the request waiting for you. Open it for the agent's plan, delegated tasks (nested under the
+  one that started them), tool results and how the turn ended; stop the whole task while reading or
+  typing. Individual delegated tasks aren't stopped from here. Stop requires a live connection and never
+  waits in the offline outbox.
 - **Works on a bad connection.** Chats open from the phone's cache, and what you send waits until the
   server is back. Failed sends explain the refusal and offer Retry, Edit or Discard; retries keep the
   same delivery ID. Draft text, finished attachments and reply context survive app restarts.

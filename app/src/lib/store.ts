@@ -3,15 +3,17 @@ import { useShallow } from 'zustand/react/shallow';
 import { Platform } from 'react-native';
 import { RecoveryCoordinator } from './recovery';
 import { sound } from './sounds';
-import { api, ApiError, wsUrl } from './api';
-import { cacheGet, cacheRemove, cacheSet } from './cache';
-import { mergeSnapshot } from './features/event-replay/merge';
-import { SyncSession, type ReplayCursor, type SyncHost } from './features/event-replay/session';
-import type { SyncSnapshot } from './features/event-replay/protocol';
+import { api, ApiError, signedApi, wsUrl } from './api';
+import { cacheGet, cacheRemove, cacheSet, cacheSetStrict } from './cache';
+import { mergeSnapshot } from '../features/event-replay/merge';
+import { SyncSession, type ReplayCursor, type SyncHost } from '../features/event-replay/session';
+import type { SyncSnapshot } from '../features/event-replay/protocol';
 import { isNotifiable, markFailed, mergeMessages } from './messages';
 import { getJSON, setJSON } from './storage';
 import { NEEDS_VERIFY } from './verify';
-import type { Attachment, BotRow, Chat, ConnStatus, DraftFile, InboxItem, Job, Me, Message, PauseState, PetSheet, ReplyRef, Server, ServerInfo, SyncState } from './types';
+import type { Attachment, BotRow, Chat, ConnStatus, DraftFile, InboxItem, Job, Me, Message, PauseState, PetSheet, Project, ProjectSnapshot, ReplyRef, Server, ServerInfo, TaskCapabilities, TaskEnvelope, TaskSnapshot, SyncState } from './types';
+import { applyEvent, applySnapshot } from '../features/execution/model';
+import { applyOrder, EMPTY_PROJECTS, readSnapshot } from '../features/projects/logic';
 
 const SERVERS_KEY = 'winglet.servers';
 const SELECTION_KEY = 'winglet.selection';
@@ -64,6 +66,12 @@ export type ServerState = {
   job?: Job;
   /** The agent's pet, its animated face: null when it has none, undefined until known. */
   pet?: PetSheet | null;
+  /** Structured task activity per chat, from the server's `task.*` events and snapshots. */
+  tasks: Record<string, TaskSnapshot>;
+  /** What this server lets a client do to a delegated task; absent means unsupported. */
+  taskCaps?: TaskCapabilities;
+  /** Server-persisted folders for this bot's chats; undefined on a server without the feature. */
+  projects?: ProjectSnapshot;
   /** How far this phone has caught up with the server's event journal (absent on older servers). */
   sync?: SyncState;
 };
@@ -99,6 +107,8 @@ type AppState = {
   loadMessages: (serverId: string, chatId: string, older?: boolean) => Promise<boolean>;
   loadInbox: (serverId: string) => Promise<void>;
   loadPet: (serverId: string) => Promise<void>;
+  /** Fetch the bounded structured task snapshot for a chat (after opening it, reconnecting, or starting work). */
+  loadTask: (serverId: string, chatId: string, force?: boolean) => Promise<void>;
   /** Match a server's other bots to the list it sent: add new ones, drop removed ones, keep names current. */
   syncBots: (serverId: string, bots: BotRow[]) => Promise<void>;
   sendMessage: (serverId: string, chatId: string, text: string, opts?: string | SendOptions) => Promise<void>;
@@ -108,8 +118,21 @@ type AppState = {
   setDraft: (serverId: string, chatId: string, text: string) => void;
   respond: (serverId: string, itemId: string, reply: { choice?: string; answer?: string | string[] }) => Promise<void>;
   createChat: (serverId: string, title?: string) => Promise<Chat | undefined>;
+  /** Add or replace a chat the server just made (a branch) and leave its history to load. */
+  upsertChat: (serverId: string, chat: Chat) => void;
   renameChat: (serverId: string, chatId: string, title: string) => Promise<void>;
   deleteChat: (serverId: string, chatId: string) => Promise<void>;
+  /** Read the server's project snapshot again (after a conflict, or opening the Projects screen). */
+  loadProjects: (serverId: string) => Promise<void>;
+  createProject: (serverId: string, name: string) => Promise<Project | undefined>;
+  renameProject: (serverId: string, projectId: string, name: string) => Promise<boolean>;
+  setProjectArchived: (serverId: string, projectId: string, archived: boolean) => Promise<boolean>;
+  reorderProjects: (serverId: string, ids: string[]) => Promise<boolean>;
+  deleteProject: (serverId: string, projectId: string) => Promise<boolean>;
+  /** Move an accessible chat into a project, or out of every project with null. */
+  moveChatToProject: (serverId: string, chatId: string, projectId: string | null) => Promise<boolean>;
+  /** Start a chat inside a project; it is a normal chat with its own Hermes session. */
+  createChatInProject: (serverId: string, projectId: string, title?: string) => Promise<Chat | undefined>;
   /** Ask the server for the authoritative state again after a catch-up it couldn't prove. */
   resyncNow: (serverId: string) => void;
   toast: (t: Omit<Toast, 'id'>) => void;
@@ -119,7 +142,7 @@ type AppState = {
 
 export const emptyRuntime = (): ServerState => ({
   status: 'connecting', conn: { recovering: false, history: [] }, chats: {}, messages: {}, deleted: {}, loaded: {},
-  inbox: {}, pending: 0, typing: {}, outbox: [],
+  inbox: {}, pending: 0, typing: {}, outbox: [], tasks: {},
 });
 
 export const draftKey = (serverId: string, chatId: string) => `${serverId}:${chatId}`;
@@ -132,23 +155,14 @@ export const isOwner = (rt?: ServerState) => (rt?.me?.role ?? 'owner') === 'owne
 
 const connections = new Map<string, Connection>();
 const coordinator = new RecoveryCoordinator();
-/**
- * Each bot's place in its server's event journal, kept in memory and persisted on a timer: a page
- * can carry dozens of cursors and the cache write must not run on every frame.
- */
+/** A cursor exists only alongside the durable state checkpoint which covers it. */
 const replayCursors = new Map<string, ReplayCursor>();
-const cursorTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const CURSOR_SAVE_MS = 400;
-const saveCursor = (serverId: string) => {
-  clearTimeout(cursorTimers.get(serverId));
-  cursorTimers.set(serverId, setTimeout(() => {
-    cursorTimers.delete(serverId);
-    const cursor = replayCursors.get(serverId);
-    if (cursor) cacheSet(`replay:${serverId}`, cursor);
-  }, CURSOR_SAVE_MS));
-};
+type ReplayCheckpoint = { cursor: ReplayCursor; state: Pick<ServerState,
+  'chats' | 'messages' | 'deleted' | 'loaded' | 'inbox' | 'pending' | 'paused' | 'me' | 'projects' | 'tasks'> };
 /** Per-bot send queue: keeps messages in order, and stops at the first one the network loses. */
 const sendChains = new Map<string, Promise<void>>();
+/** Last structured-task fetch per server+chat, so opening a sheet repeatedly doesn't hammer the server. */
+const taskLoads = new Map<string, number>();
 const sendPaused = new Set<string>();
 
 /** A network failure is worth retrying later; an HTTP error from the server is not. */
@@ -191,6 +205,38 @@ export const useApp = create<AppState>((set, get) => {
 
   const saveOutbox = (serverId: string) => cacheSet(`outbox:${serverId}`, get().runtime[serverId]?.outbox ?? []);
 
+  const projectLoads = new Map<string, number>();
+  type ProjectGuard = { server: Server; snapshot: ProjectSnapshot | undefined };
+  /** Late HTTP reads and failed optimistic writes cannot replace a newer live snapshot. */
+  const setProjects = (serverId: string, snapshot: ProjectSnapshot, guard?: ProjectGuard) => {
+    const currentServer = get().servers.find((s) => s.id === serverId);
+    const runtime = get().runtime[serverId];
+    if (!currentServer || !runtime) return;
+    if (guard && (currentServer !== guard.server || runtime.projects !== guard.snapshot)) return;
+    patch(serverId, () => ({ projects: snapshot }));
+    cacheSet(`projects:${serverId}`, snapshot);
+  };
+
+  const requestId = (what: string) =>
+    `project-${what}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+
+  /** A project change needs a live, feature-capable bot. It never joins the offline outbox. */
+  const projectServer = (serverId: string): Server => {
+    const state = get();
+    const server = state.servers.find((s) => s.id === serverId);
+    const runtime = state.runtime[serverId];
+    if (!server) throw new Error('Pair a bot first.');
+    if (!runtime?.info?.features?.projects) throw new Error("This server can't store projects yet. Update Winglet on the server.");
+    if (!state.network || runtime.status !== 'online') throw new Error('Connect to your bot to change projects.');
+    return server;
+  };
+
+  /** A 409 carries the server's current snapshot: adopt it so the UI rolls back to the truth. */
+  const projectFailure = (serverId: string, error: unknown, guard?: ProjectGuard): Error => {
+    if (error instanceof ApiError && error.data?.projects) setProjects(serverId, readSnapshot(error.data.projects), guard);
+    return error instanceof Error ? error : new Error('The change did not go through.');
+  };
+
   const updateOutbox = (serverId: string, fn: (o: OutboxEntry[]) => OutboxEntry[]) => {
     patch(serverId, (s) => ({ outbox: fn(s.outbox) }));
     saveOutbox(serverId);
@@ -220,7 +266,8 @@ export const useApp = create<AppState>((set, get) => {
       const { [chatId]: _deleted, ...deleted } = s.deleted;
       const { [chatId]: _loaded, ...loaded } = s.loaded;
       const { [chatId]: _typing, ...typing } = s.typing;
-      return { chats, messages, deleted, loaded, typing, outbox: s.outbox.filter((o) => o.chat_id !== chatId) };
+      const { [chatId]: _task, ...tasks } = s.tasks;
+      return { chats, messages, deleted, loaded, typing, tasks, outbox: s.outbox.filter((o) => o.chat_id !== chatId) };
     });
     const key = draftKey(serverId, chatId);
     set((state) => {
@@ -295,8 +342,9 @@ export const useApp = create<AppState>((set, get) => {
     created_at: entry.created_at, updated_at: entry.created_at,
   });
 
-  const handleEvent = (serverId: string, ev: any) => {
+  const handleEvent = (serverId: string, ev: any, replayed = false) => {
     const server = get().servers.find((s) => s.id === serverId);
+    if (!server) return;
     switch (ev.type) {
       case 'hello': {
         const chats: Record<string, Chat> = {};
@@ -309,11 +357,15 @@ export const useApp = create<AppState>((set, get) => {
         };
         const compat = info.min_app_protocol > APP_PROTOCOL ? 'update-app' as const
           : info.protocol < MIN_SERVER_PROTOCOL ? 'update-server' as const : undefined;
+        const projects = ev.projects ? readSnapshot(ev.projects) : undefined;
         patch(serverId, () => ({ status: 'online', chats, typing, pending: ev.pending ?? 0, loaded: {}, info, compat,
-          me: ev.me as Me | undefined, paused: (ev.paused ?? null) as PauseState }));
+          me: ev.me as Me | undefined, paused: (ev.paused ?? null) as PauseState, projects,
+          // A fresh connection may be a restarted server: drop old task snapshots and refetch when visible.
+          tasks: {}, taskCaps: { subagent_stop: info.features.subagent_stop === true } }));
         // From now on, send the token in the socket's first frame rather than the URL.
         if (server && info.features.ws_auth && !server.wsAuth) get().updateServer(serverId, { wsAuth: true });
         cacheSet(`chats:${serverId}`, chats);
+        if (projects) cacheSet(`projects:${serverId}`, projects);
         if (server && ev.bot && JSON.stringify(ev.bot) !== JSON.stringify(server.bot)) {
           set((state) => ({ servers: state.servers.map((s) => (s.id === serverId ? { ...s, bot: ev.bot } : s)) }));
           persist();
@@ -325,8 +377,25 @@ export const useApp = create<AppState>((set, get) => {
         const sel = get().selection;
         if (sel.serverId === serverId && sel.chatId && !chats[sel.chatId]) get().select(serverId, homeChat(get().runtime[serverId]));
         const vis = get().visibleChat;
-        if (vis?.serverId === serverId) get().loadMessages(serverId, vis.chatId);
-        flushOutbox(serverId);
+        if (vis?.serverId === serverId) {
+          get().loadMessages(serverId, vis.chatId);
+          get().loadTask(serverId, vis.chatId, true);
+        }
+        if (!info.features.event_replay) flushOutbox(serverId);
+        break;
+      }
+      case 'task.snapshot': {
+        const snapshot = ev.snapshot as TaskSnapshot | undefined;
+        if (!snapshot || snapshot.chat_id !== ev.chat_id) break;
+        patch(serverId, (s) => ({ tasks: { ...s.tasks, [ev.chat_id]: applySnapshot(s.tasks[ev.chat_id], snapshot) } }));
+        break;
+      }
+      case 'task.event': {
+        const event = ev.event;
+        if (!event || typeof ev.turn_index !== 'number') break;
+        const envelope: TaskEnvelope = { chat_id: ev.chat_id, turn_id: ev.turn_id ?? null,
+          turn_index: ev.turn_index, seq: Number(ev.seq) || 0, event };
+        patch(serverId, (s) => ({ tasks: { ...s.tasks, [ev.chat_id]: applyEvent(s.tasks[ev.chat_id], envelope) } }));
         break;
       }
       case 'message.new':
@@ -352,9 +421,9 @@ export const useApp = create<AppState>((set, get) => {
             return { typing, lastReplyAt: Date.now() };
           });
           // Once per turn, and only where you can see it land (elsewhere it toasts).
-          if (wasTyping && seeing) sound.reply();
+          if (wasTyping && seeing && !replayed) sound.reply();
         }
-        if (finished && !seeing && get().foreground && server) {
+        if (finished && !seeing && get().foreground && server && !replayed) {
           const chat = get().runtime[serverId]?.chats[ev.chat_id];
           toast({ serverId, title: `${server.bot.title}${chat && chat.kind === 'chat' ? ` · ${chat.title}` : ''}`,
             body: m.text.slice(0, 140) || 'Sent an attachment', href: `/chat/${serverId}/${ev.chat_id}` });
@@ -372,6 +441,9 @@ export const useApp = create<AppState>((set, get) => {
         break;
       case 'chat.delete':
         forgetChat(serverId, ev.chat_id);
+        break;
+      case 'project.sync':
+        if (ev.projects) setProjects(serverId, readSnapshot(ev.projects));
         break;
       case 'typing':
         patch(serverId, (s) => {
@@ -399,7 +471,7 @@ export const useApp = create<AppState>((set, get) => {
         patch(serverId, (s) => ({ inbox: { ...s.inbox, [item.id]: item }, pending: ev.pending ?? s.pending }));
         // A member can't answer approvals; the card in their chat already says it's waiting for an owner.
         const actionable = item.kind !== 'result' && (item.kind !== 'approval' || isOwner(get().runtime[serverId]));
-        if (ev.type === 'inbox.new' && actionable && item.status === 'pending' && get().foreground && server) {
+        if (!replayed && ev.type === 'inbox.new' && actionable && item.status === 'pending' && get().foreground && server) {
           if (get().foreground) sound.needsYou();
           toast({ serverId, title: `${server.bot.title} · ${item.title}`, body: item.body.slice(0, 140),
             href: `/inbox?server=${encodeURIComponent(serverId)}&item=${encodeURIComponent(item.id)}` });
@@ -412,7 +484,51 @@ export const useApp = create<AppState>((set, get) => {
   const connect = (server: Server) => {
     connections.get(server.id)?.close();
     const conn = new Connection(server, coordinator, {
-      onEvent: (ev) => handleEvent(server.id, ev),
+      onEvent: (ev, replayed) => handleEvent(server.id, ev, replayed),
+      sync: {
+        read: () => replayCursors.get(server.id),
+        write: async (cursor) => {
+          const rt = get().runtime[server.id];
+          if (!rt || connections.get(server.id) !== conn) throw Error('Connection replaced');
+          const { chats, messages, deleted, loaded, inbox, pending, paused, me, projects, tasks } = rt;
+          // One encrypted SQLite value / one IndexedDB transaction: data cannot trail its cursor.
+          await cacheSetStrict(`replay:${server.id}`, { cursor,
+            state: { chats, messages, deleted, loaded, inbox, pending, paused, me, projects, tasks } });
+          if (connections.get(server.id) === conn) replayCursors.set(server.id, cursor);
+        },
+        apply: async (event, replayed) => {
+          if (connections.get(server.id) !== conn) return;
+          if (event.type === 'sync.hint') {
+            if (event.chat_id && get().runtime[server.id]?.chats[event.chat_id]) {
+              if (!await get().loadMessages(server.id, event.chat_id)) throw Error('History unavailable');
+              await get().loadTask(server.id, event.chat_id, true);
+            } else { await get().loadProjects(server.id); }
+          } else { handleEvent(server.id, event, replayed); }
+        },
+        fetch: () => api(server, '/api/sync/snapshot'),
+        applySnapshot: async (snapshot) => {
+          if (connections.get(server.id) !== conn) throw Error('Connection replaced');
+          const previous = get().runtime[server.id];
+          if (!previous) throw Error('Bot removed');
+          patch(server.id, (rt) => ({ ...mergeSnapshot(rt, snapshot), loaded: {}, tasks: {},
+            projects: snapshot.projects ? readSnapshot(snapshot.projects) : rt.projects }));
+          for (const id of Object.keys(previous.chats)) if (!snapshot.chats.some((c) => c.id === id)) {
+            await cacheRemove(`msgs:${server.id}:${id}`);
+          }
+          const current = get().runtime[server.id];
+          const visible = get().visibleChat;
+          const ids = new Set([...Object.keys(previous.messages), ...(visible?.serverId === server.id ? [visible.chatId] : [])]);
+          for (const id of ids) if (current?.chats[id]) {
+            if (!await get().loadMessages(server.id, id)) throw Error('History unavailable');
+            await get().loadTask(server.id, id, true);
+          }
+        },
+        view: (sync) => {
+          if (connections.get(server.id) !== conn) return;
+          patch(server.id, () => ({ sync }));
+          if (sync.phase === 'idle' && get().runtime[server.id]?.status === 'online') flushOutbox(server.id);
+        },
+      },
       onStatus: (status, why) => {
         patch(server.id, () => ({ status }));
         note(server.id, status, why);
@@ -443,15 +559,24 @@ export const useApp = create<AppState>((set, get) => {
 
   /** Load what this phone remembers about a bot, so it opens instantly and works offline. */
   const hydrateServer = async (serverId: string) => {
-    const [chats, inbox, outbox, pet] = await Promise.all([
+    const [chats, inbox, outbox, pet, projects, checkpoint] = await Promise.all([
       cacheGet<Record<string, Chat>>(`chats:${serverId}`, {}),
       cacheGet<InboxItem[]>(`inbox:${serverId}`, []),
       cacheGet<OutboxEntry[]>(`outbox:${serverId}`, []),
       cacheGet<PetSheet | null>(`pet:${serverId}`, null),
+      cacheGet<ProjectSnapshot | undefined>(`projects:${serverId}`, undefined),
+      cacheGet<ReplayCheckpoint | undefined>(`replay:${serverId}`, undefined),
     ]);
+    if (checkpoint?.cursor?.scope && checkpoint.state && get().runtime[serverId]?.status !== 'online') {
+      replayCursors.set(serverId, checkpoint.cursor);
+      patch(serverId, () => checkpoint.state);
+    }
+    const acknowledged = new Set(Object.values(checkpoint?.state?.messages ?? {}).flat()
+      .filter((m) => !isLocal(m)).map((m) => m.meta?.client_id).filter(Boolean));
+    const safeOutbox = outbox.filter((entry) => !acknowledged.has(entry.client_id));
     patch(serverId, (s) => {
       const messages = { ...s.messages };
-      for (const entry of outbox) {
+      for (const entry of safeOutbox) {
         messages[entry.chat_id] = mergeMessages(messages[entry.chat_id] ?? [], [localMessage(entry)]);
       }
       const cachedInbox: Record<string, InboxItem> = {};
@@ -462,9 +587,10 @@ export const useApp = create<AppState>((set, get) => {
         chats: Object.keys(s.chats).length ? s.chats : chats,
         inbox: live ? s.inbox : cachedInbox,
         pending: live ? s.pending : inbox.filter((i) => i.status === 'pending').length,
-        outbox: [...s.outbox, ...outbox.filter((o) => !s.outbox.some((x) => x.client_id === o.client_id))],
+        outbox: [...s.outbox, ...safeOutbox.filter((o) => !s.outbox.some((x) => x.client_id === o.client_id))],
         messages,
         pet: s.pet === undefined ? pet : s.pet,
+        projects: s.projects === undefined ? (projects ? readSnapshot(projects) : undefined) : s.projects,
       };
     });
   };
@@ -556,7 +682,7 @@ export const useApp = create<AppState>((set, get) => {
       });
       await persist();
       for (const child of added) {
-        hydrateServer(child.id);
+        await hydrateServer(child.id);
         connect(child);
       }
     },
@@ -568,6 +694,8 @@ export const useApp = create<AppState>((set, get) => {
       if (server?.parent) unpair = false;
       connections.get(serverId)?.close();
       connections.delete(serverId);
+      replayCursors.delete(serverId);
+      await cacheRemove(`replay:${serverId}`);
       sendChains.delete(serverId);
       sendPaused.delete(serverId);
       if (server && unpair) {
@@ -584,7 +712,7 @@ export const useApp = create<AppState>((set, get) => {
         const visibleChat = state.visibleChat?.serverId === serverId ? undefined : state.visibleChat;
         return { servers, runtime, selection, drafts, draftFiles, replyTo, visibleChat };
       });
-      for (const prefix of [`chats:${serverId}`, `inbox:${serverId}`, `outbox:${serverId}`, `msgs:${serverId}:`, `pet:${serverId}`]) cacheRemove(prefix);
+      for (const prefix of [`chats:${serverId}`, `inbox:${serverId}`, `outbox:${serverId}`, `msgs:${serverId}:`, `pet:${serverId}`, `projects:${serverId}`]) cacheRemove(prefix);
       await persist();
       await setJSON(SELECTION_KEY, get().selection);
     },
@@ -610,6 +738,8 @@ export const useApp = create<AppState>((set, get) => {
       // Coming back online is the best moment to try again: don't wait out the backoff.
       if (online && !was) connections.forEach((c) => c.retryNow());
     },
+
+    resyncNow: (serverId) => connections.get(serverId)?.resync(),
 
     retryNow: (serverId) => {
       connections.get(serverId)?.retryNow();
@@ -680,6 +810,28 @@ export const useApp = create<AppState>((set, get) => {
       if (petLoads.get(serverId) !== load) return;
       patch(serverId, () => ({ pet }));
       cacheSet(`pet:${serverId}`, pet);
+    },
+
+    loadTask: async (serverId, chatId, force = false) => {
+      const server = get().servers.find((s) => s.id === serverId);
+      if (!server || !chatId) return;
+      if (!get().runtime[serverId]?.info?.features?.task_activity) return;
+      const key = `${serverId}:${chatId}`;
+      const last = taskLoads.get(key) ?? 0;
+      if (!force && Date.now() - last < 2000) return;
+      taskLoads.set(key, Date.now());
+      try {
+        const data = await api<{ available?: boolean; snapshot: TaskSnapshot | null; capabilities?: TaskCapabilities }>(
+          server, `/api/task?chat=${encodeURIComponent(chatId)}`);
+        if (get().servers.find((s) => s.id === serverId) !== server) return;
+        patch(serverId, (s) => {
+          if (!data?.snapshot) return {};
+          const tasks = { ...s.tasks, [chatId]: applySnapshot(s.tasks[chatId], data.snapshot) };
+          return { tasks, taskCaps: data.capabilities ?? s.taskCaps };
+        });
+      } catch {
+        // Offline or an older server without the route: keep what live events gave us; the sheet labels it.
+      }
     },
 
     loadInbox: async (serverId) => {
@@ -789,6 +941,10 @@ export const useApp = create<AppState>((set, get) => {
       return data.chat;
     },
 
+    upsertChat: (serverId, chat) => {
+      patch(serverId, (s) => ({ chats: { ...s.chats, [chat.id]: chat }, loaded: { ...s.loaded, [chat.id]: false } }));
+    },
+
     renameChat: async (serverId, chatId, title) => {
       const server = get().servers.find((s) => s.id === serverId);
       if (!server) return;
@@ -805,18 +961,168 @@ export const useApp = create<AppState>((set, get) => {
       forgetChat(serverId, chatId);
     },
 
+    loadProjects: async (serverId) => {
+      const server = get().servers.find((s) => s.id === serverId);
+      if (!server || !get().runtime[serverId]?.info?.features?.projects) return;
+      const snapshot = get().runtime[serverId]?.projects;
+      const load = (projectLoads.get(serverId) ?? 0) + 1;
+      projectLoads.set(serverId, load);
+      try {
+        const data = await api<{ projects: unknown }>(server, '/api/projects');
+        if (projectLoads.get(serverId) === load) setProjects(serverId, readSnapshot(data.projects), { server, snapshot });
+      } catch {
+        // Keep the cached structure; the next hello or project.sync repairs it.
+      }
+    },
+
+    createProject: async (serverId, name) => {
+      const server = projectServer(serverId);
+      const snapshot = get().runtime[serverId]?.projects;
+      const data = await signedApi<{ project: Project; projects?: unknown }>(server, 'POST', '/api/projects',
+        { name, client_id: requestId('create') }).catch((e) => { throw projectFailure(serverId, e, { server, snapshot }); });
+      if (data.projects) setProjects(serverId, readSnapshot(data.projects), { server, snapshot });
+      return data.project;
+    },
+
+    renameProject: async (serverId, projectId, name) => {
+      const server = projectServer(serverId);
+      const previous = get().runtime[serverId]?.projects;
+      const project = previous?.projects.find((p) => p.id === projectId);
+      if (!previous || !project) throw new Error('This project is no longer here.');
+      const optimistic = { ...previous,
+        projects: previous.projects.map((p) => (p.id === projectId ? { ...p, name } : p)) };
+      setProjects(serverId, optimistic);
+      try {
+        const data = await signedApi<{ projects?: unknown }>(server, 'PATCH',
+          `/api/projects/${encodeURIComponent(projectId)}`,
+          { name, revision: project.revision, client_id: requestId('rename') });
+        if (data.projects) setProjects(serverId, readSnapshot(data.projects), { server, snapshot: optimistic });
+        return true;
+      } catch (e) {
+        setProjects(serverId, previous, { server, snapshot: optimistic });
+        throw projectFailure(serverId, e, { server, snapshot: previous });
+      }
+    },
+
+    setProjectArchived: async (serverId, projectId, archived) => {
+      const server = projectServer(serverId);
+      const previous = get().runtime[serverId]?.projects;
+      const project = previous?.projects.find((p) => p.id === projectId);
+      if (!previous || !project) throw new Error('This project is no longer here.');
+      const optimistic = { ...previous,
+        projects: previous.projects.map((p) => (p.id === projectId ? { ...p, archived } : p)) };
+      setProjects(serverId, optimistic);
+      try {
+        const data = await signedApi<{ projects?: unknown }>(server, 'PATCH',
+          `/api/projects/${encodeURIComponent(projectId)}`,
+          { archived, revision: project.revision, client_id: requestId(archived ? 'archive' : 'restore') });
+        if (data.projects) setProjects(serverId, readSnapshot(data.projects), { server, snapshot: optimistic });
+        return true;
+      } catch (e) {
+        setProjects(serverId, previous, { server, snapshot: optimistic });
+        throw projectFailure(serverId, e, { server, snapshot: previous });
+      }
+    },
+
+    reorderProjects: async (serverId, ids) => {
+      const server = projectServer(serverId);
+      const previous = get().runtime[serverId]?.projects;
+      if (!previous) throw new Error('Projects are not loaded yet.');
+      const optimistic = applyOrder(previous, ids);
+      setProjects(serverId, optimistic);
+      try {
+        const data = await signedApi<{ projects?: unknown }>(server, 'PUT', '/api/projects/order',
+          { ids, layout_revision: previous.layout_revision, client_id: requestId('order') });
+        if (data.projects) setProjects(serverId, readSnapshot(data.projects), { server, snapshot: optimistic });
+        return true;
+      } catch (e) {
+        setProjects(serverId, previous, { server, snapshot: optimistic });
+        throw projectFailure(serverId, e, { server, snapshot: previous });
+      }
+    },
+
+    deleteProject: async (serverId, projectId) => {
+      const server = projectServer(serverId);
+      const previous = get().runtime[serverId]?.projects;
+      const project = previous?.projects.find((p) => p.id === projectId);
+      if (!previous || !project) throw new Error('This project is no longer here.');
+      const optimistic = { ...previous, projects: previous.projects.filter((p) => p.id !== projectId),
+        threads: previous.threads.filter((t) => t.project_id !== projectId) };
+      setProjects(serverId, optimistic);
+      try {
+        const data = await signedApi<{ projects?: unknown }>(server, 'DELETE',
+          `/api/projects/${encodeURIComponent(projectId)}`,
+          { revision: project.revision, client_id: requestId('delete') });
+        if (data.projects) setProjects(serverId, readSnapshot(data.projects), { server, snapshot: optimistic });
+        return true;
+      } catch (e) {
+        setProjects(serverId, previous, { server, snapshot: optimistic });
+        throw projectFailure(serverId, e, { server, snapshot: previous });
+      }
+    },
+
+    moveChatToProject: async (serverId, chatId, projectId) => {
+      const server = projectServer(serverId);
+      const previous = get().runtime[serverId]?.projects ?? EMPTY_PROJECTS;
+      const target = projectId ? previous.projects.find((p) => p.id === projectId) : undefined;
+      if (projectId && !target) throw new Error('That project is no longer here.');
+      if (target?.archived) throw new Error('Restore this project before moving a chat into it.');
+      const thread = previous.threads.find((t) => t.chat_id === chatId);
+      if ((thread?.project_id ?? null) === projectId) return true;
+      const source = thread ? previous.projects.find((p) => p.id === thread.project_id) : undefined;
+      // Optimistic place at the end; the server's snapshot replaces this immediately on success.
+      const position = Math.max(0, ...previous.threads.filter((t) => t.project_id === projectId).map((t) => t.position)) + 1000;
+      const optimistic = { ...previous,
+        threads: [...previous.threads.filter((t) => t.chat_id !== chatId),
+          ...(projectId ? [{ chat_id: chatId, project_id: projectId, position }] : [])] };
+      setProjects(serverId, optimistic);
+      try {
+        const data = projectId
+          ? await signedApi<{ projects?: unknown }>(server, 'POST',
+            `/api/projects/${encodeURIComponent(projectId)}/chats/${encodeURIComponent(chatId)}`,
+            { revision: target!.revision, ...(source ? { from_project_id: source.id, from_revision: source.revision } : {}),
+              client_id: requestId('move') })
+          : await signedApi<{ projects?: unknown }>(server, 'DELETE',
+            `/api/projects/${encodeURIComponent(source!.id)}/chats/${encodeURIComponent(chatId)}`,
+            { revision: source!.revision, client_id: requestId('remove') });
+        if (data.projects) setProjects(serverId, readSnapshot(data.projects), { server, snapshot: optimistic });
+        return true;
+      } catch (e) {
+        setProjects(serverId, previous, { server, snapshot: optimistic });
+        throw projectFailure(serverId, e, { server, snapshot: previous });
+      }
+    },
+
+    createChatInProject: async (serverId, projectId, title) => {
+      const server = projectServer(serverId);
+      const snapshot = get().runtime[serverId]?.projects;
+      const project = get().runtime[serverId]?.projects?.projects.find((p) => p.id === projectId);
+      if (!project) throw new Error('This project is no longer here.');
+      if (project.archived) throw new Error('Restore this project before starting a chat in it.');
+      const data = await signedApi<{ chat: Chat; projects?: unknown }>(server, 'POST',
+        `/api/projects/${encodeURIComponent(projectId)}/chats`,
+        { ...(title ? { title } : {}), revision: project.revision, client_id: requestId('chat') })
+        .catch((e) => { throw projectFailure(serverId, e, { server, snapshot }); });
+      if (data.projects) setProjects(serverId, readSnapshot(data.projects), { server, snapshot });
+      if (get().servers.find((s) => s.id === serverId) !== server) return undefined;
+      patch(serverId, (s) => ({ chats: { ...s.chats, [data.chat.id]: data.chat },
+        loaded: { ...s.loaded, [data.chat.id]: true } }));
+      return data.chat;
+    },
+
     toast,
 
     dismissToast: (id) => set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) })),
 
     clearCache: async () => {
-      for (const prefix of ['msgs:', 'chats:', 'inbox:']) await cacheRemove(prefix);
+      for (const prefix of ['msgs:', 'chats:', 'inbox:', 'projects:', 'replay:']) await cacheRemove(prefix);
     },
   };
 });
 
 type ConnCallbacks = {
-  onEvent: (ev: any) => void;
+  onEvent: (ev: any, replayed?: boolean) => void;
+  sync: Omit<SyncHost, 'disconnect'>;
   onStatus: (s: ConnStatus, why?: string) => void;
   onDetail: (d: Partial<ConnDetail>) => void;
   onRecovering: (on: boolean) => void;
@@ -833,8 +1139,14 @@ class Connection {
   private pongTimer?: ReturnType<typeof setTimeout>;
   private awaitingPong = false;
   private visible = true;
+  private sync: SyncSession;
+  private replay = false;
 
   constructor(private server: Server, private coordinator: RecoveryCoordinator, private cb: ConnCallbacks) {
+    this.sync = new SyncSession({ ...cb.sync, disconnect: () => {
+      const ws = this.ws; this.ws = undefined; ws?.close();
+      if (!this.closed) { this.cb.onStatus('offline', 'catch-up interrupted'); this.retry('catch-up interrupted'); }
+    } }, (frame) => this.send(frame));
     coordinator.join(server.id, {
       server: () => this.server,
       recovering: (on) => cb.onRecovering(on),
@@ -848,6 +1160,7 @@ class Connection {
 
   open() {
     if (this.closed) return;
+    this.sync.closed();
     // A quick tunnel gets a new address when the server restarts: look for one straight away.
     if (this.recovers && this.attempt === 0) this.coordinator.want(this.server.id);
     this.cb.onStatus('connecting');
@@ -878,7 +1191,10 @@ class Connection {
           this.coordinator.satisfied(this.server.id);
           this.cb.onDetail({ lastError: undefined });
         }
-        this.cb.onEvent(event);
+        if (this.ws !== ws) return;
+        if (event.type === 'hello') this.replay = event.features?.event_replay === true;
+        if (this.replay) void this.sync.receive(event);
+        else { this.cb.onEvent(event); if (event.type === 'hello') this.cb.sync.view({ phase: 'unsupported', caught: 0 }); }
         if (event.type === 'hello' && Platform.OS === 'android' && !this.server.recovery) this.enrollRecovery();
       } catch {
         // ignore malformed frames
@@ -889,6 +1205,7 @@ class Connection {
       clearTimeout(this.pongTimer);
       if (this.ws !== ws) return;
       this.ws = undefined;
+      this.sync.closed();
       if (this.closed) return;
       // The server rejects the upgrade with 401 when this device was unpaired.
       if (e.code === 1008 || e.code === 4401) {
@@ -1002,6 +1319,8 @@ class Connection {
     this.open();
   }
 
+  resync() { this.sync.retry(); }
+
   send(data: unknown) {
     if (this.ws?.readyState === 1) this.ws.send(JSON.stringify(data));
   }
@@ -1013,6 +1332,7 @@ class Connection {
 
   close() {
     this.closed = true;
+    this.sync.closed();
     this.coordinator.leave(this.server.id);
     clearTimeout(this.timer);
     clearTimeout(this.pongTimer);

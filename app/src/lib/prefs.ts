@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { getJSON, setJSON } from './storage';
 import type { AccentName } from './theme';
+import type { SavedModel } from './modelOptions';
 
 export type Prefs = {
   theme: 'system' | 'light' | 'dark';
@@ -26,10 +27,13 @@ export type Prefs = {
   /** Chat organization is private to this device, keyed by bot and chat. */
   pinnedChats: string[];
   archivedChats: string[];
+  /** Exact provider/model pairs, available only where the current server offers that provider. */
+  favoriteModels: SavedModel[];
+  recentModels: SavedModel[];
 };
 
 export const DEFAULT_PREFS: Prefs = {
-  theme: 'system', accent: 'iris', layout: 'bubbles', motion: 'system', transparency: 'system', haptics: true, sounds: true, busyMode: 'steer', appLock: false, updateCheck: true, mainBot: '', sidebar: 'auto', pinnedChats: [], archivedChats: [],
+  theme: 'system', accent: 'iris', layout: 'bubbles', motion: 'system', transparency: 'system', haptics: true, sounds: true, busyMode: 'steer', appLock: false, updateCheck: true, mainBot: '', sidebar: 'auto', pinnedChats: [], archivedChats: [], favoriteModels: [], recentModels: [],
 };
 
 const KEY = 'winglet.prefs';

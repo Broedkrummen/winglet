@@ -32,6 +32,7 @@ export type ConnDetail = {
 
 export type OutboxEntry = {
   client_id: string; chat_id: string; text: string; created_at: number; failed?: boolean;
+  failure?: string;
   attachments?: Attachment[]; reply_to?: ReplyRef;
 };
 
@@ -136,6 +137,7 @@ const isLocal = (m: Message) => m.status === 'pending' || m.status === 'queued' 
 export const useApp = create<AppState>((set, get) => {
   const patch = (serverId: string, fn: (s: ServerState) => Partial<ServerState>) =>
     set((state) => {
+      if (!state.servers.some((server) => server.id === serverId)) return state;
       const current = state.runtime[serverId] ?? emptyRuntime();
       return { runtime: { ...state.runtime, [serverId]: { ...current, ...fn(current) } } };
     });
@@ -198,6 +200,13 @@ export const useApp = create<AppState>((set, get) => {
       const { [chatId]: _typing, ...typing } = s.typing;
       return { chats, messages, deleted, loaded, typing, outbox: s.outbox.filter((o) => o.chat_id !== chatId) };
     });
+    const key = draftKey(serverId, chatId);
+    set((state) => {
+      const { [key]: _draft, ...drafts } = state.drafts;
+      const { [key]: _files, ...draftFiles } = state.draftFiles;
+      const { [key]: _reply, ...replyTo } = state.replyTo;
+      return { drafts, draftFiles, replyTo };
+    });
     saveOutbox(serverId);
     cacheRemove(`msgs:${serverId}:${chatId}`);
     const { selection, select } = get();
@@ -226,14 +235,18 @@ export const useApp = create<AppState>((set, get) => {
       upsertMessage(serverId, entry.chat_id, data.message);
       updateOutbox(serverId, (o) => o.filter((x) => x.client_id !== entry.client_id));
     } catch (e) {
+      // A socket acknowledgement may have removed this send while HTTP was still in flight.
+      // Its later failure must not pause unrelated messages or put the accepted send back in the outbox.
+      if (!get().runtime[serverId]?.outbox.some((o) => o.client_id === entry.client_id)) return;
       if (isNetworkError(e)) {
         // Lost on the way (maybe after the server stored it): resend with the same id later.
         sendPaused.add(serverId);
         setLocalStatus(serverId, entry.chat_id, entry.client_id, 'queued');
         setTimeout(() => { if (get().runtime[serverId]?.status === 'online') flushOutbox(serverId); }, 5000);
       } else {
-        updateOutbox(serverId, (o) => o.map((x) => (x.client_id === entry.client_id ? { ...x, failed: true } : x)));
-        patch(serverId, (s) => ({ messages: { ...s.messages, [entry.chat_id]: markFailed(s.messages[entry.chat_id] ?? [], entry.client_id) } }));
+        const failure = (e as Error).message || 'The server refused this message.';
+        updateOutbox(serverId, (o) => o.map((x) => (x.client_id === entry.client_id ? { ...x, failed: true, failure } : x)));
+        patch(serverId, (s) => ({ messages: { ...s.messages, [entry.chat_id]: markFailed(s.messages[entry.chat_id] ?? [], entry.client_id, failure) } }));
       }
     }
   };
@@ -255,6 +268,7 @@ export const useApp = create<AppState>((set, get) => {
   const localMessage = (entry: OutboxEntry): Message => ({
     id: entry.client_id, chat_id: entry.chat_id, role: 'user', text: entry.text, status: entry.failed ? 'failed' : 'queued',
     meta: { client_id: entry.client_id, ...(entry.attachments?.length ? { attachments: entry.attachments } : {}),
+      ...(entry.failure ? { delivery_error: entry.failure } : {}),
       ...(entry.reply_to ? { reply_to: entry.reply_to } : {}) },
     created_at: entry.created_at, updated_at: entry.created_at,
   });
@@ -403,6 +417,7 @@ export const useApp = create<AppState>((set, get) => {
 
   /** The latest pet request per bot. */
   const petLoads = new Map<string, number>();
+  const inboxLoads = new Map<string, number>();
 
   /** Load what this phone remembers about a bot, so it opens instantly and works offline. */
   const hydrateServer = async (serverId: string) => {
@@ -450,9 +465,10 @@ export const useApp = create<AppState>((set, get) => {
       const selection = await getJSON<Selection>(SELECTION_KEY, {});
       const drafts = await cacheGet<Record<string, string>>('drafts', {});
       const draftFiles = await cacheGet<Record<string, DraftFile[]>>('draftFiles', {});
+      const replyTo = await cacheGet<Record<string, ReplyRef>>('replyTo', {});
       const runtime: Record<string, ServerState> = {};
       for (const s of servers) runtime[s.id] = emptyRuntime();
-      set({ servers, runtime, drafts, draftFiles, selection: selection.serverId ? selection : { serverId: servers[0]?.id }, ready: true });
+      set({ servers, runtime, drafts, draftFiles, replyTo, selection: selection.serverId ? selection : { serverId: servers[0]?.id }, ready: true });
       await Promise.all(servers.map((s) => hydrateServer(s.id)));
       servers.forEach(connect);
     },
@@ -541,10 +557,14 @@ export const useApp = create<AppState>((set, get) => {
         const servers = state.servers.filter((s) => s.id !== serverId);
         const selection = state.selection.serverId === serverId ? { serverId: servers[0]?.id } : state.selection;
         const drafts = Object.fromEntries(Object.entries(state.drafts).filter(([k]) => !k.startsWith(`${serverId}:`)));
-        return { servers, runtime, selection, drafts };
+        const draftFiles = Object.fromEntries(Object.entries(state.draftFiles).filter(([k]) => !k.startsWith(`${serverId}:`)));
+        const replyTo = Object.fromEntries(Object.entries(state.replyTo).filter(([k]) => !k.startsWith(`${serverId}:`)));
+        const visibleChat = state.visibleChat?.serverId === serverId ? undefined : state.visibleChat;
+        return { servers, runtime, selection, drafts, draftFiles, replyTo, visibleChat };
       });
       for (const prefix of [`chats:${serverId}`, `inbox:${serverId}`, `outbox:${serverId}`, `msgs:${serverId}:`, `pet:${serverId}`]) cacheRemove(prefix);
       await persist();
+      await setJSON(SELECTION_KEY, get().selection);
     },
 
     select: (serverId, chatId) => {
@@ -643,11 +663,20 @@ export const useApp = create<AppState>((set, get) => {
     loadInbox: async (serverId) => {
       const server = get().servers.find((s) => s.id === serverId);
       if (!server) return;
+      const load = (inboxLoads.get(serverId) ?? 0) + 1;
+      inboxLoads.set(serverId, load);
+      const before = get().runtime[serverId]?.inbox;
       try {
         const data = await api<{ items: InboxItem[]; pending: number }>(server, '/api/inbox');
+        if (inboxLoads.get(serverId) !== load || get().servers.find((s) => s.id === serverId) !== server) return;
         const inbox: Record<string, InboxItem> = {};
         for (const item of data.items) inbox[item.id] = item;
-        patch(serverId, () => ({ inbox, pending: data.pending }));
+        patch(serverId, (s) => {
+          // A question may have arrived or been answered while the HTTP snapshot was on its way.
+          // Keep precisely those live changes, including equal-timestamp transitions.
+          for (const [id, item] of Object.entries(s.inbox)) if (before?.[id] !== item) inbox[id] = item;
+          return { inbox, pending: Object.values(inbox).filter((item) => item.status === 'pending' && item.kind !== 'result').length };
+        });
       } catch {
         // offline: keep what we have
       }
@@ -658,10 +687,12 @@ export const useApp = create<AppState>((set, get) => {
       const retryClientId = o.retryClientId;
       const server = get().servers.find((s) => s.id === serverId);
       if (!server || (!text.trim() && !o.attachments?.length && !retryClientId)) return;
+      if (retryClientId && get().runtime[serverId]?.messages[chatId]?.some((m) =>
+        !isLocal(m) && m.meta?.client_id === retryClientId)) return;
       // A retry reuses the original id so the server can tell it already has the message.
       const clientId = retryClientId ?? `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
       const existing = get().runtime[serverId]?.outbox.find((x) => x.client_id === clientId);
-      const entry: OutboxEntry = existing ? { ...existing, failed: false }
+      const entry: OutboxEntry = existing ? { ...existing, failed: false, failure: undefined }
         : { client_id: clientId, chat_id: chatId, text: text.trim(), created_at: Date.now() / 1000,
           ...(o.attachments?.length ? { attachments: o.attachments } : {}), ...(o.replyTo ? { reply_to: o.replyTo } : {}) };
       updateOutbox(serverId, (o) => [...o.filter((x) => x.client_id !== clientId), entry]);

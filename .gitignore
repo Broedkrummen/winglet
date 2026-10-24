@@ -162,5 +162,6 @@ app/android/
 # The bundled web app keeps Expo's exported assets under paths named node_modules; they must ship.
 !/plugin/web/assets/node_modules/
 app/ios/
+app/dist-android/
 expo-env.d.ts
 .metro-health-check*

@@ -10,6 +10,9 @@ The [README](../README.md#what-it-does) has the overview. This page lists everyt
   with previous messages and your new exchange. Your bot keeps its conversation context.
 - **Keep chats organized.** Pin side chats above recent ones, or archive and restore them from Chats → Archived.
   Pins and archives stay on this device; archiving keeps the conversation and its messages.
+- **Find the work that matters.** All, Running and Needs you filters in the sidebar and Chats show active
+  conversations and requests, including requests in archived chats. Unsent text, attachments and replies
+  appear as draft previews; search finds draft text and attachment names.
 - **Photos, files and voice notes**, both ways, with a full-screen viewer. Reply to a message, copy, retry
   or stop a reply, and export a chat.
   Every completed text reply has visible Copy, Reply and More actions below it.
@@ -19,8 +22,14 @@ The [README](../README.md#what-it-does) has the overview. This page lists everyt
 - **A quieter conversation.** Tool progress folds into expandable activity rows, with replies kept in view.
   Long approval commands expand when you need the details. Rename, mute and export use the same menu
   in the chat list and inside a chat.
+- **Keep the current task in reach.** A strip above the message box shows current activity or the request
+  waiting for you. Open its details or stop the task while reading or typing. Stop requires a live
+  connection and never waits in the offline outbox.
 - **Works on a bad connection.** Chats open from the phone's cache, and what you send waits until the
-  server is back.
+  server is back. Failed sends explain the refusal and offer Retry, Edit or Discard; retries keep the
+  same delivery ID. Draft text, finished attachments and reply context survive app restarts.
+  On Android, offline chat, inbox, draft and outbox values are encrypted with a device key kept in the
+  OS keychain. The web app uses origin-scoped IndexedDB.
 - **One screen for the connection.** See how phones reach the server, whether the tunnel is up, and
   whether this phone's notifications are getting through. Moved the server to Tailscale or a new domain?
   Point the Android app at the new address; it only moves once your server has signed that address as
@@ -38,6 +47,8 @@ The [README](../README.md#what-it-does) has the overview. This page lists everyt
 
 - **Models.** Tap the model name inside the message box to choose a model or thinking level. The same controls appear on the chat landing and in conversations. Search readable model names, see the current choice, or set the default for new chats. Add providers and API keys
   from the phone; keys are encrypted for your server before they leave the phone.
+  Star models for quick access in the chat picker, or choose from the last eight successful choices.
+  Stars do not change the active model; saved choices only appear for providers offered by that server.
 - **Persona, memory and usage.** Edit who it is, see and fix what it remembers, and track tokens and cost.
 - **A pet.** Give your agent an animated face from the [petdex](https://petdex.dev) gallery. It waves when
   a reply lands, runs while it works and waits when it needs you, on every phone paired with the bot.

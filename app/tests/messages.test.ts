@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { activityKind, chatMessages, groupActivity, inSheet, isActivity, markFailed, mergeMessages } from '../src/lib/messages.ts';
+import { activityKind, chatMessages, currentTaskActivity, groupActivity, inSheet, isActivity, markFailed, mergeMessages } from '../src/lib/messages.ts';
 import type { Message } from '../src/lib/types.ts';
 
 const msg = (id: string, over: Partial<Message> = {}): Message => ({
@@ -11,6 +11,16 @@ test('a stale history snapshot does not erase a newer live reply', () => {
   const live = [msg('a'), msg('b', { created_at: 5, updated_at: 5 })];
   const snapshot = [msg('a')]; // taken before "b" arrived over the socket
   assert.deepEqual(mergeMessages(live, snapshot).map((m) => m.id), ['a', 'b']);
+});
+
+test('the current task contains only this turn’s activity, ignoring hidden model controls', () => {
+  const activity = [msg('old', { meta: { activity: true } }), msg('question', { role: 'user' }),
+    msg('read', { meta: { activity: true } }), msg('model-control', { role: 'user', meta: { hidden: true } }),
+    msg('search', { meta: { activity: true } })];
+  assert.deepEqual(currentTaskActivity(activity).map((m) => m.id), ['read', 'search']);
+  assert.deepEqual(currentTaskActivity([...activity, msg('answer')]), []);
+  assert.deepEqual(currentTaskActivity([...activity, msg('next', { role: 'user' })]), []);
+  assert.equal(currentTaskActivity([]).length, 0);
 });
 
 test('the most recently updated copy of a streaming message wins', () => {

@@ -39,8 +39,9 @@ export function mergeMessages(current: Message[], incoming: Message[], deletedId
 }
 
 /** Mark an optimistic send as failed, unless the server already confirmed it (e.g. over the socket). */
-export function markFailed(list: Message[], clientId: string): Message[] {
-  return list.map((m) => (m.id === clientId && m.status === 'pending' ? { ...m, status: 'failed' } : m));
+export function markFailed(list: Message[], clientId: string, error?: string): Message[] {
+  return list.map((m) => (m.id === clientId && m.status === 'pending' ? { ...m, status: 'failed',
+    ...(error ? { meta: { ...m.meta, delivery_error: error } } : {}) } : m));
 }
 
 /** Hermes's tool names: snake_case (web_search, read_file) or one of its plain ones. */
@@ -90,6 +91,18 @@ export function activityKind(m: Message): 'sure' | 'maybe' | null {
 
 /** Hermes narrating its work (see `activityKind`), without the ones that depend on what comes after. */
 export const isActivity = (m: Message) => activityKind(m) === 'sure';
+
+/** Only activity after the latest prompt can describe the current task. Never label an old tool as live. */
+export function currentTaskActivity(messages: readonly Message[]): Message[] {
+  const steps: Message[] = [];
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message.role === 'user' && !message.meta?.hidden) break;
+    if (activityKind(message)) steps.push(message);
+    else if (isNotifiable(message)) break;
+  }
+  return steps.reverse();
+}
 
 export type Entry = { kind: 'msg'; m: Message } | { kind: 'activity'; id: string; items: Message[] };
 

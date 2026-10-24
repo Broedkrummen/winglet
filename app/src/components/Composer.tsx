@@ -6,6 +6,7 @@ import Animated, {
   cancelAnimation, FadeIn, FadeOut, useAnimatedStyle, useSharedValue, withRepeat, withSequence, withTiming, ZoomIn,
 } from 'react-native-reanimated';
 import { attachFiles, canSend, removeFile, retryFile, sendDraft } from '../lib/attach';
+import { stopTask } from '../lib/actions';
 import { loadCommands, matchCommands, type Command } from '../lib/commands';
 import { focusRegisteredComposer, registerComposer } from '../lib/composerFocus';
 import { haptic } from '../lib/haptics';
@@ -20,8 +21,9 @@ import type { DraftFile, Server } from '../lib/types';
 import { useVoiceNote } from '../lib/voiceNote';
 import { Glass } from './Glass';
 import { ModelButton } from './ModelSheet';
-import { ArrowUp, Camera, FileText, ImagePlus, Mic, Plus, RotateCcw, Square, X } from './icons';
+import { ArrowUp, Camera, FileText, ImagePlus, Mic, Plus, RotateCcw, X } from './icons';
 import { Sheet, SheetAction } from './Sheet';
+import { TaskProgress } from './TaskProgress';
 import { Chip, Tap, Toggle } from './ui';
 
 const MIN_INPUT = 41;
@@ -156,6 +158,11 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
     try {
       const destination = prepareChat ? await prepareChat() : chatId;
       if (!destination) return;
+      if ((value ?? text).trim() === '/stop' && !files.length) {
+        const stopped = await stopTask(server, destination);
+        if (stopped && value === undefined && useApp.getState().drafts[draftKey(server.id, destination)] === text) setText('');
+        return;
+      }
       onBeforeSend?.(destination);
       if (value !== undefined) {
         haptic.light();
@@ -216,6 +223,7 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
           </ScrollView>
         </Glass>
       ) : null}
+      {!prepareChat ? <TaskProgress key={key} server={server} chatId={chatId} busy={busy} /> : null}
       {showBusyModes ? (
         <Animated.View entering={FadeIn.duration(160)} exiting={FadeOut.duration(120)} style={s.modes} accessibilityLabel="While it works">
           <Text style={s.modesLabel}>While it works:</Text>
@@ -269,11 +277,7 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
           ) : <View style={{ width: 8 }} />}
           <ModelButton server={server} chatId={chatId} variant="composer" prepareChat={prepareChat} />
           <View style={{ flex: 1 }} />
-          {busy && !text.trim() && !files.length ? (
-            <Tap key="stop" feedback="light" accessibilityLabel="Stop the current task" onPress={() => send('/stop')} style={[s.sendBtn, s.stopBtn]}>
-              <Animated.View entering={ZoomIn.duration(160)}><Square size={14} color={t.colors.text} fill={t.colors.text} /></Animated.View>
-            </Tap>
-          ) : !text.trim() && !files.length && voice ? (
+          {!busy && !text.trim() && !files.length && voice ? (
             <VoiceButton server={server} chatId={chatId} onSent={onSent} prepareChat={prepareChat} onBeforeSend={onBeforeSend} />
           ) : (
             <Tap key="send" feedback="none" accessibilityLabel={preparing ? 'Starting chat' : uploading ? 'Waiting for uploads' : 'Send'} accessibilityState={{ disabled: !ready || preparing }}
@@ -398,7 +402,6 @@ const useStyles = makeStyles((t) => ({
     ...(Platform.OS === 'web' ? ({ outlineStyle: 'none' } as object) : {}),
   },
   sendBtn: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
-  stopBtn: { backgroundColor: t.colors.surfaceSunken, borderWidth: 1, borderColor: t.colors.borderStrong },
   offlineNote: { ...t.type.caption, color: t.colors.warning, marginBottom: 6, marginLeft: 12, maxWidth: 820, alignSelf: 'center', width: '100%' },
   commands: { borderRadius: t.radius.lg, marginBottom: 8, paddingVertical: 4, maxWidth: 820, width: '100%', alignSelf: 'center' },
   command: { justifyContent: 'center', gap: 1, paddingHorizontal: 16, paddingVertical: 7, minHeight: 52 },

@@ -7,6 +7,7 @@ import { AgentFace } from '../../components/AgentFace';
 import { NavigationToggle, useContentWidth } from '../../components/AppNavigation';
 import { ChatView } from '../../components/ChatView';
 import { ChatMenu } from '../../components/ChatMenu';
+import { ChatFilters } from '../../components/ChatFilters';
 import { ConnectionBanner } from '../../components/ConnectionBanner';
 import { Archive, Hash, MessageSquarePlus, MoreHorizontal, Pin, Search, Sparkles, X } from '../../components/icons';
 import { useTabBarSpace } from '../../components/TabBar';
@@ -16,9 +17,11 @@ import { api } from '../../lib/api';
 import { startNewChat } from '../../lib/actions';
 import { requestFocus } from '../../lib/focus';
 import { organizeChats } from '../../lib/chatOrganization';
+import { chatActivity, chatActivityLabel, draftPreview, matchesChatFilter, type ChatFilter } from '../../lib/chatActivity';
+import { useActivityClock } from '../../lib/useActivityClock';
 import { usePrefs } from '../../lib/prefs';
 import { plainText } from '../../lib/text';
-import { homeChat, isTyping, useApp, useServerState } from '../../lib/store';
+import { homeChat, useApp, useServerState } from '../../lib/store';
 import { WIDE_BREAKPOINT } from '../../lib/theme';
 import { makeStyles, useTheme } from '../../lib/themeContext';
 import type { Chat, SearchResult, Server } from '../../lib/types';
@@ -53,15 +56,27 @@ function ChatList({ server, activeChatId }: { server: Server; activeChatId?: str
   const select = useApp((st) => st.select);
   const [query, setQuery] = useState('');
   const [menu, setMenu] = useState<Chat | null>(null);
-  const [archived, setArchived] = useState(false);
+  const [filter, setFilter] = useState<ChatFilter | 'archived'>('all');
+  const archived = filter === 'archived';
+  const activeFilter = filter === 'running' || filter === 'needs-you';
+  const now = useActivityClock({ [server.id]: rt?.typing ?? {} });
+  const drafts = useApp((st) => st.drafts);
+  const draftFiles = useApp((st) => st.draftFiles);
+  const replyTo = useApp((st) => st.replyTo);
   const pinnedChats = usePrefs((st) => st.prefs.pinnedChats);
   const archivedChats = usePrefs((st) => st.prefs.archivedChats);
 
   const q = query.trim().toLowerCase();
-  const match = (c: Chat) => !q || c.title.toLowerCase().includes(q) || c.preview.toLowerCase().includes(q);
+  const draftOf = (c: Chat) => draftPreview(drafts[`${server.id}:${c.id}`], draftFiles[`${server.id}:${c.id}`], !!replyTo[`${server.id}:${c.id}`]);
+  const match = (c: Chat) => !q || `${c.title} ${c.preview} ${draftOf(c) ?? ''}`.toLowerCase().includes(q);
   const mainId = homeChat(rt);
   const groups = useMemo(() => organizeChats(Object.values(rt?.chats ?? {}), server.id, mainId, pinnedChats, archivedChats), [rt?.chats, server.id, mainId, pinnedChats, archivedChats]);
-  const side = archived ? groups.archived : [...groups.pinned, ...groups.recent];
+  const actionable = Object.values(rt?.chats ?? {}).filter((chat) => chat.kind === 'chat');
+  const states = new Map(actionable.map((chat) => [chat.id, chatActivity(rt, chat.id, now)]));
+  const counts = { running: actionable.filter((c) => states.get(c.id)?.running).length,
+    pending: actionable.filter((c) => (states.get(c.id)?.pending ?? 0) > 0).length };
+  const filtered = activeFilter ? actionable.filter((c) => matchesChatFilter(filter, states.get(c.id)!)).sort((a, b) => b.updated_at - a.updated_at) : [];
+  const side = archived ? groups.archived : activeFilter ? filtered : [...groups.pinned, ...groups.recent];
   const general = rt?.chats[mainId];
   const recents = useMemo(() => [...groups.recent, ...(general ? [general] : [])].sort((a, b) => b.updated_at - a.updated_at), [groups.recent, general]);
   const resume = recents[0];
@@ -69,8 +84,8 @@ function ChatList({ server, activeChatId }: { server: Server; activeChatId?: str
   const loading = !rt || (rt.status !== 'online' && !Object.keys(rt.chats).length);
   const found = useMessageSearch(server, rt?.info?.features?.search ? query : '');
   const scopedIds = new Set(side.map((c) => c.id));
-  const results = found.results.filter((r) => scopedIds.has(r.chat.id) || (!archived && (r.chat.id === mainId || r.chat.id === 'home')));
-  useEffect(() => { setMenu(null); setQuery(''); setArchived(false); }, [server.id]);
+  const results = found.results.filter((r) => scopedIds.has(r.chat.id) || (!archived && !activeFilter && (r.chat.id === mainId || r.chat.id === 'home')));
+  useEffect(() => { setMenu(null); setQuery(''); setFilter('all'); }, [server.id]);
 
   const open = (id: string) => {
     if (wide) select(server.id, id);
@@ -81,7 +96,8 @@ function ChatList({ server, activeChatId }: { server: Server; activeChatId?: str
     <Animated.View key={c.id} entering={FadeIn.duration(200)} layout={LinearTransition.duration(220).easing(easeOut)}>
       <ChatRow icon={c.id === mainId ? <AgentFace server={server} size={32} still /> : pinned ? <Pin size={17} color={t.colors.onAccentSoft} /> : archived ? <Archive size={17} color={t.colors.textSecondary} /> : <Hash size={17} color={t.colors.onAccentSoft} />}
         tint={c.id === mainId ? 'transparent' : archived ? t.colors.surfaceSunken : t.colors.accentSoft} title={c.id === mainId ? 'Main chat' : c.title}
-        subtitle={isTyping(rt, c.id) ? 'Working…' : plainText(c.preview)} time={c.updated_at} working={isTyping(rt, c.id)}
+        subtitle={draftOf(c) ?? chatActivityLabel(chatActivity(rt, c.id, now)) ?? plainText(c.preview)} time={c.updated_at}
+        subtitleColor={states.get(c.id)?.pending ? t.colors.warning : draftOf(c) || states.get(c.id)?.running ? t.colors.onAccentSoft : undefined}
         active={activeChatId === c.id} onPress={() => open(c.id)} onMenu={() => setMenu(c)} />
     </Animated.View>
   );
@@ -101,19 +117,14 @@ function ChatList({ server, activeChatId }: { server: Server; activeChatId?: str
           {query ? <IconButton label="Clear search" size={32} onPress={() => setQuery('')}><X size={16} color={t.colors.textSecondary} /></IconButton> : null}
         </View>
         <ConnectionBanner server={server} compact />
-        <View style={s.filters} accessibilityRole="tablist">
-          {([{ value: false, label: 'All chats' }, { value: true, label: `Archived${groups.archived.length ? ` · ${groups.archived.length}` : ''}` }]).map((filter) => (
-            <Tap key={filter.label} feedback="selection" accessibilityRole="tab" accessibilityState={{ selected: archived === filter.value }}
-              onPress={() => setArchived(filter.value)} style={[s.filter, archived === filter.value && s.filterOn]}>
-              <Text style={[s.filterText, archived === filter.value && { color: t.colors.onAccentSoft }]}>{filter.label}</Text>
-            </Tap>
-          ))}
+        <ChatFilters value={filter} onChange={setFilter} counts={counts} archived={groups.archived.length} />
+        <View style={s.filters}>
+          <Text style={s.filterText}>{archived ? 'On this device' : activeFilter ? `${filtered.length} ${filtered.length === 1 ? 'chat' : 'chats'}` : `${actionable.length} chats`}</Text>
           <View style={{ flex: 1 }} />
           {updates ? <Tap accessibilityLabel="Open updates" onPress={() => open('home')} feedback="selection" style={s.updates}>
             <Sparkles size={16} color={t.colors.textSecondary} /><Text style={s.updateLabel} numberOfLines={1}>Updates</Text>
           </Tap> : null}
         </View>
-        {archived ? <Text style={[s.emptyText, { textAlign: 'left', marginBottom: 8 }]}>On this device</Text> : null}
 
         {loading ? (
           <View style={{ gap: 12, marginTop: 16 }}>
@@ -121,15 +132,15 @@ function ChatList({ server, activeChatId }: { server: Server; activeChatId?: str
           </View>
         ) : (
           <>
-            {!archived && groups.pinned.some(match) ? <><SectionHeader title="Pinned" style={s.section} />{groups.pinned.filter(match).map((c) => row(c, true))}</> : null}
-            {!archived && resume && match(resume) ? <><SectionHeader title="Continue" style={s.section} />{row(resume)}</> : null}
-            {(archived ? groups.archived : recents.slice(1)).some(match) ? <SectionHeader title={archived ? 'Archived chats' : 'Recent'} style={s.section} /> : null}
-            {(archived ? groups.archived : recents.slice(1)).filter(match).map((c) => row(c))}
-            {q && !archived && updates && match(updates) ? <ChatRow icon={<Sparkles size={17} color={t.colors.textSecondary} />} tint={t.colors.surfaceSunken} title="Updates" subtitle={plainText(updates.preview)} time={updates.updated_at} onPress={() => open('home')} /> : null}
-            {!(archived ? side.length : recents.length || groups.pinned.length) && !q ? (
+            {!archived && !activeFilter && groups.pinned.some(match) ? <><SectionHeader title="Pinned" style={s.section} />{groups.pinned.filter(match).map((c) => row(c, true))}</> : null}
+            {!archived && !activeFilter && resume && match(resume) ? <><SectionHeader title="Continue" style={s.section} />{row(resume)}</> : null}
+            {(archived || activeFilter ? side : recents.slice(1)).some(match) ? <SectionHeader title={archived ? 'Archived chats' : filter === 'running' ? 'Running' : filter === 'needs-you' ? 'Needs you' : 'Recent'} style={s.section} /> : null}
+            {(archived || activeFilter ? side : recents.slice(1)).filter(match).map((c) => row(c))}
+            {q && !archived && !activeFilter && updates && match(updates) ? <ChatRow icon={<Sparkles size={17} color={t.colors.textSecondary} />} tint={t.colors.surfaceSunken} title="Updates" subtitle={plainText(updates.preview)} time={updates.updated_at} onPress={() => open('home')} /> : null}
+            {!(archived || activeFilter ? side.length : recents.length || groups.pinned.length) && !q ? (
               <View style={s.empty}>
-                <Text style={s.emptyText}>{archived ? 'No archived chats' : 'No chats yet'}</Text>
-                {!archived ? <Button title="New chat" variant="tonal" icon={<Hash size={16} color={t.colors.onAccentSoft} />} onPress={newChat} /> : null}
+                <Text style={s.emptyText}>{archived ? 'No archived chats' : filter === 'running' ? 'No tasks running.' : filter === 'needs-you' ? 'Nothing waiting on you.' : 'No chats yet'}</Text>
+                {!archived && !activeFilter ? <Button title="New chat" variant="tonal" icon={<Hash size={16} color={t.colors.onAccentSoft} />} onPress={newChat} /> : null}
               </View>
             ) : null}
             {results.length ? (
@@ -141,7 +152,7 @@ function ChatList({ server, activeChatId }: { server: Server; activeChatId?: str
                 ))}
               </>
             ) : null}
-            {q && !side.some(match) && !(!archived && ((general && match(general)) || (updates && match(updates)))) && !results.length && !found.busy
+            {q && !side.some(match) && !(!archived && !activeFilter && ((general && match(general)) || (updates && match(updates)))) && !results.length && !found.busy
               ? <Text style={s.emptyText}>Nothing matches “{query}”.</Text> : null}
           </>
         )}
@@ -151,8 +162,8 @@ function ChatList({ server, activeChatId }: { server: Server; activeChatId?: str
   );
 }
 
-function ChatRow({ icon, tint, title, subtitle, time, working, active, onPress, onMenu }: {
-  icon: React.ReactNode; tint: string; title: string; subtitle: string; time: number; working?: boolean; active?: boolean;
+function ChatRow({ icon, tint, title, subtitle, time, subtitleColor, active, onPress, onMenu }: {
+  icon: React.ReactNode; tint: string; title: string; subtitle: string; time: number; subtitleColor?: string; active?: boolean;
   onPress: () => void; onMenu?: () => void;
 }) {
   const t = useTheme();
@@ -167,7 +178,7 @@ function ChatRow({ icon, tint, title, subtitle, time, working, active, onPress, 
           <Text style={s.rowTitle} numberOfLines={1}>{title}</Text>
           <Text style={s.time}>{ago(time)}</Text>
         </View>
-        {subtitle ? <Text style={[s.preview, working && { color: t.colors.warning }]} numberOfLines={1}>{subtitle}</Text> : null}
+        {subtitle ? <Text style={[s.preview, subtitleColor ? { color: subtitleColor } : null]} numberOfLines={1}>{subtitle}</Text> : null}
       </View>
       {onMenu ? <IconButton label={`Options for ${title}`} size={40} onPress={(e) => { e.stopPropagation(); onMenu(); }}><MoreHorizontal size={18} color={t.colors.textSecondary} /></IconButton> : null}
     </Tap>
@@ -249,8 +260,6 @@ const useStyles = makeStyles((t) => ({
   title: { ...t.type.display, color: t.colors.text, marginTop: 6, marginBottom: 10 },
   section: { paddingTop: 12, paddingBottom: 4 },
   filters: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 4, borderBottomWidth: 1, borderBottomColor: t.colors.border },
-  filter: { minHeight: 44, alignItems: 'flex-start', justifyContent: 'center', borderBottomWidth: 2, borderBottomColor: 'transparent' },
-  filterOn: { borderBottomColor: t.colors.accent },
   filterText: { ...t.type.callout, fontFamily: t.fonts.medium, color: t.colors.textSecondary },
   updates: { flexDirection: 'row', gap: 5, alignItems: 'center', minHeight: 44, flexShrink: 1 },
   updateLabel: { ...t.type.caption, fontFamily: t.fonts.medium, color: t.colors.textSecondary, flexShrink: 1 },

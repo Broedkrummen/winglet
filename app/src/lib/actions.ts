@@ -30,3 +30,27 @@ export function sendHidden(server: Server, chatId: string, text: string, what: s
     body: JSON.stringify({ text, hidden: true, client_id: `c-${Date.now().toString(36)}-${what}` }),
   }).catch((e) => useApp.getState().toast({ serverId: server.id, title: `Couldn't ask for ${what}`, body: (e as Error).message }));
 }
+
+const stopping = new Set<string>();
+
+/** Stop belongs to the task running now. It must never sit in the offline outbox. */
+export async function stopTask(server: Server, chatId: string): Promise<boolean> {
+  const key = JSON.stringify([server.id, chatId]);
+  if (stopping.has(key)) return false;
+  const state = useApp.getState();
+  if (!state.network || state.runtime[server.id]?.status !== 'online') {
+    state.toast({ serverId: server.id, title: 'Reconnect to stop', body: 'Stop is available when your bot is connected.' });
+    return false;
+  }
+  stopping.add(key);
+  try {
+    await api(server, `/api/chats/${encodeURIComponent(chatId)}/messages`, {
+      method: 'POST', body: JSON.stringify({ text: '/stop', hidden: true,
+        client_id: `c-${Date.now().toString(36)}-stop-${Math.random().toString(36).slice(2, 7)}` }),
+    });
+    return true;
+  } catch (error) {
+    useApp.getState().toast({ serverId: server.id, title: "Couldn't stop", body: (error as Error).message });
+    return false;
+  } finally { stopping.delete(key); }
+}

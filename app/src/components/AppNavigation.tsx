@@ -10,15 +10,18 @@ import { useShallow } from 'zustand/react/shallow';
 import { startNewChat } from '../lib/actions';
 import { useLock } from '../lib/appLock';
 import { chatKey } from '../lib/chatOrganization';
+import { chatActivity, chatActivityLabel, draftPreview, matchesChatFilter, type ChatFilter } from '../lib/chatActivity';
 import { haptic } from '../lib/haptics';
 import { spring, useReducedMotion, useReducedTransparency } from '../lib/motion';
 import { navigationWidth, sidebarChats, sidebarDrawerWidth } from '../lib/navigation';
 import { usePrefs } from '../lib/prefs';
-import { homeChat, isTyping, useApp } from '../lib/store';
+import { homeChat, useApp } from '../lib/store';
+import { useActivityClock } from '../lib/useActivityClock';
 import { makeStyles, useTheme } from '../lib/themeContext';
 import { alpha } from '../lib/theme';
 import type { Chat, Server } from '../lib/types';
 import { ChatMenu } from './ChatMenu';
+import { ChatFilters } from './ChatFilters';
 import { Glass } from './Glass';
 import { KeyboardViewport } from './KeyboardViewport';
 import { Bot, Inbox, MessageCircle, MessageSquarePlus, MessagesSquare, MoreHorizontal, PanelLeft, Pin, Settings } from './icons';
@@ -26,6 +29,8 @@ import { Badge, IconButton, SearchField, Tap } from './ui';
 
 const Navigation = createContext({ open: () => {}, close: () => {}, home: () => {}, homeRevision: 0, reserved: 0 });
 const NO_CHATS = {};
+const NO_TYPING = {};
+const NO_INBOX = {};
 export const useAppNavigation = () => useContext(Navigation);
 export function useContentWidth() { return useWindowDimensions().width - useAppNavigation().reserved; }
 
@@ -146,10 +151,36 @@ function Sidebar({ onClose, drawer = false }: { onClose: () => void; drawer?: bo
   const chats = useApp(useShallow((st) => Object.fromEntries(st.servers.map((bot) => [bot.id, st.runtime[bot.id]?.chats ?? NO_CHATS]))));
   const prefs = usePrefs((st) => st.prefs);
   const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<ChatFilter>('all');
+  const typing = useApp(useShallow((st) => Object.fromEntries(st.servers.map((bot) => [bot.id, st.runtime[bot.id]?.typing ?? NO_TYPING]))));
+  const inbox = useApp(useShallow((st) => Object.fromEntries(st.servers.map((bot) => [bot.id, st.runtime[bot.id]?.inbox ?? NO_INBOX]))));
+  const roles = useApp(useShallow((st) => Object.fromEntries(st.servers.map((bot) => [bot.id, st.runtime[bot.id]?.me?.role ?? 'owner']))));
+  const drafts = useApp((st) => st.drafts);
+  const draftFiles = useApp((st) => st.draftFiles);
+  const replyTo = useApp((st) => st.replyTo);
+  const now = useActivityClock(typing);
   const [menu, setMenu] = useState<{ server: Server; chat: Chat } | null>(null);
   const glassTarget = useRef<View>(null);
   const reducedTransparency = useReducedTransparency();
-  const rows = useMemo(() => sidebarChats(servers, chats, prefs.pinnedChats, prefs.archivedChats, query), [servers, chats, prefs.pinnedChats, prefs.archivedChats, query]);
+  // Actionable chats remain findable even if they were archived on this device.
+  const all = useMemo(() => {
+    const previews = Object.fromEntries(servers.flatMap((bot) => Object.values(chats[bot.id] ?? {}).map((chat) => {
+      const key = `${bot.id}:${chat.id}`;
+      return [chatKey(bot.id, chat.id), draftPreview(drafts[key], draftFiles[key], !!replyTo[key])];
+    })));
+    return sidebarChats(servers, chats, prefs.pinnedChats, filter === 'all' ? prefs.archivedChats : [], query, previews);
+  }, [servers, chats, prefs.pinnedChats, prefs.archivedChats, query, filter, drafts, draftFiles, replyTo]);
+  const stateOf = (botId: string, chatId: string) => chatActivity({ typing: typing[botId], inbox: inbox[botId], me: { role: roles[botId] } }, chatId, now);
+  const rows = all.filter(({ server: bot, chat }) => matchesChatFilter(filter, stateOf(bot.id, chat.id)));
+  const counts = servers.reduce((total, bot) => {
+    for (const chat of Object.values(chats[bot.id] ?? {})) {
+      if (chat.kind !== 'chat') continue;
+      const state = stateOf(bot.id, chat.id);
+      total.running += Number(state.running);
+      total.pending += Number(state.pending > 0);
+    }
+    return total;
+  }, { running: 0, pending: 0 });
   const [creating, setCreating] = useState(false);
   const go = (path: string) => { Keyboard.dismiss(); if (drawer) onClose(); if (path === '/') navigation.home(); else router.navigate(path); };
   const server = servers.find((bot) => bot.id === selected.serverId) ?? servers[0];
@@ -185,28 +216,33 @@ function Sidebar({ onClose, drawer = false }: { onClose: () => void; drawer?: bo
     <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 16 }}>
       <View style={s.groupCard}>
       <SearchField value={query} onChangeText={setQuery} placeholder="Search chats" style={s.historySearch} />
-      {rows.length ? rows.slice(0, query ? 100 : 40).map(({ server: bot, chat, pinned }, index) => {
+      <ChatFilters value={filter} counts={counts} onChange={(value) => { if (value !== 'archived') setFilter(value); }} />
+      {rows.length ? rows.slice(0, query || filter !== 'all' ? 100 : 40).map(({ server: bot, chat, pinned }, index) => {
         const previous = rows[index - 1];
         const group = index === 0 || pinned !== previous?.pinned;
         const active = pathname.startsWith('/chat/') && selected.serverId === bot.id && selected.chatId === chat.id;
+        const state = stateOf(bot.id, chat.id);
+        const draft = draftPreview(drafts[`${bot.id}:${chat.id}`], draftFiles[`${bot.id}:${chat.id}`], !!replyTo[`${bot.id}:${chat.id}`]);
+        const status = chatActivityLabel(state);
         return <View key={chatKey(bot.id, chat.id)}>
-          {group ? <Text style={s.section}>{pinned ? 'Pinned' : 'Recent chats'}</Text> : null}
-          <Tap accessibilityLabel={`${chat.id === homeChat(useApp.getState().runtime[bot.id]) ? `${bot.bot.title} main chat` : chat.title}${pinned ? ', pinned' : ''}`}
+          {group ? <Text style={s.section}>{filter === 'running' ? 'Running' : filter === 'needs-you' ? 'Needs you' : pinned ? 'Pinned' : 'Recent chats'}</Text> : null}
+          <Tap accessibilityLabel={`${chat.id === homeChat(useApp.getState().runtime[bot.id]) ? `${bot.bot.title} main chat` : chat.title}${pinned ? ', pinned' : ''}${status ? `, ${status}` : ''}${draft ? `, ${draft}` : ''}`}
             accessibilityHint="Long-press for chat options" onLongPress={() => { Keyboard.dismiss(); setMenu({ server: bot, chat }); }} delayLongPress={350}
             accessibilityState={{ selected: active }} onPress={() => { haptic.selection(); useApp.getState().select(bot.id, chat.id); go(`/chat/${bot.id}/${chat.id}`); }}
             style={[s.chatRow, active && s.active]}>
             {pinned ? <Pin size={14} color={t.colors.textSecondary} /> : null}
             <View style={{ flex: 1, minWidth: 0 }}>
               <Text style={s.chatTitle} numberOfLines={1}>{chat.id === homeChat(useApp.getState().runtime[bot.id]) ? `${bot.bot.title}` : chat.title}</Text>
+              {draft || status ? <Text numberOfLines={1} style={[s.chatBot, { color: state.pending ? t.colors.warning : t.colors.onAccentSoft }]}>{draft ?? status}</Text> : null}
               {servers.length > 1 && chat.id !== homeChat(useApp.getState().runtime[bot.id]) ? <Text style={s.chatBot} numberOfLines={1}>{bot.bot.title}</Text> : null}
             </View>
-            <WorkingMark serverId={bot.id} chatId={chat.id} />
+            {status ? <View accessibilityLabel={status} style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: state.pending ? t.colors.warning : t.colors.accent }} /> : null}
             <IconButton label={`Options for ${chat.title}`} size={36} onPress={(e) => { e.stopPropagation(); Keyboard.dismiss(); setMenu({ server: bot, chat }); }}>
               <MoreHorizontal size={17} color={t.colors.textSecondary} />
             </IconButton>
           </Tap>
         </View>;
-      }) : <Text style={s.noChats}>{query ? 'No matching chats' : 'Your conversations will appear here.'}</Text>}
+      }) : <Text style={s.noChats}>{query ? 'No matching chats' : filter === 'running' ? 'No tasks running.' : filter === 'needs-you' ? 'Nothing waiting on you.' : 'Your conversations will appear here.'}</Text>}
       <Tap accessibilityLabel="All chats and archived chats" onPress={() => go('/chats')} style={s.navRow}>
         <MessagesSquare size={17} color={t.colors.textSecondary} /><Text style={s.more}>All chats & archived</Text>
       </Tap>
@@ -221,12 +257,6 @@ function Sidebar({ onClose, drawer = false }: { onClose: () => void; drawer?: bo
     </View>
     {menu ? <ChatMenu server={menu.server} chatId={menu.chat.id} title={menu.chat.title} visible onClose={() => setMenu(null)} /> : null}
   </View>;
-}
-
-function WorkingMark({ serverId, chatId }: { serverId: string; chatId: string }) {
-  const t = useTheme();
-  const working = useApp((st) => isTyping(st.runtime[serverId], chatId));
-  return working ? <View accessibilityLabel="Working" style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: t.colors.accent }} /> : null;
 }
 
 function NavigationRail() {

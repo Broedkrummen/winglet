@@ -81,6 +81,8 @@ export type Message = {
     routine?: string;
     /** Set by the server on Hermes's own progress (a tool running), which the chat folds away. */
     activity?: boolean;
+    /** A local delivery error; never sent to Hermes as part of the prompt. */
+    delivery_error?: string;
   };
   created_at: number;
   updated_at: number;

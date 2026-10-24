@@ -1,13 +1,15 @@
 import { Directory, File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
+import { fetch } from 'expo/fetch';
 import { Platform } from 'react-native';
-import { ApiError } from './api';
+import { ApiError, botPath } from './api';
 import type { Server } from './types';
 
 /** Save the whole chat as a Markdown file: the share sheet on a phone, a download in the browser. */
 export async function exportChat(server: Server, chatId: string, title: string): Promise<void> {
-  const resp = await fetch(`${server.url}/api/chats/${encodeURIComponent(chatId)}/export`, {
+  const resp = await fetch(`${server.url}${botPath(server, `/api/chats/${encodeURIComponent(chatId)}/export`)}`, {
     headers: { Authorization: `Bearer ${server.token}` },
+    redirect: 'error',
   }).catch(() => {
     throw new ApiError(`Couldn't reach ${server.bot.title}. Try again when you're back online.`, 0);
   });

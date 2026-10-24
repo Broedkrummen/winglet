@@ -44,6 +44,13 @@ test('sidebar search matches chat titles and bot names without leaking archives'
   assert.equal(sidebarChats([], {}, [], []).length, 0);
 });
 
+test('sidebar search finds unsent text and attachments only in their own bot and chat', () => {
+  const previews = { [chatKey('a', 'same')]: 'Draft · Packing list', [chatKey('b', 'same')]: 'Draft · budget.pdf' };
+  assert.deepEqual(sidebarChats(servers, chats, [], [], 'packing', previews).map((x) => x.server.id), ['a']);
+  assert.deepEqual(sidebarChats(servers, chats, [], [], 'budget.pdf', previews).map((x) => x.server.id), ['b']);
+  assert.equal(sidebarChats(servers, chats, [], [chatKey('a', 'same')], 'packing', previews).length, 0);
+});
+
 test('locking immediately removes the drawer and pinned history, even through a stale open callback', () => {
   let locked = false;
   let changes = 0;

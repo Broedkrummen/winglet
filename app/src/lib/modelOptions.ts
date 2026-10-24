@@ -16,6 +16,30 @@ export function modelName(id: string): string {
 }
 
 type ModelSelection = Pick<Picker, 'providers' | 'current_model' | 'current_provider'>;
+export type SavedModel = { provider: string; model: string };
+
+export const savedModelKey = (value: SavedModel) => JSON.stringify([value.provider, value.model]);
+
+export function toggleSavedModel(saved: SavedModel[], value: SavedModel): SavedModel[] {
+  const key = savedModelKey(value);
+  return saved.some((entry) => savedModelKey(entry) === key) ? saved.filter((entry) => savedModelKey(entry) !== key) : [...saved, value];
+}
+
+export function recentModels(saved: SavedModel[], value: SavedModel): SavedModel[] {
+  return [value, ...saved.filter((entry) => savedModelKey(entry) !== savedModelKey(value))].slice(0, 8);
+}
+
+/** Saved choices cannot offer a provider missing from this server's authenticated catalog. */
+export function availableSavedModels(saved: SavedModel[], picker: ModelSelection): (SavedModel & { providerName: string })[] {
+  const seen = new Set<string>();
+  return saved.flatMap((entry) => {
+    const provider = picker.providers?.find((p) => p.slug === entry.provider);
+    const key = savedModelKey(entry);
+    if (!provider || !entry.model || seen.has(key) || (!provider.custom_models && !provider.models.includes(entry.model))) return [];
+    seen.add(key);
+    return [{ ...entry, providerName: provider.name }];
+  });
+}
 
 export function isCurrentModel(picker: ModelSelection, provider: string, model: string): boolean {
   if (provider !== picker.current_provider || !picker.current_model) return false;

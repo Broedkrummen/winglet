@@ -70,6 +70,22 @@ async def main():
     hub.branching=BranchService(hub,adapter)
     hub.processes=Processes(adapter)
     hub.on_user_message=adapter._on_user_message
+    from plugin.rooms import Rooms
+    from plugin.rooms_hermes import build_worker
+    from scripts.rooms_qa_transport import RoomFixtureRPC
+    hub.bots_provider=lambda:{'bots':[{'name':'ops','title':'Operations','served':True}], 'multiplex':True}
+    adapter._bots_state=hub.bots_provider
+    room_worker=build_worker(adapter,scratch/'rooms-runtime.sqlite',hub)
+    room_rpc=RoomFixtureRPC()
+    room_worker.install_rpc(room_rpc)
+    hub.rooms=Rooms(hub,room_worker,scratch/'rooms-meta.sqlite')
+    room_worker.start()
+    if not store.list_devices():
+        store.add_device('QA fixture owner','fixture',role='owner',verified=True)
+    owner=next(d for d in store.list_devices() if d['role']=='owner')
+    qa_room=hub.rooms.mutate(owner,'create','',{'operation_id':'fixture-room-create-2026','title':'Release studio','bots':['default','ops']})['id']
+    hub.rooms.mutate(owner,'send',qa_room,{'operation_id':'fixture-room-send-2026','revision':1,'text':'@main @ops review the mobile release checklist.'})
+
     async def exchange(chat_id,prompt,reply):
         entry=await runner.async_session_store.get_or_create_session(adapter.build_source(chat_id=chat_id,user_id='fixture'))
         if any(m.get('text')==prompt for m in store.all_messages(chat_id)):
@@ -121,6 +137,10 @@ async def main():
             tracker.turn_finished(sid,'native-review',failed=True)
             await hub.set_typing('research',False)
         elif action=='snapshot': return web.json_response({'task':tracker.snapshot('research'),'chats':store.list_chats(),'workspace_file':f.read_text(encoding='utf-8')})
+        elif action=='room-hold': room_rpc.delay=90
+        elif action=='room-release': room_rpc.delay=1.5
+        elif action=='room-state':
+            return web.json_response({'room':hub.rooms.state(owner,qa_room),'calls':room_rpc.calls,'active_turns':len(room_rpc.pending)})
         else: raise web.HTTPNotFound()
         return web.json_response({'ok':True})
     control=web.Application()
@@ -140,6 +160,7 @@ async def main():
     try:
         await asyncio.Event().wait()
     finally:
+        await hub.rooms.close()
         await hub.processes.close()
         await asyncio.to_thread(process_registry.kill_process,job.id,consume_output=False)
         await api.cleanup()

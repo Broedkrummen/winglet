@@ -3,6 +3,8 @@ import asyncio
 import json
 from types import SimpleNamespace
 import pytest
+pytest.importorskip("gateway.session_context", reason="Real Hermes contract tests run in the dedicated pinned-Hermes job")
+
 from plugin import phone_tools_hermes as tools
 from plugin.phone_tools import PhoneTools
 from plugin.hub import Hub

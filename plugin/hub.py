@@ -37,6 +37,7 @@ from urllib.parse import quote, unquote, urlsplit
 from aiohttp import WSMsgType, web
 
 from . import keys, recovery, uploads, webpush
+from .projects import ProjectConflict, ProjectError, Projects
 from .store import ROLES, Store, new_id
 
 logger = logging.getLogger(__name__)
@@ -127,6 +128,9 @@ ROUTE_POLICY = {
     "h_devices": "owner", "h_audit": "owner",
     "h_agent": "device", "h_picker_select": "owner",
     "h_chat_goal": "device", "h_goals": "device", "h_search": "device", "h_chat_files": "device",
+    "h_projects": "device", "h_project_create": "signed", "h_project_update": "signed",
+    "h_project_order": "signed", "h_project_delete": "signed", "h_project_chat_create": "signed",
+    "h_project_chat_move": "signed", "h_project_chat_remove": "signed",
     "h_models": "owner", "h_providers": "owner", "h_identity": "owner", "h_memory": "owner", "h_usage": "owner",
     "h_model_default": "owner_signed", "h_provider_key": "owner_signed", "h_provider_key_delete": "owner_signed",
     "h_identity_put": "owner_signed", "h_memory_edit": "owner_signed",
@@ -276,6 +280,8 @@ class Hub:
         self.on_answer: Optional[ResolveFn] = None
         # Installed by the adapter; the hub itself never imports Hermes.
         self.hermes_version: Callable[[], str] = lambda: ""
+        # Server-persisted projects (folders). Additive tables, created in place.
+        self.projects = Projects(store)
         self.store.ensure_chat(HOME_CHAT_ID, "Updates", kind="home")
 
     # -- lifecycle -------------------------------------------------------------------
@@ -302,6 +308,14 @@ class Hub:
         r.add_get("/api/chats/{chat_id}/files", self.h_chat_files)
         r.add_get("/api/goals", self.h_goals)
         r.add_get("/api/search", self.h_search)
+        r.add_get("/api/projects", self.h_projects)
+        r.add_post("/api/projects", self.h_project_create)
+        r.add_put("/api/projects/order", self.h_project_order)
+        r.add_patch("/api/projects/{project_id}", self.h_project_update)
+        r.add_delete("/api/projects/{project_id}", self.h_project_delete)
+        r.add_post("/api/projects/{project_id}/chats", self.h_project_chat_create)
+        r.add_post("/api/projects/{project_id}/chats/{chat_id}", self.h_project_chat_move)
+        r.add_delete("/api/projects/{project_id}/chats/{chat_id}", self.h_project_chat_remove)
         r.add_get("/api/commands", self.h_commands)
         r.add_get("/api/push/prefs", self.h_push_prefs)
         r.add_put("/api/push/prefs", self.h_push_prefs_put)
@@ -698,7 +712,7 @@ class Hub:
                 "sessions": self.hermes is not None and self._has(self.hermes, "sessions_available"),
                 "pets": self.hermes is not None and self._has(self.hermes, "pets_available"),
                 "bots": self.bots_provider is not None and self.hermes is not None and self._has(self.hermes, "bots_available"),
-                "connection_status": True}
+                "connection_status": True, "projects": True}
 
     def about(self) -> Dict[str, Any]:
         return {"version": VERSION, "protocol": PROTOCOL, "min_app_protocol": MIN_APP_PROTOCOL,
@@ -946,6 +960,80 @@ class Hub:
         await self.broadcast({"type": "chat.delete", "chat_id": chat_id, "owner_device": chat.get("owner_device"),
                               "bot": chat.get("bot")})
         return _json({"ok": True})
+
+    # -- projects (folders) -----------------------------------------------------------------
+
+    async def _project_body(self, request: web.Request) -> Dict[str, Any]:
+        """Mutation fields from the JSON body, with query fallbacks for DELETE clients."""
+        body = await self._body(request)
+        for key in ("revision", "client_id", "from_revision", "from_project_id"):
+            if key not in body and request.query.get(key):
+                body[key] = request.query[key]
+        return body
+
+    async def _project_change(self, request: web.Request, action: str, summary: str, call) -> web.Response:
+        device = self._require(request)
+        try:
+            result = call()
+        except ProjectConflict as exc:
+            # A stale revision: hand back the current snapshot so the phone can roll back and redraw.
+            return _json({"error": str(exc),
+                          "projects": self.projects.snapshot(device, _BOT.get())}, status=exc.status)
+        except ProjectError as exc:
+            return _error(exc.status, str(exc))
+        await self.broadcast_projects(_BOT.get())
+        self.audit(action, device, summary)
+        return _json({**result, "projects": self.projects.snapshot(device, _BOT.get())})
+
+    async def h_projects(self, request: web.Request) -> web.Response:
+        device = self._require(request)
+        return _json({"projects": self.projects.snapshot(device, _BOT.get())})
+
+    async def h_project_create(self, request: web.Request) -> web.Response:
+        body = await self._project_body(request)
+        return await self._project_change(request, "project.create",
+                                          f"project “{str(body.get('name') or '')[:60]}”",
+                                          lambda: self.projects.create(self._require(request), _BOT.get(), body))
+
+    async def h_project_update(self, request: web.Request) -> web.Response:
+        body = await self._project_body(request)
+        project_id = request.match_info["project_id"]
+        verb = "renamed" if "name" in body else "archived" if body.get("archived") is True else "restored"
+        return await self._project_change(request, "project.update", f"{verb} project {project_id}",
+                                          lambda: self.projects.update(self._require(request), _BOT.get(), project_id, body))
+
+    async def h_project_order(self, request: web.Request) -> web.Response:
+        body = await self._project_body(request)
+        return await self._project_change(request, "project.order", "reordered projects",
+                                          lambda: self.projects.reorder(self._require(request), _BOT.get(), body))
+
+    async def h_project_delete(self, request: web.Request) -> web.Response:
+        body = await self._project_body(request)
+        project_id = request.match_info["project_id"]
+        return await self._project_change(request, "project.delete", f"deleted project {project_id}",
+                                          lambda: self.projects.delete(self._require(request), _BOT.get(),
+                                                                       project_id, body))
+
+    async def h_project_chat_create(self, request: web.Request) -> web.Response:
+        body = await self._project_body(request)
+        project_id = request.match_info["project_id"]
+        return await self._project_change(request, "project.chat.create", f"new chat in project {project_id}",
+                                          lambda: self.projects.create_chat(self._require(request), _BOT.get(),
+                                                                            project_id, body))
+
+    async def h_project_chat_move(self, request: web.Request) -> web.Response:
+        body = await self._project_body(request)
+        project_id, chat_id = request.match_info["project_id"], request.match_info["chat_id"]
+        return await self._project_change(request, "project.chat.move", f"moved chat {chat_id} to {project_id}",
+                                          lambda: self.projects.move_chat(self._require(request), _BOT.get(),
+                                                                          project_id, chat_id, body))
+
+    async def h_project_chat_remove(self, request: web.Request) -> web.Response:
+        body = await self._project_body(request)
+        project_id, chat_id = request.match_info["project_id"], request.match_info["chat_id"]
+        return await self._project_change(request, "project.chat.remove", f"removed chat {chat_id} from {project_id}",
+                                          lambda: self.projects.remove_chat(self._require(request), _BOT.get(),
+                                                                            project_id, chat_id, body))
 
     async def h_messages(self, request: web.Request) -> web.Response:
         device = self._require(request)
@@ -1196,7 +1284,15 @@ class Hub:
         query = " ".join((request.query.get("q") or "").split())[:200]
         if len(query) < 2:
             return _json({"results": []})
-        chats = {c["id"]: c for c in self.visible_chats(device)}
+        project_id = (request.query.get("project_id") or "").strip()
+        if project_id:
+            try:
+                allowed = set(self.projects.project_chat_ids(device, project_id, _BOT.get()))
+            except ProjectError as exc:
+                return _error(exc.status, str(exc))
+            chats = {c["id"]: c for c in self.visible_chats(device) if c["id"] in allowed}
+        else:
+            chats = {c["id"]: c for c in self.visible_chats(device)}
         found = self.store.search_messages(query, list(chats), limit=60)
         results = [{"message": {k: m[k] for k in ("id", "chat_id", "role", "created_at", "position")},
                     "chat": {"id": m["chat_id"], "title": chats[m["chat_id"]]["title"], "kind": chats[m["chat_id"]]["kind"]},
@@ -1457,7 +1553,8 @@ class Hub:
                          "me": self.me(device), **self.about(), "chats": self.visible_chats(device),
                          "typing": sorted(c for c in self._typing if self._in_bot(c)
                                           and self.can_see(device, self.store.get_chat(c))),
-                         "pending": self.pending_for(device), "paused": self.paused_for(device)}
+                         "pending": self.pending_for(device), "paused": self.paused_for(device),
+                         "projects": self.projects.snapshot(device, bot)}
                 if device.get("role") == "owner" and bot is None:
                     hello["bots"] = self.bots()
                 await ws.send_json(hello)
@@ -1580,6 +1677,28 @@ class Hub:
                     encoded[id(out)] = text
             try:
                 await ws.send_str(text)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self._sockets.pop(ws, None)
+
+    async def broadcast_projects(self, bot: Optional[str]) -> None:
+        """Send this bot's project snapshot to each socket, tailored to what that device may see.
+
+        Project events carry private member projects and chat counts, so unlike a plain broadcast the
+        payload differs per device. Sockets on other bots never hear it.
+        """
+        dead = []
+        for ws, meta in list(self._sockets.items()):
+            if meta.get("bot") != bot:
+                continue
+            device = self.current_device(meta["device"]["id"])
+            if device is None:
+                dead.append(ws)
+                continue
+            try:
+                await ws.send_json({"type": "project.sync", "bot": bot,
+                                    "projects": self.projects.snapshot(device, bot)})
             except Exception:
                 dead.append(ws)
         for ws in dead:

@@ -10,7 +10,12 @@ export const OUTPUT_LIMIT = 16_384;
 
 /** A full replacement after truncation/redaction prevents stale cursors duplicating or leaking old lines. */
 export function applyOutput(previous: OutputState, page: OutputPage): OutputState {
-  if (previous.cursor === page.cursor) return previous;
+  if (previous.cursor === page.cursor) {
+    // Retention/recovery metadata can change even when the retained text is identical.
+    const truncated = previous.truncated || page.truncated;
+    return truncated === previous.truncated && page.unavailable === previous.unavailable ? previous
+      : { ...previous, truncated, unavailable: page.unavailable };
+  }
   const combined = page.reset ? page.text : previous.text + page.text;
   const chars = Array.from(combined);
   return { cursor: page.cursor, text: chars.slice(-OUTPUT_LIMIT).join(''),

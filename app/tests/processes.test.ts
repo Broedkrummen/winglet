@@ -19,6 +19,13 @@ test('retained output is bounded without splitting a Unicode character', () => {
   assert.equal(result.text.includes('\ufffd'), false);
 });
 
+test('unchanged output still reports that upstream discarded earlier bytes', () => {
+  const initial = { cursor: '1', text: 'same tail', truncated: false, unavailable: false };
+  const next = applyOutput(initial, { cursor: '1', reset: false, text: '', truncated: true, unavailable: false });
+  assert.equal(next.text, 'same tail');
+  assert.equal(next.truncated, true);
+});
+
 test('stop remains pending until the server confirms the process outcome', () => {
   const row = { status: 'running', exit_code: null, stop: { status: 'stopping' } } as ProcessRow;
   assert.equal(processLabel(row), 'Stopping…');

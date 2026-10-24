@@ -267,20 +267,32 @@ class Projects:
 
     def _run_op(self, device: Dict[str, Any], bot: Optional[str], op: str, payload: Dict[str, Any], fn):
         key = _client_id(payload.get("client_id"))
-        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
-        existing = self.store._one("SELECT * FROM project_ops WHERE id = ?", (key,))
-        if existing is not None:
-            if (existing["bot"] != (bot or "") or existing["device_id"] != device["id"]
-                    or existing["op"] != op or existing["payload"] != canonical):
-                raise ProjectConflict("That request id was already used for a different change.")
-            return json.loads(existing["result"])
-        result = fn()
+        # A cached owner result must not be replayed after the device is downgraded.
+        canonical = json.dumps({"request": payload, "role": device.get("role")},
+                               sort_keys=True, separators=(",", ":"), default=str)
         with self.store._lock:
-            self.store._exec("INSERT INTO project_ops (id, bot, device_id, op, payload, result, created_at) "
-                             "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                             (key, bot or "", device["id"], op, canonical, json.dumps(result), _now()))
-        self._prune_ops()
-        return result
+            # Serialize revision checks with every write and the durable retry result, including
+            # across separate SQLite connections. A failed journal write rolls back the mutation.
+            self.store._db.execute("BEGIN IMMEDIATE")
+            try:
+                existing = self.store._one("SELECT * FROM project_ops WHERE id = ?", (key,))
+                if existing is not None:
+                    if (existing["bot"] != (bot or "") or existing["device_id"] != device["id"]
+                            or existing["op"] != op or existing["payload"] != canonical):
+                        raise ProjectConflict("That request id was already used for a different change.")
+                    result = json.loads(existing["result"])
+                else:
+                    result = fn()
+                    self.store._exec(
+                        "INSERT INTO project_ops (id, bot, device_id, op, payload, result, created_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (key, bot or "", device["id"], op, canonical, json.dumps(result), _now()))
+                    self._prune_ops()
+                self.store._db.commit()
+                return result
+            except Exception:
+                self.store._db.rollback()
+                raise
 
     # -- project mutations ---------------------------------------------------------------
 
@@ -341,7 +353,7 @@ class Projects:
                 raise ProjectConflict("Another project already has that name.") from None
             row = self.store._one("SELECT * FROM projects WHERE id = ?", (project_id,))
             return {"project": self._public(dict(row), device)}
-        return self._run_op(device, bot, "update", payload, run)
+        return self._run_op(device, bot, "update", {**payload, "project_id": project_id}, run)
 
     def delete(self, device: Dict[str, Any], bot: Optional[str], project_id: str,
                payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -352,20 +364,14 @@ class Projects:
             if revision != int(project["revision"]):
                 raise ProjectConflict("This project changed on another device. Reload it and try again.")
             with self.store._lock:
-                self.store._db.execute("BEGIN IMMEDIATE")
-                try:
-                    released = self.store._one("SELECT COUNT(*) AS n FROM project_chats WHERE project_id = ?",
-                                               (project_id,))["n"]
-                    # Only the folder and its memberships go: every chat and message stays.
-                    self.store._exec("DELETE FROM project_chats WHERE project_id = ?", (project_id,))
-                    self.store._exec("DELETE FROM projects WHERE id = ?", (project_id,))
-                    self._bump_layout(bot, self.scope_of(device))
-                    self.store._db.commit()
-                except Exception:
-                    self.store._db.rollback()
-                    raise
+                released = self.store._one("SELECT COUNT(*) AS n FROM project_chats WHERE project_id = ?",
+                                           (project_id,))["n"]
+                # Only the folder and its memberships go: every chat and message stays.
+                self.store._exec("DELETE FROM project_chats WHERE project_id = ?", (project_id,))
+                self.store._exec("DELETE FROM projects WHERE id = ?", (project_id,))
+                self._bump_layout(bot, self.scope_of(device))
             return {"deleted": project_id, "released_chats": int(released)}
-        return self._run_op(device, bot, "delete", payload, run)
+        return self._run_op(device, bot, "delete", {**payload, "project_id": project_id}, run)
 
     def reorder(self, device: Dict[str, Any], bot: Optional[str], payload: Dict[str, Any]) -> Dict[str, Any]:
         def run():
@@ -388,16 +394,10 @@ class Projects:
             if expected != self._layout(bot, scope):
                 raise ProjectConflict("The project order changed on another device. Reload it and try again.")
             with self.store._lock:
-                self.store._db.execute("BEGIN IMMEDIATE")
-                try:
-                    for index, project_id in enumerate(ids, start=1):
-                        self.store._exec("UPDATE projects SET position = ?, updated_at = ? WHERE id = ?",
-                                         (index * POSITION_STEP, _now(), project_id))
-                    revision = self._bump_layout(bot, scope)
-                    self.store._db.commit()
-                except Exception:
-                    self.store._db.rollback()
-                    raise
+                for index, project_id in enumerate(ids, start=1):
+                    self.store._exec("UPDATE projects SET position = ?, updated_at = ? WHERE id = ?",
+                                     (index * POSITION_STEP, _now(), project_id))
+                revision = self._bump_layout(bot, scope)
             return {"layout_revision": revision}
         return self._run_op(device, bot, "order", payload, run)
 
@@ -415,22 +415,16 @@ class Projects:
             title = clean_title(payload.get("title"))
             owner = None if device.get("role") == "owner" else device["id"]
             with self.store._lock:
-                self.store._db.execute("BEGIN IMMEDIATE")
-                try:
-                    chat = self.store.create_chat(title, owner_device=owner, bot=bot)
-                    position = self._next_chat_position(project_id)
-                    now = _now()
-                    self.store._exec("INSERT INTO project_chats (chat_id, project_id, position, created_at, updated_at) "
-                                     "VALUES (?, ?, ?, ?, ?)", (chat["id"], project_id, position, now, now))
-                    self.store._exec("UPDATE projects SET revision = revision + 1, updated_at = ? WHERE id = ?",
-                                     (_now(), project_id))
-                    self.store._db.commit()
-                except Exception:
-                    self.store._db.rollback()
-                    raise
+                chat = self.store.create_chat(title, owner_device=owner, bot=bot)
+                position = self._next_chat_position(project_id)
+                now = _now()
+                self.store._exec("INSERT INTO project_chats (chat_id, project_id, position, created_at, updated_at) "
+                                 "VALUES (?, ?, ?, ?, ?)", (chat["id"], project_id, position, now, now))
+                self.store._exec("UPDATE projects SET revision = revision + 1, updated_at = ? WHERE id = ?",
+                                 (_now(), project_id))
             row = self.store._one("SELECT * FROM projects WHERE id = ?", (project_id,))
             return {"project": self._public(dict(row), device), "chat": chat}
-        return self._run_op(device, bot, "chat.create", payload, run)
+        return self._run_op(device, bot, "chat.create", {**payload, "project_id": project_id}, run)
 
     def move_chat(self, device: Dict[str, Any], bot: Optional[str], project_id: str, chat_id: str,
                   payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -457,23 +451,17 @@ class Projects:
                 if expected_from and _revision(payload.get("from_revision")) != int(source["revision"]):
                     raise ProjectConflict("That chat's project changed on another device. Reload it and try again.")
             with self.store._lock:
-                self.store._db.execute("BEGIN IMMEDIATE")
-                try:
-                    now = _now()
-                    self.store._exec(
-                        "INSERT INTO project_chats (chat_id, project_id, position, created_at, updated_at) "
-                        "VALUES (?, ?, ?, ?, ?) ON CONFLICT(chat_id) DO UPDATE SET project_id = excluded.project_id, "
-                        "position = excluded.position, updated_at = excluded.updated_at",
-                        (chat_id, project_id, self._next_chat_position(project_id), now, now))
+                now = _now()
+                self.store._exec(
+                    "INSERT INTO project_chats (chat_id, project_id, position, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?) ON CONFLICT(chat_id) DO UPDATE SET project_id = excluded.project_id, "
+                    "position = excluded.position, updated_at = excluded.updated_at",
+                    (chat_id, project_id, self._next_chat_position(project_id), now, now))
+                self.store._exec("UPDATE projects SET revision = revision + 1, updated_at = ? WHERE id = ?",
+                                 (now, project_id))
+                if source is not None:
                     self.store._exec("UPDATE projects SET revision = revision + 1, updated_at = ? WHERE id = ?",
-                                     (now, project_id))
-                    if source is not None:
-                        self.store._exec("UPDATE projects SET revision = revision + 1, updated_at = ? WHERE id = ?",
-                                         (now, source["id"]))
-                    self.store._db.commit()
-                except Exception:
-                    self.store._db.rollback()
-                    raise
+                                     (now, source["id"]))
             row = self.store._one("SELECT * FROM projects WHERE id = ?", (project_id,))
             return {"project": self._public(dict(row), device), "chat": chat, "moved": True,
                     "from_project_id": source["id"] if source else None}
@@ -494,15 +482,9 @@ class Projects:
             if current is None or current["project_id"] != project_id:
                 raise ProjectNotFound("That chat isn't in this project any more.")
             with self.store._lock:
-                self.store._db.execute("BEGIN IMMEDIATE")
-                try:
-                    self.store._exec("DELETE FROM project_chats WHERE chat_id = ?", (chat_id,))
-                    self.store._exec("UPDATE projects SET revision = revision + 1, updated_at = ? WHERE id = ?",
-                                     (_now(), project_id))
-                    self.store._db.commit()
-                except Exception:
-                    self.store._db.rollback()
-                    raise
+                self.store._exec("DELETE FROM project_chats WHERE chat_id = ?", (chat_id,))
+                self.store._exec("UPDATE projects SET revision = revision + 1, updated_at = ? WHERE id = ?",
+                                 (_now(), project_id))
             return {"project_id": project_id, "chat_id": chat_id, "removed": True}
         return self._run_op(device, bot, "chat.remove", {**payload, "project_id": project_id,
                                                        "chat_id": chat_id}, run)

@@ -15,6 +15,7 @@ import { BranchStrip } from '../features/branching/BranchStrip';
 import { actionHint, canBranch, canEdit, canRegenerate, laterCount, type BranchMode } from '../features/branching/plan';
 import { useBranching } from '../features/branching/useBranching';
 import { mediaUrl } from '../lib/api';
+import { projectOf } from '../features/projects/logic';
 import { connectionView } from '../lib/connection';
 import { chatKey } from '../lib/chatOrganization';
 import { clearFocus, requestFocus, useFocusRequest } from '../lib/focus';
@@ -42,7 +43,7 @@ import { GoalSheet, GoalStrip, useChatGoal } from './Goal';
 import { PausedBanner } from './PausedBanner';
 import { Glass } from './Glass';
 import {
-  ArrowDown, CalendarClock, Check, ChevronDown, Clock, Copy, FileText, GitBranch, MoreHorizontal, Pencil, Reply, RotateCcw, Share,
+  ArrowDown, CalendarClock, Check, ChevronDown, Clock, Copy, FileText, Folder, GitBranch, MoreHorizontal, Pencil, Reply, RotateCcw, Share,
 } from './icons';
 import { InboxCard } from './InboxCards';
 import { Markdown } from './Markdown';
@@ -177,6 +178,7 @@ export function ChatView({ server, chatId, showBack, embedded, landing }: { serv
   const view = connectionView(network, runtime, server.bot.title);
   const main = chatId === homeChat(runtime);
   const title = composing ? landing!.title : main ? server.bot.title : chat?.kind === 'home' ? 'Updates' : chat?.title ?? 'Chat';
+  const project = runtime?.projects ? projectOf(runtime.projects, chatId) : undefined;
   const status = view.kind === 'online' ? (typing ? 'working…' : 'online') : view.kind === 'connecting' ? 'connecting…'
     : view.kind === 'recovering' ? 'finding new address…' : view.kind === 'unreachable' ? 'offline' : view.title.toLowerCase();
   const topPad = embedded ? 0 : insets.top;
@@ -203,6 +205,13 @@ export function ChatView({ server, chatId, showBack, embedded, landing }: { serv
               <View style={[s.statusDot, { backgroundColor: view.kind !== 'online' ? t.colors.warning : typing ? t.colors.accent : t.colors.success }]} />
               {typing || view.kind !== 'online' ? <Text style={s.headerSub} numberOfLines={1}>{status}</Text> : null}
             </View>
+            {!composing && project ? (
+              <Tap feedback="selection" accessibilityLabel={`In project ${project.name}. Open project`}
+                onPress={() => router.push(`/project/${server.id}/${project.id}`)} style={s.projectChip}>
+                <Folder size={11} color={t.colors.onAccentSoft} />
+                <Text style={s.projectChipText} numberOfLines={1}>{project.name}</Text>
+              </Tap>
+            ) : null}
           </View>
           {!composing ? <IconButton label="Chat options" onPress={() => setMenu(true)}><MoreHorizontal size={22} color={t.colors.text} /></IconButton> : null}
           <InboxButton />
@@ -942,6 +951,9 @@ const useStyles = makeStyles((t) => ({
   hairline: { height: 1, backgroundColor: t.colors.border },
   headerIdentity: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   headerTitle: { ...t.type.heading, color: t.colors.text, flexShrink: 1 },
+  projectChip: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start', marginTop: 2,
+    paddingHorizontal: 7, minHeight: 20, borderRadius: t.radius.pill, backgroundColor: t.colors.accentSoft, maxWidth: '100%' },
+  projectChipText: { ...t.type.caption, fontFamily: t.fonts.medium, color: t.colors.onAccentSoft, flexShrink: 1, fontSize: 11.5 },
   headerSub: { ...t.type.caption, color: t.colors.textSecondary, maxWidth: '40%' },
   statusDot: { width: 7, height: 7, borderRadius: 4 },
   dayWrap: { alignItems: 'center', marginTop: 20, marginBottom: 4 },

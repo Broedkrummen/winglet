@@ -896,3 +896,21 @@ test('real socket replay persists applied messages with its cursor and suppresse
   assert.equal(checkpoint.cursor.cursor, 1); assert.equal(checkpoint.state.messages.general[0].id, 'm9');
   assert.equal(h.store.getState().runtime.s.sync.phase, 'idle'); assert.equal(h.played.length, 0);
 });
+
+
+test('snapshot recovery follows the verified recovered address rather than the original socket address', async () => {
+  const h = harness('android'); await h.connect();
+  h.setRecovery(async (s: any) => ({ ...s, url: 'https://recovered.example.test', recovery: { ...s.recovery, revision: 2 } }));
+  h.disconnect(); await h.tick();
+  const reads: any[] = [];
+  h.setRequest(async (s, route) => {
+    reads.push([s.url, route]);
+    if (route === '/api/sync/snapshot') return { server_id: 'server', bot: null, scope: 'scope', epoch: 'epoch',
+      watermark: 0, chats: [{ id: 'general', kind: 'chat', title: 'General' }], inbox: [], pending: 0, deletions: {} };
+    return route === '/api/inbox' ? { items: [], pending: 0 } : { messages: [], deleted_ids: [] };
+  });
+  h.event({ type: 'hello', chats: [{ id: 'general', kind: 'chat', title: 'General' }], features: { event_replay: true },
+    event_stream: { scope: 'scope', epoch: 'epoch', watermark: 0 } });
+  await h.tick();
+  assert.equal(reads.find(([, route]) => route === '/api/sync/snapshot')[0], 'https://recovered.example.test');
+});

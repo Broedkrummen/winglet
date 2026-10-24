@@ -65,7 +65,8 @@ after the applied state is durably checkpointed. A cursor is never saved separat
 `replay:<local-server-id>` is one encrypted native cache value / one committed IndexedDB transaction
 containing the cursor and covered chats, messages, tombstones, loaded flags, Inbox, projects, tasks,
 pause state and device identity. Strict writes reject on keychain, disk or transaction failure;
-normal best-effort cache behavior is unchanged. On startup the checkpoint restores those state slices
+normal best-effort cache behavior is unchanged. Snapshot fetches resolve the current verified server
+address and credentials, including address recovery, rather than capturing the original socket URL. On startup the checkpoint restores those state slices
 before resuming. Persisted acknowledged messages filter stale outbox entries by `meta.client_id`.
 Legacy cursor-only records are intentionally ignored and repaired by snapshot.
 
@@ -142,7 +143,16 @@ connection code informed the original implementation. Notice and full MIT licens
   Those exports preceded the final oversized-hint/reference review guards; current PR CI runs web
   typecheck/export again. Android export is bundling evidence, not a native build.
 - Replay/bot regression run: **48 passed** before additional privacy/bounds tests.
-- Final replay server suite and full pinned-Hermes suite: results being finalized below.
+- Final replay server suite plus private project socket regression: **44 passed** (43 replay tests).
+- Full pinned-Hermes local run: **500 passed, 1 skipped, 1 failed** in 328.74 seconds. The only
+  failure was the previous exact one-encode broadcast assertion. Scope lookup reuse now retains one
+  chat lookup; the updated regression proves fixed journal overhead stays constant with three and
+  twenty-three owner sockets. That exact CI regression subsequently **passed**. The targeted mixed
+  run before this assertion update had 64 passes and that same assertion failure.
+- Final client address-recovery/storage/replay regression run: **66 passed** after the full 338-test
+  run. This adds a recovery case proving snapshot fetch follows the verified current server address.
+- Initial PR CI at `e22879e`: app typecheck/web export passed; three plugin jobs failed on the same
+  efficiency assertion. Final pushed head reruns CI; the Codex orchestrator owns that watch.
 - `git diff --check`: passed before publication.
 - No phone, emulator, ADB, RDP, provider or live Hermes interaction was used.
 

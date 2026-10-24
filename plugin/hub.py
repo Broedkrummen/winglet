@@ -1686,7 +1686,7 @@ class Hub:
     async def h_ws(self, request: web.Request) -> web.StreamResponse:
         legacy = bool(request.query.get("token")) or request.headers.get("Authorization", "").lower().startswith("bearer ")
         device = self._device(request) if legacy else None
-        socket_token = request.query.get("token") or request.headers.get("Authorization", "").removeprefix("Bearer ")
+        socket_token = request.query.get("token") or request.headers.get("Authorization", "").partition(" ")[2]
         if legacy and device is None:
             return _error(401, "not paired")
         ws = web.WebSocketResponse(heartbeat=25, max_msg_size=1024 * 1024)
@@ -1957,20 +1957,22 @@ class Hub:
         only publish(write, event_of) provides an atomic mutation + journal transaction.
         """
         async with self._publish_lock:
-            bot = self._event_bot(event)
+            chats: Dict[str, Optional[Dict[str, Any]]] = {}
+            bot = self._event_bot(event, chats)
             scopes = [bot] if bot is not _ANY_BOT else list({None, *[b["name"] for b in self.bots()]})
             for scope in scopes:
                 seq = self.events.append(scope, event)
                 payload = {**event, "event_seq": seq} if seq is not None else event
-                await self._broadcast(payload, scope=scope if seq is not None else _ANY_BOT)
+                await self._broadcast(payload, scope=scope if seq is not None else _ANY_BOT, prepared_chats=chats)
                 if seq is None:
                     break
 
-    async def _broadcast(self, event: Dict[str, Any], scope=_ANY_BOT) -> None:
+    async def _broadcast(self, event: Dict[str, Any], scope=_ANY_BOT,
+                         prepared_chats: Optional[Dict[str, Optional[Dict[str, Any]]]] = None) -> None:
         """Send ``event`` to every socket that may see it. What's the same for every socket (the event's bot
         and chat, its JSON, a pending count) is worked out once, not per socket: this runs on each streamed edit."""
         dead = []
-        chats: Dict[str, Optional[Dict[str, Any]]] = {}
+        chats = prepared_chats if prepared_chats is not None else {}
         event_bot = self._event_bot(event, chats) if self._sockets else _ANY_BOT
         pending: Dict[tuple, int] = {}
         encoded: Dict[int, str] = {}

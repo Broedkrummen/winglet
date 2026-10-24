@@ -505,7 +505,10 @@ export const useApp = create<AppState>((set, get) => {
             } else { await get().loadProjects(server.id); }
           } else { handleEvent(server.id, event, replayed); }
         },
-        fetch: () => api(server, '/api/sync/snapshot'),
+        fetch: () => {
+          const current = get().servers.find(s => s.id === server.id);
+          return current ? api(current, '/api/sync/snapshot') : Promise.reject(Error('Bot removed'));
+        },
         applySnapshot: async (snapshot) => {
           if (connections.get(server.id) !== conn) throw Error('Connection replaced');
           const previous = get().runtime[server.id];

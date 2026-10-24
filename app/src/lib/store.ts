@@ -183,8 +183,14 @@ export const useApp = create<AppState>((set, get) => {
 
   const saveOutbox = (serverId: string) => cacheSet(`outbox:${serverId}`, get().runtime[serverId]?.outbox ?? []);
 
-  /** Keep project structure with the chat cache so it is readable while the bot is unreachable. */
-  const setProjects = (serverId: string, snapshot: ProjectSnapshot) => {
+  const projectLoads = new Map<string, number>();
+  type ProjectGuard = { server: Server; snapshot: ProjectSnapshot | undefined };
+  /** Late HTTP reads and failed optimistic writes cannot replace a newer live snapshot. */
+  const setProjects = (serverId: string, snapshot: ProjectSnapshot, guard?: ProjectGuard) => {
+    const currentServer = get().servers.find((s) => s.id === serverId);
+    const runtime = get().runtime[serverId];
+    if (!currentServer || !runtime) return;
+    if (guard && (currentServer !== guard.server || runtime.projects !== guard.snapshot)) return;
     patch(serverId, () => ({ projects: snapshot }));
     cacheSet(`projects:${serverId}`, snapshot);
   };
@@ -204,8 +210,8 @@ export const useApp = create<AppState>((set, get) => {
   };
 
   /** A 409 carries the server's current snapshot: adopt it so the UI rolls back to the truth. */
-  const projectFailure = (serverId: string, error: unknown): Error => {
-    if (error instanceof ApiError && error.data?.projects) setProjects(serverId, readSnapshot(error.data.projects));
+  const projectFailure = (serverId: string, error: unknown, guard?: ProjectGuard): Error => {
+    if (error instanceof ApiError && error.data?.projects) setProjects(serverId, readSnapshot(error.data.projects), guard);
     return error instanceof Error ? error : new Error('The change did not go through.');
   };
 
@@ -315,6 +321,7 @@ export const useApp = create<AppState>((set, get) => {
 
   const handleEvent = (serverId: string, ev: any) => {
     const server = get().servers.find((s) => s.id === serverId);
+    if (!server) return;
     switch (ev.type) {
       case 'hello': {
         const chats: Record<string, Chat> = {};
@@ -833,9 +840,12 @@ export const useApp = create<AppState>((set, get) => {
     loadProjects: async (serverId) => {
       const server = get().servers.find((s) => s.id === serverId);
       if (!server || !get().runtime[serverId]?.info?.features?.projects) return;
+      const snapshot = get().runtime[serverId]?.projects;
+      const load = (projectLoads.get(serverId) ?? 0) + 1;
+      projectLoads.set(serverId, load);
       try {
         const data = await api<{ projects: unknown }>(server, '/api/projects');
-        setProjects(serverId, readSnapshot(data.projects));
+        if (projectLoads.get(serverId) === load) setProjects(serverId, readSnapshot(data.projects), { server, snapshot });
       } catch {
         // Keep the cached structure; the next hello or project.sync repairs it.
       }
@@ -843,9 +853,10 @@ export const useApp = create<AppState>((set, get) => {
 
     createProject: async (serverId, name) => {
       const server = projectServer(serverId);
+      const snapshot = get().runtime[serverId]?.projects;
       const data = await signedApi<{ project: Project; projects?: unknown }>(server, 'POST', '/api/projects',
-        { name, client_id: requestId('create') }).catch((e) => { throw projectFailure(serverId, e); });
-      if (data.projects) setProjects(serverId, readSnapshot(data.projects));
+        { name, client_id: requestId('create') }).catch((e) => { throw projectFailure(serverId, e, { server, snapshot }); });
+      if (data.projects) setProjects(serverId, readSnapshot(data.projects), { server, snapshot });
       return data.project;
     },
 
@@ -854,17 +865,18 @@ export const useApp = create<AppState>((set, get) => {
       const previous = get().runtime[serverId]?.projects;
       const project = previous?.projects.find((p) => p.id === projectId);
       if (!previous || !project) throw new Error('This project is no longer here.');
-      setProjects(serverId, { ...previous,
-        projects: previous.projects.map((p) => (p.id === projectId ? { ...p, name } : p)) });
+      const optimistic = { ...previous,
+        projects: previous.projects.map((p) => (p.id === projectId ? { ...p, name } : p)) };
+      setProjects(serverId, optimistic);
       try {
         const data = await signedApi<{ projects?: unknown }>(server, 'PATCH',
           `/api/projects/${encodeURIComponent(projectId)}`,
           { name, revision: project.revision, client_id: requestId('rename') });
-        if (data.projects) setProjects(serverId, readSnapshot(data.projects));
+        if (data.projects) setProjects(serverId, readSnapshot(data.projects), { server, snapshot: optimistic });
         return true;
       } catch (e) {
-        setProjects(serverId, previous);
-        throw projectFailure(serverId, e);
+        setProjects(serverId, previous, { server, snapshot: optimistic });
+        throw projectFailure(serverId, e, { server, snapshot: previous });
       }
     },
 
@@ -873,17 +885,18 @@ export const useApp = create<AppState>((set, get) => {
       const previous = get().runtime[serverId]?.projects;
       const project = previous?.projects.find((p) => p.id === projectId);
       if (!previous || !project) throw new Error('This project is no longer here.');
-      setProjects(serverId, { ...previous,
-        projects: previous.projects.map((p) => (p.id === projectId ? { ...p, archived } : p)) });
+      const optimistic = { ...previous,
+        projects: previous.projects.map((p) => (p.id === projectId ? { ...p, archived } : p)) };
+      setProjects(serverId, optimistic);
       try {
         const data = await signedApi<{ projects?: unknown }>(server, 'PATCH',
           `/api/projects/${encodeURIComponent(projectId)}`,
           { archived, revision: project.revision, client_id: requestId(archived ? 'archive' : 'restore') });
-        if (data.projects) setProjects(serverId, readSnapshot(data.projects));
+        if (data.projects) setProjects(serverId, readSnapshot(data.projects), { server, snapshot: optimistic });
         return true;
       } catch (e) {
-        setProjects(serverId, previous);
-        throw projectFailure(serverId, e);
+        setProjects(serverId, previous, { server, snapshot: optimistic });
+        throw projectFailure(serverId, e, { server, snapshot: previous });
       }
     },
 
@@ -891,15 +904,16 @@ export const useApp = create<AppState>((set, get) => {
       const server = projectServer(serverId);
       const previous = get().runtime[serverId]?.projects;
       if (!previous) throw new Error('Projects are not loaded yet.');
-      setProjects(serverId, applyOrder(previous, ids));
+      const optimistic = applyOrder(previous, ids);
+      setProjects(serverId, optimistic);
       try {
         const data = await signedApi<{ projects?: unknown }>(server, 'PUT', '/api/projects/order',
           { ids, layout_revision: previous.layout_revision, client_id: requestId('order') });
-        if (data.projects) setProjects(serverId, readSnapshot(data.projects));
+        if (data.projects) setProjects(serverId, readSnapshot(data.projects), { server, snapshot: optimistic });
         return true;
       } catch (e) {
-        setProjects(serverId, previous);
-        throw projectFailure(serverId, e);
+        setProjects(serverId, previous, { server, snapshot: optimistic });
+        throw projectFailure(serverId, e, { server, snapshot: previous });
       }
     },
 
@@ -908,17 +922,18 @@ export const useApp = create<AppState>((set, get) => {
       const previous = get().runtime[serverId]?.projects;
       const project = previous?.projects.find((p) => p.id === projectId);
       if (!previous || !project) throw new Error('This project is no longer here.');
-      setProjects(serverId, { ...previous, projects: previous.projects.filter((p) => p.id !== projectId),
-        threads: previous.threads.filter((t) => t.project_id !== projectId) });
+      const optimistic = { ...previous, projects: previous.projects.filter((p) => p.id !== projectId),
+        threads: previous.threads.filter((t) => t.project_id !== projectId) };
+      setProjects(serverId, optimistic);
       try {
         const data = await signedApi<{ projects?: unknown }>(server, 'DELETE',
           `/api/projects/${encodeURIComponent(projectId)}`,
           { revision: project.revision, client_id: requestId('delete') });
-        if (data.projects) setProjects(serverId, readSnapshot(data.projects));
+        if (data.projects) setProjects(serverId, readSnapshot(data.projects), { server, snapshot: optimistic });
         return true;
       } catch (e) {
-        setProjects(serverId, previous);
-        throw projectFailure(serverId, e);
+        setProjects(serverId, previous, { server, snapshot: optimistic });
+        throw projectFailure(serverId, e, { server, snapshot: previous });
       }
     },
 
@@ -933,9 +948,10 @@ export const useApp = create<AppState>((set, get) => {
       const source = thread ? previous.projects.find((p) => p.id === thread.project_id) : undefined;
       // Optimistic place at the end; the server's snapshot replaces this immediately on success.
       const position = Math.max(0, ...previous.threads.filter((t) => t.project_id === projectId).map((t) => t.position)) + 1000;
-      setProjects(serverId, { ...previous,
+      const optimistic = { ...previous,
         threads: [...previous.threads.filter((t) => t.chat_id !== chatId),
-          ...(projectId ? [{ chat_id: chatId, project_id: projectId, position }] : [])] });
+          ...(projectId ? [{ chat_id: chatId, project_id: projectId, position }] : [])] };
+      setProjects(serverId, optimistic);
       try {
         const data = projectId
           ? await signedApi<{ projects?: unknown }>(server, 'POST',
@@ -945,24 +961,26 @@ export const useApp = create<AppState>((set, get) => {
           : await signedApi<{ projects?: unknown }>(server, 'DELETE',
             `/api/projects/${encodeURIComponent(source!.id)}/chats/${encodeURIComponent(chatId)}`,
             { revision: source!.revision, client_id: requestId('remove') });
-        if (data.projects) setProjects(serverId, readSnapshot(data.projects));
+        if (data.projects) setProjects(serverId, readSnapshot(data.projects), { server, snapshot: optimistic });
         return true;
       } catch (e) {
-        setProjects(serverId, previous);
-        throw projectFailure(serverId, e);
+        setProjects(serverId, previous, { server, snapshot: optimistic });
+        throw projectFailure(serverId, e, { server, snapshot: previous });
       }
     },
 
     createChatInProject: async (serverId, projectId, title) => {
       const server = projectServer(serverId);
+      const snapshot = get().runtime[serverId]?.projects;
       const project = get().runtime[serverId]?.projects?.projects.find((p) => p.id === projectId);
       if (!project) throw new Error('This project is no longer here.');
       if (project.archived) throw new Error('Restore this project before starting a chat in it.');
       const data = await signedApi<{ chat: Chat; projects?: unknown }>(server, 'POST',
         `/api/projects/${encodeURIComponent(projectId)}/chats`,
         { ...(title ? { title } : {}), revision: project.revision, client_id: requestId('chat') })
-        .catch((e) => { throw projectFailure(serverId, e); });
-      if (data.projects) setProjects(serverId, readSnapshot(data.projects));
+        .catch((e) => { throw projectFailure(serverId, e, { server, snapshot }); });
+      if (data.projects) setProjects(serverId, readSnapshot(data.projects), { server, snapshot });
+      if (get().servers.find((s) => s.id === serverId) !== server) return undefined;
       patch(serverId, (s) => ({ chats: { ...s.chats, [data.chat.id]: data.chat },
         loaded: { ...s.loaded, [data.chat.id]: true } }));
       return data.chat;

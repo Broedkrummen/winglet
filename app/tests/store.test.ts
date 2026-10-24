@@ -761,3 +761,77 @@ test('overlapping inbox loads apply only the latest requested snapshot', async (
   assert.equal(h.store.getState().runtime.s.pending, 0);
   assert.equal(Object.keys(h.store.getState().runtime.s.inbox).length, 0);
 });
+
+test('a late project read cannot roll back live project changes', async () => {
+  const h = harness();
+  await h.connect();
+  h.event({ type: 'hello', chats: [], features: { projects: true }, projects: projectSnapshot() });
+  await h.tick();
+  let resolve!: (value: any) => void;
+  h.setRequest(() => new Promise((done) => { resolve = done; }));
+  const loading = h.store.getState().loadProjects('s');
+  h.event({ type: 'project.sync', projects: projectSnapshot('Live', 4, 2) });
+  resolve({ projects: projectSnapshot('Old', 1, 2) });
+  await loading;
+  assert.equal(h.store.getState().runtime.s.projects?.projects[0].name, 'Live');
+});
+
+test('failed optimistic project changes preserve a newer socket snapshot', async () => {
+  const h = harness();
+  await h.connect();
+  h.event({ type: 'hello', chats: [], features: { projects: true }, projects: projectSnapshot() });
+  await h.tick();
+  let reject!: (reason: any) => void;
+  h.setRequest(() => new Promise((_, fail) => { reject = fail; }));
+  const renaming = h.store.getState().renameProject('s', 'p1', 'Mine');
+  h.event({ type: 'project.sync', projects: projectSnapshot('Newest', 5, 2) });
+  reject(new ApiError('lost connection', 0));
+  await assert.rejects(renaming);
+  assert.equal(h.store.getState().runtime.s.projects?.projects[0].name, 'Newest');
+  assert.equal(h.cache.get('projects:s').projects[0].name, 'Newest');
+});
+
+test('a stale conflict response cannot replace a newer live project snapshot', async () => {
+  const h = harness();
+  await h.connect();
+  h.event({ type: 'hello', chats: [], features: { projects: true }, projects: projectSnapshot() });
+  await h.tick();
+  let reject!: (reason: any) => void;
+  h.setRequest(() => new Promise((_, fail) => { reject = fail; }));
+  const renaming = h.store.getState().renameProject('s', 'p1', 'Mine');
+  h.event({ type: 'project.sync', projects: projectSnapshot('Newest', 5, 2) });
+  reject(new ApiError('old conflict', 409, { projects: projectSnapshot('Older', 3, 2) }));
+  await assert.rejects(renaming);
+  assert.equal(h.store.getState().runtime.s.projects?.projects[0].name, 'Newest');
+});
+
+test('a late project response cannot recreate a removed bot cache', async () => {
+  const h = harness();
+  await h.connect();
+  h.event({ type: 'hello', chats: [], features: { projects: true }, projects: projectSnapshot() });
+  await h.tick();
+  let resolve!: (value: any) => void;
+  h.setRequest(() => new Promise((done) => { resolve = done; }));
+  const loading = h.store.getState().loadProjects('s');
+  await h.store.getState().removeServer('s', false);
+  resolve({ projects: projectSnapshot('Late', 2, 2) });
+  await loading;
+  assert.equal(h.store.getState().runtime.s, undefined);
+  assert.equal(h.cache.has('projects:s'), false);
+});
+
+test('overlapping project reads only apply the latest requested snapshot', async () => {
+  const h = harness();
+  await h.connect();
+  h.event({ type: 'hello', chats: [], features: { projects: true }, projects: projectSnapshot() });
+  await h.tick();
+  const resolves: ((value: any) => void)[] = [];
+  h.setRequest(() => new Promise((done) => resolves.push(done)));
+  const first = h.store.getState().loadProjects('s');
+  const second = h.store.getState().loadProjects('s');
+  resolves[1]({ projects: projectSnapshot('Latest', 3, 2) });
+  await second;
+  resolves[0]({ projects: projectSnapshot('Old', 2, 2) });
+  await first;
+  assert.equal(h.store.getState().runtime.s.projects?.projects[0].name, 'Latest');
+});

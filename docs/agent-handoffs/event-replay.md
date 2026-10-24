@@ -1,6 +1,7 @@
 # Resumable events, gap recovery and reconnect correctness
 
-Status: implementation in progress. Primary specialist role: SRE (architect → implement → review
+Status: **server layer complete and green; client layer half-written. Work paused mid-assignment — see
+"Handoff status" before writing code.** Primary specialist role: SRE (architect → implement → review
 phases in this session, no subagents). Branch `codex/major-08-event-replay`, worktree
 `C:\Users\vikas\Documents\winglet-agents\08-event-replay`, base `b71d93b`. Capability owner:
 `event_replay`. This document owns the global additive event cursor/epoch envelope; feature payloads
@@ -160,6 +161,102 @@ adaptation for Winglet's plugin protocol; no Kotlin is copied verbatim. The requ
 exact upstream commit and the full MIT licence text are in
 `third_party/notices/herald-event-replay.md`.
 
-## Validation (to be completed)
+## Handoff status: server complete and green, client half-written
 
-Filled in after the checks run.
+Work stopped deliberately before the client was wired, not because it was finished. Read this
+section before touching anything.
+
+| Layer | State |
+| --- | --- |
+| Protocol/contract (this document) | Complete |
+| `plugin/event_replay.py` (journal, epoch, retention, replay, snapshot) | Complete, tested |
+| `plugin/hub.py` wiring (publish, hello, resume, `/api/sync/snapshot`) | Complete, tested |
+| `plugin/store.py` (shared transaction primitive) | Complete, tested |
+| `tests/test_event_replay.py` | 33 tests, all green |
+| `app/src/features/event-replay/{protocol,session,merge}.ts` | Written, **not typechecked, not tested, not wired** |
+| `app/src/lib/store.ts` integration | **Not started** (only imports, `sync?` field, `resyncNow` signature, cursor maps) |
+| `app/tests/eventReplay.test.ts` | **Not written** |
+| `SyncStatus` chip / Connection screen row | **Not written** |
+| Web/native build, screenshots, fixture script | **Not run** |
+| PR | **Not opened** |
+
+### What is proven
+
+Commands, all in the worktree `C:\Users\vikas\Documents\winglet-agents\08-event-replay`:
+
+- `python -m pytest -q` (full plugin suite, interpreter `C:\Users\vikas\Documents\winglet\.venv\Scripts\python.exe`,
+  the only one on this machine with `aiohttp`/`pytest-aiohttp`): **329 passed, 17 skipped**. Baseline
+  before this work was 296 passed / 17 skipped, so the 33 new tests all pass and nothing regressed.
+- `python -m pytest tests/test_event_replay.py -q`: 33 passed.
+- `python -m pytest tests/test_hub.py -q`: 51 passed (the existing socket/HTTP contract still holds
+  with `seq` added to live frames).
+
+Not run, and why:
+
+- `npx tsc --noEmit` / `npm test` / `expo export`: `app/node_modules` does not exist in this worktree
+  (`npm ci` never ran here), so `tsc` fails on every file with `Cannot find module 'expo-router'`,
+  `Cannot find module 'react'`, `'--jsx' is not set`. That output says nothing about these changes.
+  Installing deps is the first step of resuming.
+- Any browser/Playwright check, screenshot, or fixture server.
+- Any Android build, emulator or phone run.
+
+### Resuming: the exact remaining work
+
+1. `cd app && npm ci` (must succeed before any TypeScript claim is made).
+2. `npx tsc --noEmit` — the three new modules have never been compiled. Expect minor type fixes; they
+   import only each other and `lib/types`.
+3. Wire `store.ts`. The scaffolding already committed is: `sync?: SyncState` on `ServerState`, a
+   `resyncNow(serverId)` action signature, and `replayCursors` / `saveCursor` (debounced 400 ms write
+   to `cacheSet('replay:<serverId>')`). Still to do:
+   - `Connection` owns a `SyncSession` per socket. In `ws.onmessage`, call
+     `if (session.intercept(event)) return;` before `cb.onEvent(event)`, then `session.note(event)`
+     after. `onclose` and `open()` must call `session.closed()`.
+   - The host's `read()` is `replayCursors.get(id)` primed from `cacheGet('replay:<id>')` during
+     `hydrateServer`; `write()` is `replayCursors.set` + `saveCursor`; `apply()` reuses `handleEvent`
+     (it takes the same event shape, `seq` included); `view()` patches `sync`; `applySnapshot()` is
+     `mergeSnapshot(runtime, snapshot)` patched in, then `cacheSet('chats:<id>')`.
+   - `send` is `Connection.send({type:'resume',cursor,epoch})`; `fetch` is
+     `api(server, '/api/sync/snapshot')` (already allowed: `h_sync_snapshot` is `"device"` policy).
+   - `resyncNow` calls the live session's `retry()`.
+4. `SyncStatus` chip in `ChatView.tsx` (next to `ConnectionBanner`, below the title row at 320 px) and a
+   "Sync" row on `app/src/app/connection/[serverId].tsx`. States and copy are in the UI plan above;
+   nothing renders for `unsupported` or `idle`.
+5. `app/tests/eventReplay.test.ts` — `node --test`, transpiling the modules with `typescript` like
+   `tests/connection.test.ts` does, with a fake host. The cases worth having: pages applied in order,
+   a duplicate seq dropped, a held frame applied after the replay, a refusal taking the snapshot path,
+   a failed snapshot leaving `blocked` + Retry, and a snapshot merge that leaves drafts and outbox
+   alone.
+6. Then the full gate: `npm test`, `npx tsc --noEmit`, `npx expo export --platform web` and
+   `--platform android`, and the plugin suite again.
+
+### Decisions a reviewer should not have to rediscover
+
+- **Gaps are normal.** The client advances to the server's `watermark` (or a page's `cursor`), never to
+  the last seq it saw, because filtering is per device.
+- **Filtering happens at replay time** against the refreshed device row, so a promotion, a demotion or
+  an unpair applies to rows already in the journal. Tests pin all three.
+- **A journal failure rolls the change back** (it raises inside the publisher's transaction). A
+  committed change with no replay row would be invisible to a reconnecting phone, which is worse than
+  a refused write.
+- **`sync.hint`** is stored under the same seq as an oversize payload; the live frame still carries the
+  full event, so only replay degrades to "refetch this chat".
+- **Not journaled on purpose:** `typing`, `pet.update`, `system.bots`, `system.job`, `pong`.
+
+### Mobile validation pending
+
+No phone, emulator or live server was used. Codex validates mobile. The recipe, once the client lands:
+
+1. Pair a phone against a development gateway from this branch; confirm `hello` carries
+   `event_stream` and that `GET /api/sync/snapshot` answers with the phone's own token.
+2. Send a message from a second paired device while the first is force-stopped; reopen it and confirm
+   the message appears with no full reload and no duplicate.
+3. Kill the app mid-stream (a reply in flight), reopen it: the partial reply must be completed by the
+   replay, and the chat must not show the message twice.
+4. As an owner, run `python -c` to call `hub.events.rotate_epoch()`, then reopen a phone holding a
+   cursor: it must take the snapshot path and end up consistent, with the chip saying it caught up.
+5. Demote a member while their phone is offline, promote them back, and confirm replay never leaks
+   another member's chat in either direction.
+
+## Validation run in this session
+
+Filled in for the server layer only; see the table above for what is deliberately unrun.

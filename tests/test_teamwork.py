@@ -3,6 +3,7 @@
 import importlib.util
 import json
 import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -113,7 +114,7 @@ def test_the_roster_and_delivery_come_from_hermes(tmp_path, monkeypatch):
     monkeypatch.setenv(TURN_AUTHOR_ENV, json.dumps({"id": "user:sam", "name": "Sam", "is_bot": False}))
     monkeypatch.setenv(session_var, "the-asking-session")
     env = teamwork._child_env("chef", "default")
-    assert env["HERMES_HOME"].endswith("profiles/chef")
+    assert Path(env["HERMES_HOME"]).parts[-2:] == ("profiles", "chef")
     assert json.loads(env[TURN_AUTHOR_ENV]) == {"id": "bot:default", "name": "hermes", "is_bot": True}
     assert session_var not in env
     # Its credentials are its own profile's.

@@ -25,7 +25,7 @@ Regenerating a reply:
 - default: create a branch seeded before the prompt that produced the reply, then resend that
   prompt in the branch. The original reply stays readable.
 - optional, owner-confirmed and only for the latest settled exchange in an idle chat:
-  a true in-place rewind through Hermes `SessionStore.rewind_session` (soft-delete, CAS,
+  a true in-place rewind through Hermes `SessionDB.rewind_user_turn` with the reviewed history (soft-delete, CAS,
   active-turn-lease refusal), then a new turn from the surviving prompt. This is never
   implemented by deleting UI rows alone.
 
@@ -86,7 +86,7 @@ including a streamed edit.
 Operations compare the caller's revision with a fresh digest before writing and again after
 copying; a mismatch returns 409 `stale` and leaves no branch behind. In-place regeneration
 verifies the expected prompt row is still the newest user row **before** Hermes soft-deletes
-anything, then relies on `rewind_session`'s active-id CAS and turn-lease refusal. The revision
+anything, then relies on `rewind_user_turn`'s reviewed-history check, active-id CAS and turn-lease refusal. The revision
 is exposed to replay/annotation agents as metadata, not as a competing global cursor.
 
 ### Message ↔ Hermes row mapping
@@ -126,7 +126,7 @@ state and are intentionally **not** copied into a branch.
 - Branch creation refuses a busy parent (typing or streaming rows) and re-checks revision
   before touching Hermes.
 - In-place regeneration checks idle, revision, latest exchange, then uses Hermes
-  `rewind_session` (CAS + turn-lease refusal). If the new turn cannot be started after the
+  `rewind_user_turn` with the reviewed history (CAS + turn-lease refusal). If the new turn cannot be started after the
   rewind, the route reports failure and posts a system line; it does not claim success.
 - A cancelled client request cleans up a half-made Winglet chat/upload synchronously; a
   half-made Hermes child session is ended best-effort.
@@ -350,3 +350,19 @@ validated on an emulator with the fixture.
 6. `docs/agent-handoffs/branching.md` — this contract and MOBILE VALIDATION PENDING recipe.
 
 For Codex orchestrator review.
+
+## Orchestrator review: 24 October 2026
+
+Copied user rows now persist their new Winglet IDs in Hermes. Editing or branching a
+copied historical turn therefore remains available instead of losing its mapping.
+
+In-place regeneration passes the exact reviewed transcript to Hermes' durable rewind
+under the transcript drain lock. Rerouted/compressed sessions are resolved before
+review. A newer exchange, even one repeating identical prompt text, is refused rather
+than accidentally rewound. Required primitives are capability-checked and fail closed.
+
+Validation after these fixes: 26 branching tests passed against the real pinned Hermes;
+the complete plugin suite without Hermes passed 318 tests with 20 skips. Regression
+coverage includes repeated branching, durable copied IDs, unchanged-turn rewind and
+an exchange arriving between review and the actual database rewind. Native checks
+remain pending until the combined integration build is tested.

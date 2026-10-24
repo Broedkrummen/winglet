@@ -46,6 +46,7 @@ export { default as Fingerprint } from 'lucide-react-native/icons/fingerprint-pa
 export { default as Folder } from 'lucide-react-native/icons/folder';
 export { default as FolderPlus } from 'lucide-react-native/icons/folder-plus';
 export { default as Gauge } from 'lucide-react-native/icons/gauge';
+export { default as GitBranch } from 'lucide-react-native/icons/git-branch';
 export { default as HardDrive } from 'lucide-react-native/icons/hard-drive';
 export { default as Globe } from 'lucide-react-native/icons/globe';
 export { default as Hash } from 'lucide-react-native/icons/hash';

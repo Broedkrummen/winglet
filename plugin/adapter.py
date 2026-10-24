@@ -277,6 +277,10 @@ class WingletAdapter(BasePlatformAdapter):
             # Members' tool limits hold only if every turn's final toolsets can be capped (see toolset_limit).
             hub.limits_members = hermes_api.limit_turn_toolsets(self.gateway_runner, PLATFORM) \
                 if getattr(self, "gateway_runner", None) is not None else False
+            # Conversation branching is installed here and fails closed inside HermesBranchBridge
+            # when this Hermes lacks the session-store operations it needs.
+            from .branching import BranchService
+            hub.branching = BranchService(hub, self)
             from gateway.platforms.shared_ingress import bind_listener
             # No access log: device tokens ride in WebSocket/media query strings and must not reach log files.
             self._runner = await bind_listener(self, hub.build_app(), self._host, self._port, "/api/ws",

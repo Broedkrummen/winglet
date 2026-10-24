@@ -10,6 +10,10 @@ import Animated, {
   withSpring, withTiming, ZoomIn,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { BranchSheet, type BranchTarget } from '../features/branching/BranchSheet';
+import { BranchStrip } from '../features/branching/BranchStrip';
+import { actionHint, canBranch, canEdit, canRegenerate, laterCount, type BranchMode } from '../features/branching/plan';
+import { useBranching } from '../features/branching/useBranching';
 import { mediaUrl } from '../lib/api';
 import { projectOf } from '../features/projects/logic';
 import { connectionView } from '../lib/connection';
@@ -25,7 +29,7 @@ import { homeChat, isTyping, useApp, useServerState } from '../lib/store';
 import { plainText } from '../lib/text';
 import { FIXED } from '../lib/theme';
 import { makeStyles, useTheme } from '../lib/themeContext';
-import type { DraftFile, InboxItem, Message, ReplyRef, Server, Upload } from '../lib/types';
+import type { BranchState, DraftFile, InboxItem, Message, ReplyRef, Server, Upload } from '../lib/types';
 import { AgentFace, useAvatarColor } from './AgentFace';
 import { InboxButton, NavigationToggle } from './AppNavigation';
 import { UserAvatar } from './BotAvatar';
@@ -39,7 +43,7 @@ import { GoalSheet, GoalStrip, useChatGoal } from './Goal';
 import { PausedBanner } from './PausedBanner';
 import { Glass } from './Glass';
 import {
-  ArrowDown, CalendarClock, Check, ChevronDown, Clock, Copy, FileText, Folder, MoreHorizontal, Pencil, Reply, RotateCcw, Share,
+  ArrowDown, CalendarClock, Check, ChevronDown, Clock, Copy, FileText, Folder, GitBranch, MoreHorizontal, Pencil, Reply, RotateCcw, Share,
 } from './icons';
 import { InboxCard } from './InboxCards';
 import { Markdown } from './Markdown';
@@ -97,9 +101,11 @@ export function ChatView({ server, chatId, showBack, embedded, landing }: { serv
   const [selectText, setSelectText] = useState<string | null>(null);
   const [goalOpen, setGoalOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
+  const [branchTarget, setBranchTarget] = useState<BranchTarget | null>(null);
   const target = useRef<View>(null);
   const typing = isTyping(runtime, chatId);
   const { goal, refresh: refreshGoal, supported: goalsSupported } = useChatGoal(server, chatId, !landing?.prepareChat);
+  const branching = useBranching(server, chatId, !landing?.prepareChat);
   const focus = useFocusRequest(server.id, chatId);
   const [revealed, setRevealed] = useState<Record<string, true>>({});
   const [inputFocused, setInputFocused] = useState(false);
@@ -122,7 +128,9 @@ export function ChatView({ server, chatId, showBack, embedded, landing }: { serv
     const hide = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide', () => setInputFocused(false));
     return () => hide.remove();
   }, []);
-  useEffect(() => { setMenu(false); setSelected(null); setGoalOpen(false); setFilesOpen(false); }, [server.id, chatId]);
+  useEffect(() => { setMenu(false); setSelected(null); setGoalOpen(false); setFilesOpen(false); setBranchTarget(null); }, [server.id, chatId]);
+  // The More sheet is the moment these gates matter: a reply may have settled since the last load.
+  useEffect(() => { if (selected && branching.supported && branching.online) void branching.refresh(); }, [selected, branching.supported, branching.online, branching.refresh]);
 
   useEffect(() => {
     if (landing?.prepareChat) return;
@@ -211,6 +219,7 @@ export function ChatView({ server, chatId, showBack, embedded, landing }: { serv
         <View style={s.hairline} />
         <ConnectionBanner server={server} compact />
         <PausedBanner server={server} />
+        {!composing ? <BranchStrip server={server} chatId={chatId} state={branching.state} /> : null}
         {!composing && goal ? <GoalStrip goal={goal} onPress={() => setGoalOpen(true)} /> : null}
       </View>
       {landing?.action ? <View style={{ position: 'absolute', bottom: 0, left: 16, right: 16, paddingTop: 12, paddingBottom: Math.max(insets.bottom, 12) }}
@@ -226,7 +235,11 @@ export function ChatView({ server, chatId, showBack, embedded, landing }: { serv
       <FilesSheet server={server} chatId={chatId} visible={filesOpen} onClose={() => setFilesOpen(false)}
         onJump={(id) => requestFocus(server.id, chatId, id)} />
       <MessageMenu server={server} message={selected} busy={typing} onClose={() => setSelected(null)}
-        onReply={reply} onSelectText={setSelectText} />
+        onReply={reply} onSelectText={setSelectText} messages={shown}
+        branchingState={branching.state} branchingSupported={branching.supported} branchingOnline={branching.online}
+        onBranch={(m, mode) => { setSelected(null); setBranchTarget({ message: m, mode }); }} />
+      <BranchSheet server={server} chatId={chatId} chatTitle={chat?.title || server.bot.title} messages={shown} state={branching.state}
+        online={branching.online} target={branchTarget} onClose={() => setBranchTarget(null)} onRefresh={branching.refresh} />
       <Sheet visible={selectText !== null} onClose={() => setSelectText(null)} title="Select text">
         <ScrollView style={{ maxHeight: 420 }} contentContainerStyle={{ paddingHorizontal: 8, paddingBottom: 8 }}>
           <Text selectable style={s.selectText}>{selectText}</Text>
@@ -751,8 +764,11 @@ function HoverBar({ message, actions, serverId, inline = false }: { message: Mes
 }
 
 /** Long-press menu for one message. */
-function MessageMenu({ server, message, busy, onClose, onReply, onSelectText }: {
-  server: Server; message: Message | null; busy: boolean; onClose: () => void; onReply: (m: Message) => void; onSelectText: (text: string) => void;
+function MessageMenu({ server, message, busy, onClose, onReply, onSelectText, messages,
+  branchingState, branchingSupported, branchingOnline, onBranch }: {
+  server: Server; message: Message | null; busy: boolean; onClose: () => void; onReply: (m: Message) => void;
+  onSelectText: (text: string) => void; messages: readonly Message[]; branchingState: BranchState | null;
+  branchingSupported: boolean; branchingOnline: boolean; onBranch: (m: Message, mode: BranchMode) => void;
 }) {
   const t = useTheme();
   const s = useStyles();
@@ -767,6 +783,14 @@ function MessageMenu({ server, message, busy, onClose, onReply, onSelectText }: 
   });
   if (!m) return null;
   const run = (fn: () => void) => () => { onClose(); fn(); };
+  const gate = !branchingSupported ? 'This server can’t branch conversations.'
+    : !branchingOnline ? 'Reconnect to edit or branch this chat.'
+      : !branchingState ? 'Loading branch options…'
+        : busy ? 'Wait for the current reply to finish.'
+          : branchingState.reason || branchingState.messages?.[m.id]?.reason || 'This message isn’t in the model transcript yet.';
+  const editable = canEdit(branchingState, m.id);
+  const branchable = canBranch(branchingState, m.id);
+  const regenerable = canRegenerate(branchingState, m.id);
   return (
     <Sheet visible={!!message} onClose={onClose}>
       {m.text ? <Text style={s.menuPreview} numberOfLines={2}>{plainText(m.text)}</Text> : null}
@@ -782,13 +806,30 @@ function MessageMenu({ server, message, busy, onClose, onReply, onSelectText }: 
         if (Platform.OS === 'web') (globalThis.navigator as Navigator).share?.({ text: m.text }).catch(() => undefined);
         else SystemShare.share({ message: m.text }).catch(() => undefined);
       })} /> : null}
-      {m.role === 'user' && m.text ? <SheetAction icon={<Pencil size={20} color={t.colors.text} />} label="Edit and send again" onPress={run(() => {
-        editAgain(server, m, false);
-      })} /> : null}
-      {m.role === 'bot' && m.id === latestBot && !busy ? <SheetAction icon={<RotateCcw size={20} color={t.colors.text} />} label="Try again" onPress={run(() => {
-        haptic.light();
-        useApp.getState().sendMessage(server.id, m.chat_id, '/retry');
-      })} /> : null}
+      {branchingSupported ? (
+        <>
+          {m.role === 'user' && m.text ? <SheetAction icon={<Pencil size={20} color={t.colors.text} />}
+            label="Edit in a new branch" disabled={!editable} hint={editable ? actionHint('edit', laterCount(messages, m.id, 'edit')) : gate}
+            onPress={run(() => onBranch(m, 'edit'))} /> : null}
+          {m.role === 'bot' ? <SheetAction icon={<RotateCcw size={20} color={t.colors.text} />}
+            label="Regenerate reply" disabled={!regenerable} hint={regenerable ? actionHint('regenerate', laterCount(messages, m.id, 'regenerate')) : gate}
+            onPress={run(() => onBranch(m, 'regenerate'))} /> : null}
+          <SheetAction icon={<GitBranch size={20} color={t.colors.text} />}
+            label={m.role === 'user' ? 'Branch from here' : 'Branch from this reply'} disabled={!branchable}
+            hint={branchable ? actionHint('branch', laterCount(messages, m.id, 'branch')) : gate}
+            onPress={run(() => onBranch(m, 'branch'))} />
+        </>
+      ) : (
+        <>
+          {m.role === 'user' && m.text ? <SheetAction icon={<Pencil size={20} color={t.colors.text} />} label="Edit and send again" onPress={run(() => {
+            editAgain(server, m, false);
+          })} /> : null}
+          {m.role === 'bot' && m.id === latestBot && !busy ? <SheetAction icon={<RotateCcw size={20} color={t.colors.text} />} label="Try again" onPress={run(() => {
+            haptic.light();
+            useApp.getState().sendMessage(server.id, m.chat_id, '/retry');
+          })} /> : null}
+        </>
+      )}
     </Sheet>
   );
 }

@@ -286,6 +286,17 @@ class WingletAdapter(BasePlatformAdapter):
             hub.branching = BranchService(hub, self)
             from .processes import Processes
             hub.processes = Processes(self)
+            # A private hosted-room worker reuses Hermes's durable scheduler. It
+            # owns separate storage and never adopts the user's dashboard rooms.
+            from .rooms import Rooms
+            from .rooms_hermes import build_worker
+            try:
+                worker = await asyncio.to_thread(build_worker, self, Path(store.path).parent / "rooms-runtime.sqlite", hub)
+                hub.rooms = Rooms(hub, worker, Path(store.path).parent / "rooms-meta.sqlite")
+                worker.start()
+            except Exception:
+                logger.warning("[%s] hosted rooms unavailable on this Hermes", self.name, exc_info=True)
+
             from gateway.platforms.shared_ingress import bind_listener
             # No access log: device tokens ride in WebSocket/media query strings and must not reach log files.
             self._runner = await bind_listener(self, hub.build_app(), self._host, self._port, "/api/ws",

@@ -119,3 +119,6 @@ export { default as Wrench } from 'lucide-react-native/icons/wrench';
 export { default as X } from 'lucide-react-native/icons/x';
 export { default as XCircle } from 'lucide-react-native/icons/circle-x';
 export { default as Zap } from 'lucide-react-native/icons/zap';
+export { default as ArrowLeft } from 'lucide-react-native/icons/arrow-left';
+export { default as Send } from 'lucide-react-native/icons/send';
+export { default as Users } from 'lucide-react-native/icons/users';

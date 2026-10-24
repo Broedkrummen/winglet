@@ -118,6 +118,8 @@ class Forbidden(PermissionError):
 #   signed        any verified device, with a signed request
 #   owner_signed  an owner's verified device, with a signed request: every control action
 ROUTE_POLICY = {
+    "h_rooms": "paired", "h_room_state": "paired", "h_room_log": "paired",
+    "h_room_create": "owner_signed", "h_room_action": "signed",
     "h_info": "public", "h_pair": "public", "h_ws": "public", "h_static": "public", "h_media": "public",
     "h_vapid": "public", "h_inbox_respond": "public", "h_server_key": "public", "h_address_check": "public",
     "h_me": "device", "h_connection": "device", "h_connection_status": "device", "h_unpair": "device", "h_chats": "device",
@@ -269,6 +271,7 @@ class Hub:
         # the observer hooks it needs. None keeps the feature off (old server or old Hermes).
         self.execution: Any = None
         self.processes = None
+        self.rooms = None
         self._pickers: Dict[str, Dict[str, Any]] = {}
         # Restarts and updates outlive this process; jobs started by this one carry its boot id.
         self.boot_id = new_id()
@@ -422,6 +425,8 @@ class Hub:
             _register_branch_routes(app)
         from .processes_routes import register_routes as _register_process_routes
         _register_process_routes(app)
+        from . import rooms_routes
+        rooms_routes.register_routes(app)
         r.add_get("/{tail:.*}", self.h_static)
         app.on_startup.append(self._start_janitor)
         app.on_shutdown.append(self._close_sockets)
@@ -731,7 +736,9 @@ class Hub:
         checkpoints = self.checkpoints is not None
         branching = bool(self.branching is not None and self._has(self.branching, "available")
                          and self.branching.available())
-        return {"webpush": True, "ntfy": True, "approvals": True, "questions": True, "uploads": True, "voice": True,
+        return {"rooms": self.rooms is not None and self.rooms.available(),
+                "room_mentions": self.rooms is not None and self.rooms.available(), "rooms_member_write": False,
+                "webpush": True, "ntfy": True, "approvals": True, "questions": True, "uploads": True, "voice": True,
                 "replies": True, "export": True, "mute": True, "status_updates": True, "roles": True,
                 "signed_actions": True, "ws_auth": True, "pickers": True, "agent": self.hermes is not None,
                 "control": self.hermes is not None, "goals": self.chat_goal is not None, "search": True, "files": True,
@@ -3161,6 +3168,8 @@ class Hub:
         return self._http
 
     async def aclose(self) -> None:
+        if self.rooms is not None:
+            await self.rooms.close()
         if self.processes is not None:
             await self.processes.close()
         if self._recovery_task:

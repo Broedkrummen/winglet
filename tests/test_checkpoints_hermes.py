@@ -30,6 +30,9 @@ def workspace(tmp_path, monkeypatch):
     project.mkdir()
     (project / "backup.sh").write_text("echo done\n", encoding="utf-8")
     monkeypatch.setenv("HERMES_HOME", str(home))
+    # These tests exercise real snapshots with the already-required system Git.
+    # A fresh fake home must not bootstrap/extract a second Git installation.
+    monkeypatch.setenv("HERMES_DISABLE_LAZY_INSTALLS", "1")
     monkeypatch.setenv("TERMINAL_CWD", str(project))
     return project
 

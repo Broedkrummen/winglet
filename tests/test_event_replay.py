@@ -601,3 +601,24 @@ async def test_slow_socket_is_closed_with_resync_instead_of_blocking_publication
     await asyncio.wait_for(hub.post_message("general", "durable despite a slow phone", push=False), timeout=4)
     assert ws.closed and ws.code == 1013 and ws not in hub._sockets
     assert hub.events.head(None) == 2
+
+
+def test_scope_changes_with_bot_and_role(hub):
+    device, _ = hub.store.add_device("Owner", role="owner")
+    main = hub._replay_scope(device)
+    with hub._bot_context("other"):
+        assert hub._replay_scope(device) != main
+    assert hub._replay_scope({**device, "role": "member"}) != main
+
+
+async def test_reference_expansion_cannot_exceed_the_replay_payload_bound(client, hub):
+    token = await pair(client, hub)
+    message = await hub.post_message("general", "small", push=False)
+    hub.store.update_message(message["id"], "x" * (70 * 1024))
+    ws = await client.ws_connect(f"/api/ws?token={token}")
+    hello = await ws.receive_json()
+    await ws.send_json({"type": "resume", "scope": hello["event_stream"]["scope"], "epoch": hub.events.epoch(), "cursor": 0})
+    reply = await ws.receive_json()
+    assert reply["events"][0]["type"] == "sync.hint"
+    assert len(json.dumps(reply).encode()) < 512 * 1024 + 1024
+    await ws.close()

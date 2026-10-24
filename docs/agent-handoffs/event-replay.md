@@ -1,262 +1,191 @@
-# Resumable events, gap recovery and reconnect correctness
+# Resumable events and reconnect recovery
 
-Status: **server layer complete and green; client layer half-written. Work paused mid-assignment — see
-"Handoff status" before writing code.** Primary specialist role: SRE (architect → implement → review
-phases in this session, no subagents). Branch `codex/major-08-event-replay`, worktree
-`C:\Users\vikas\Documents\winglet-agents\08-event-replay`, base `b71d93b`. Capability owner:
-`event_replay`. This document owns the global additive event cursor/epoch envelope; feature payloads
-stay namespaced to their own features.
+For Codex orchestrator review. Code implemented; native build not run; **MOBILE VALIDATION PENDING**.
+Draft PR: https://github.com/VIKASRP24/winglet/pull/51. Branch: `codex/major-08-event-replay`.
+Reviewed integration parent: `87cf6269c42ea4610880ef158110e48837e34848` (features 01–06).
+Implementation/review followed the Agency Agents SRE architecture → implementation → review workflow,
+without subagents. The earlier server-only handoff is superseded by this document.
 
-## Contract
+## What the user gets
 
-### Scope and identity
+The actual WebSocket connection now resumes missed messages, edits, deletions, Inbox changes and
+additive namespaced feature notifications. If replay cannot prove its position, the app fetches
+the authenticated snapshot and cached chat histories, then resumes again from the snapshot watermark.
+Cached reading and composing remain available. Replay applies existing state handlers; it never
+invokes a send, task control, approval operation or offline queue entry.
 
-- One stream per `(server, bot)`. Winglet already models each bot as a paired `Server` entry
-  (`profile` names the Hermes profile), so a device's cursor is stored per bot entry.
-- `epoch`: unpredictable server-wide journal generation (`kv.event_epoch`). A database restore or a
-  journal reset changes it, so a cursor from another generation is refused instead of misread.
-- `seq`: per-bot, contiguous, monotonic from 1. Assigned and committed with the change, never
-  reused. Filtering happens at replay time, so **gaps in the seq a device receives are expected and
-  are not errors**; they mean "an event you may not see" or "an event from another member's chat".
-- `watermark`: highest seq committed for the bot at the instant the server read the stream head.
-  Applying every event through the watermark means the device is caught up to that instant. The
-  head is always read **before** the accompanying snapshot (hello or `/api/sync/snapshot`), so an
-  event cannot fall into the gap between "snapshot taken" and "live subscription".
-- Ordering: journal append and socket broadcast for resumable kinds happen in one publisher critical
-  section, so a socket receives resumable events in seq order. A client may therefore advance its
-  cursor to the highest seq it applied.
+Chat headers show quiet catching-up feedback and a temporary completion message. Connection shows
+Sync and Resync now. A failed snapshot or durable cache write leaves a Retry action. Unsupported
+servers keep the original synchronous reconnect path and show no replay UI.
 
-### Delivery guarantee
+## Final additive wire contract
 
-At-least-once across reconnects, never exactly-once. A live frame and the same event from a replay
-can both arrive; clients must treat events as idempotent upserts keyed by `message.id`/`item.id`/
-`chat.id` and must ignore a seq that is not greater than their cursor. Deletion events are
-authoritative and idempotent. Replay never re-sends a message, never re-runs a control and never
-touches the outbox: it only applies state the server already committed.
+No protocol/minimum-version bump. Capability: `features.event_replay: true`.
 
-### Wire protocol (additive; no global protocol bump)
-
-`hello` gains one object, absent from older servers:
-
-```
-event_stream: { epoch, watermark, keep_events, keep_seconds }
+```json
+{"type":"hello","event_stream":{"epoch":"generation","scope":"authenticated-scope","watermark":12,"keep_events":1500,"keep_seconds":259200}}
+{"type":"resume","epoch":"generation","scope":"authenticated-scope","cursor":8}
+{"type":"resume","ok":true,"epoch":"generation","scope":"authenticated-scope","watermark":12,"cursor":12,"events":[],"has_more":false}
+{"type":"resume","ok":false,"reason":"gap","epoch":"generation","watermark":12}
 ```
 
-App → server, after hello, only when `features.event_replay` is true and a cursor is stored:
+Live/replayed durable events carry **`event_seq`**. Existing feature-local fields remain intact:
+`task.event.seq` is still the execution sequence, and room-local epochs are unchanged. Clients never
+interpret a bare feature `seq` as a replay cursor. Other features need only use the existing awaited
+`Hub.broadcast` path; the envelope is added centrally. Presence, pet updates, bot lists, restart job
+progress and pong are excluded. Per-device `project.sync` stays outside the shared journal; hello
+and recovery snapshots provide the current authenticated project structure.
 
-```
-{ "type": "resume", "cursor": <int>, "epoch": "<str>" }
-```
+`GET /api/sync/snapshot` uses bearer/device authorization and existing bot routing. It returns
+`server_id`, bot profile name (or null), `scope`, `epoch`, `watermark`, visible chats, Inbox, pending
+count, sanitized pause state, current device identity, project snapshot and durable message tombstones.
 
-Server → app:
+### Scope, ordering and subscription race
 
-```
-{ "type": "resume", "ok": true, "epoch", "watermark", "events": [...], "has_more": bool, "retention": {...} }
-{ "type": "resume", "ok": false, "reason": "epoch"|"cursor"|"gap"|"journal", "epoch", "watermark", "retention" }
-```
+The server derives scope from persistent server ID, bot profile, authenticated device ID and current
+role. A cursor from another bot/device/role is refused. The epoch persists across ordinary restarts;
+an explicit journal reset rotates it. A restored/behind head, corrupt cursor, missing retained prefix,
+internal journal hole or corrupt payload produces an explicit snapshot refusal.
 
-`has_more` asks for another `resume` from the last applied seq (bounded pages). A refusing reply is
-an explicit instruction to take a snapshot, not a transport error. Resumable live frames carry
-`seq`; older clients ignore the extra field.
+The socket is registered and hello is sent under the publisher lock, preventing a live event from
+overtaking hello. The head is read before the corresponding snapshot. Publisher scope is derived
+from the event's actual chat/bot, including adapter calls made outside ambient bot context.
+After recovery/history fetch, the client requests replay from that earlier watermark; it does not
+assume an HTTP snapshot plus buffered live frames proves subscription coverage. Live frames arriving
+during catch-up are held and released after ordered replay. Sequence gaps in a filtered device's
+reply are normal: page cursors advance through scanned invisible rows.
 
-`GET /api/sync/snapshot` (device auth) returns the authoritative scoped state:
-`{ server_id, bot, epoch, watermark, chats, inbox, pending, paused, me, deletions, retention }`.
-A member only receives their own chats, their own inbox items and the tombstones for those chats.
+### Application, persistence and acknowledgement
 
-### What is journaled
+The production Connection owns a SyncSession. Application and persistence run in one serialized
+queue. Replay uses existing message identity and client-delivery identity, drops duplicate
+`event_seq` values, and suppresses replay notification sounds/toasts. Next-page requests happen only
+after the applied state is durably checkpointed. A cursor is never saved separately or on a timer.
 
-`message.new`, `message.update`, `message.delete`, `chat.update`, `chat.delete`, `inbox.new`,
-`inbox.update`, `system.paused`, and `sync.hint` (an oversize substitute). Ephemeral or derivable
-frames are deliberately not journaled: `typing` (8 s TTL, re-sent while working), `pet.update`,
-`system.bots`, `system.job`, `pong`. Their loss on reconnect is harmless because `hello`/refetch
-re-establishes them. Typing is also withheld from the journal on purpose: it is presence, not state.
+`replay:<local-server-id>` is one encrypted native cache value / one committed IndexedDB transaction
+containing the cursor and covered chats, messages, tombstones, loaded flags, Inbox, projects, tasks,
+pause state and device identity. Strict writes reject on keychain, disk or transaction failure;
+normal best-effort cache behavior is unchanged. On startup the checkpoint restores those state slices
+before resuming. Persisted acknowledged messages filter stale outbox entries by `meta.client_id`.
+Legacy cursor-only records are intentionally ignored and repaired by snapshot.
 
-### Retention and bounds
+Snapshot merge does not replace drafts, draft attachments, reply context or the outbox. Cached chat
+histories are reconciled before the snapshot cursor is committed; all scoped tombstones are included.
+Normal explicit/remote chat-deletion handling retains existing chat-removal semantics.
 
-- Newest 1500 events and 3 days per bot, whichever ends first (configurable on `EventStream`).
-- A journal row is the event as already broadcast: no media bytes, no tokens, no signing keys, no
-  presence, no prompts from other members. Nothing that was not already sent over an authenticated
-  socket enters the journal.
-- Payloads above 64 KB are journaled as `{type: "sync.hint", chat_id, reason: "oversize"}`; the live
-  frame still carries the full payload. A client that replays a hint refetches that chat's newest
-  page. This bounds a single row and the replay reply.
+### Authorization and retained content
 
-### Authorization
+Every resume refreshes the authenticated token, including token rotation and revocation. Current
+role and current chat ownership filter retained rows. Unknown unscoped namespaced events are
+owner-only; scoped chat events use the existing ACL. Checkpoint/system details retain their owner
+restrictions. Member pause notes and pending counts are shaped per authenticated device.
 
-Rows are stored once per bot, not per device. `Hub._event_visible` is reused at replay time against
-the device record as it is *now*: owners see every chat, members only their own, `chat.delete` rows
-only reach the device that owned the chat, `system.*` rows stay owner-only. A revoked token cannot
-resume (the socket closes 4401), and a role change changes what the retained journal yields on the
-next replay. No caller-supplied bot or device id is trusted; the stream scope is the authenticated
-socket's bot and the refreshed device row.
+Message, chat and Inbox journal entries contain record references rather than another content copy.
+Replay resolves those references from current authoritative rows, so edited/deleted text and answered
+cards cannot be resurrected. Deleted messages become tombstones. Chat previews are repaired inside
+the message-deletion transaction and broadcast as an authoritative chat update. Existing retained
+payload rows from the earlier implementation are also resolved against current records on replay.
+Feature publishers remain responsible for sanitizing their own namespaced payloads before broadcast.
 
-### Not durable upstream (stated, not hidden)
+### Bounds and honest guarantees
 
-Hermes turn execution is not journaled. Streaming text arrives as ordinary `message.update` events,
-so intermediate deltas beyond the retention window can be absent after a long disconnect; the
-authoritative transcript remains `GET /api/chats/{id}/messages`, which the snapshot path refetches
-for the open chat and which every chat refetches when opened (tombstones included). Winglet makes
-no exactly-once promise for upstream task events.
+Newest 1500 events / three days per bot, whichever expires first. Individual journal payloads above
+64 KiB become `sync.hint`. Replies scan at most 200 rows and carry at most approximately 512 KiB of
+event payload, including after authoritative references expand. Replayed hints trigger the complete
+scoped recovery path. Metadata adds a small fixed envelope beyond that payload bound.
 
-## UI plan
+The client bounds queued/held work to 512 frames and approximately 4 MiB, disconnects a slow consumer,
+and keeps the last durable cursor. Replay waits time out after 15 seconds. Server publication waits
+at most two seconds per socket send, removes a slow socket and requests reconnect/resync (1013).
 
-Entry point: nothing new to open. A restrained sync chip appears in the chat header area only while
-something is actually happening (`Catching up…` with a count, `Back in sync` briefly), and an
-actionable row appears when catching up is impossible (`Couldn't catch up · Retry`). The
-Connection screen gets a short "Sync" row with the current state, the reason and a **Resync now**
-action for owners and members alike. Cached chats, drafts, attachments, reply context and the
-outbox stay readable and editable throughout: no full-screen spinner, no blocked composer.
+Delivery is **at least once**, never exactly once. `Hub.publish(write, event_of)` commits authoritative
+SQLite mutations and journal rows together; journal failure rolls the mutation back. Generic
+`broadcast` journals already-committed feature notifications and cannot make external Hermes work
+or another feature's earlier write atomic. A process can crash in that external mutation/notification
+window. Runtime task/process history remains governed by those features' authoritative snapshots.
+Unpersisted upstream deltas and retention-expired events are not reconstructable as an exact timeline.
+The transcript/history endpoints remain authoritative. Large durable checkpoints can add storage
+work during heavy streaming; bounded queues favor reconnect recovery over unbounded memory growth.
 
-Information hierarchy: icon + one word + one line of detail at most; the technical reason (epoch,
-cursor, retention) lives on the Connection screen, never in the chat. Wide screens keep the chip on
-the right of the chat title; 320 px keeps it below the title row so nothing clips. Uses existing
-theme tokens, 44 px touch targets, `accessibilityLiveRegion="polite"`, reduced-motion aware
-transitions and no colour-only meaning.
+## Storage and shared files
 
-States: unsupported (old server: nothing rendered), idle/live (nothing rendered), catching up
-(count), snapshot (loading, non-blocking), back in sync (2 s), unrecoverable (`Retry` action),
-offline (the existing connection banner owns that message; the sync chip stays quiet).
+Feature-local SQLite tables created idempotently: `event_streams(bot,next_seq,created_at)` and
+`event_log(bot,seq,kind,chat_id,created_at,payload)` with indexed unique bot/sequence identity.
+`kv.event_epoch` stores generation. Dropping these tables and rotating epoch removes replay data
+without changing transcripts/devices; stale clients recover by snapshot. No numeric global
+migration version, Hermes pin, release version or generated `plugin/web` asset changed.
 
-## Storage
+Shared wiring: `plugin/hub.py`, `plugin/store.py`, `app/src/lib/store.ts`, cache native/web adapters,
+`types.ts`, ChatView and Connection. Feature decisions live in `plugin/event_replay.py` and
+`app/src/features/event-replay/`. The integration merge preserves branching revision metadata,
+structured execution, projects, rooms and process behavior.
 
-Feature-local tables created idempotently by `plugin/event_replay.py` (`ensure_schema`). No global
-migration version is allocated and no existing table is rewritten:
+## Reference comparison and provenance
 
-- `event_streams(bot TEXT PRIMARY KEY, next_seq INTEGER, created_at REAL)`
-- `event_log(id INTEGER PRIMARY KEY AUTOINCREMENT, bot, seq, kind, chat_id, created_at, payload,
-  UNIQUE(bot, seq))` with `event_log_bot_seq` and `event_log_created` indexes.
+Read-only Herald source snapshot `95ca999fa48c1c9de232fe499a174900f0d25272` and its MIT license
+were inspected, including EventReplay.kt and EventReplayTest.kt. Related transcript/history/RPC
+connection code informed the original implementation. Notice and full MIT license are retained in
+`third_party/notices/herald-event-replay.md`. No Kotlin is copied verbatim.
 
-Rollback: dropping both tables removes the feature's data; existing chats, messages, inbox and
-devices are untouched. Clients with a stale cursor then get `ok:false` and take a snapshot.
-
-## Shared files touched
-
-- `plugin/hub.py`: import + `EventStream` instance, publisher for resumable kinds, hello
-  `event_stream`, `resume` frame handler, `GET /api/sync/snapshot` route and policy entry, one
-  capability key, atomic append next to the existing store writes.
-- `app/src/lib/store.ts`: socket hook + cursor persistence + snapshot application (kept small; all
-  decision logic lives in `app/src/features/event-replay/`).
-- `app/src/lib/types.ts`: `SyncState` type only.
-- `app/src/components/ChatView.tsx` and `app/src/app/connection/[serverId].tsx`: render the chip /
-  sync row.
-- Everything else is feature-local: `app/src/features/event-replay/`, `plugin/event_replay.py`,
-  `tests/test_event_replay.py`, `app/tests/eventReplay.test.ts`.
-
-Not touched: `Hermes` sources, other agents' modules, generated `plugin/web` assets, the CI pin.
-
-## Reference comparison
-
-| Reference (Herald 95ca999) | Winglet result | Evidence / difference |
+| Reference behavior | Winglet implementation | Intentional difference/evidence |
 | --- | --- | --- |
-| `EventReplay.kt`: `session.events.since` ring, `latest_seq`, `truncated`, per-run `epoch`, reload on any hole | `plugin/event_replay.py` replay with per-bot seq, epoch, `ok:false` reasons and bounded pages | Same refusals (hole, truncation, restart, wrong session) implemented as an explicit protocol reply plus tests |
-| `event_replay.py` ring of ~512 per runtime session | Durable SQLite journal, 1500 events / 3 days per bot | Winglet restarts far more often than a dashboard session; a ring would lose a phone's overnight disconnect |
-| Client parses reply, drops already-applied seq, falls back to transcript refetch | `app/src/features/event-replay/protocol.ts` validates and orders; snapshot fallback refetches scoped state and the open chat | Reference trusts the reply; Winglet also proves the cursor/watermark relationship before advancing |
-| "Reconnecting…/Waiting for network…" chat banner | Sync chip + Connection screen row, cached chats stay usable | No full-screen spinner in either; Winglet adds an explicit blocked state with Retry |
-| Per-runtime-session event log | Per `(server, bot)` log, filtered per device at replay time | Necessary because Winglet's authority is the plugin, and members share a server |
+| Sequence/epoch validation and duplicate removal | Validated event_seq, scope and epoch; ordered application | Preserves task-local seq; filtered gaps are valid |
+| Refuse truncation, wrong runtime and holes | Explicit cursor/gap/epoch/journal refusal | Durable SQLite instead of per-runtime ring |
+| Refetch transcript when replay cannot prove continuity | Scoped snapshot, cached histories, then replay from watermark | Preserves composer state and repairs Inbox/projects too |
+| Reconnecting/waiting feedback | Non-blocking sync status and Retry | Existing Winglet themes, pets and navigation remain |
 
-Reuse provenance: the replay *semantics* (seq monotonicity, epoch on restart, refuse on hole or
-truncation, skip already-applied seqs, fall back to the transcript) are adapted from Herald's
-MIT-licensed `EventReplay.kt` / `EventReplayTest.kt`. The implementation is a Python/TypeScript
-adaptation for Winglet's plugin protocol; no Kotlin is copied verbatim. The required notice, the
-exact upstream commit and the full MIT licence text are in
-`third_party/notices/herald-event-replay.md`.
+## Validation and evidence
 
-## Handoff status: server complete and green, client half-written
+- Final client suite: **338 passed** (`node --test tests/*.test.ts`); real store/socket harness included.
+- TypeScript typecheck: passed.
+- Web production export and Android Hermes-bytecode export: passed in private output directories.
+  Those exports preceded the final oversized-hint/reference review guards; current PR CI runs web
+  typecheck/export again. Android export is bundling evidence, not a native build.
+- Replay/bot regression run: **48 passed** before additional privacy/bounds tests.
+- Final replay server suite and full pinned-Hermes suite: results being finalized below.
+- `git diff --check`: passed before publication.
+- No phone, emulator, ADB, RDP, provider or live Hermes interaction was used.
 
-Work stopped deliberately before the client was wired, not because it was finished. Read this
-section before touching anything.
+Disposable Playwright browser evidence uses `scripts/event_replay_fixture.py`, production web output,
+and synthetic local data only. Checked 320 px light Connection view: document width equals viewport
+width (320), Resync target height 44 px. Injected HTTP 503 on the snapshot route produced actionable
+Retry while the rest of the screen stayed readable; removing the fault and Retry recovered.
+Wide dark/reduced-motion evidence is included. The injected HTTP 503 creates one expected browser
+network console error; normal fixture load had no JavaScript errors.
 
-| Layer | State |
-| --- | --- |
-| Protocol/contract (this document) | Complete |
-| `plugin/event_replay.py` (journal, epoch, retention, replay, snapshot) | Complete, tested |
-| `plugin/hub.py` wiring (publish, hello, resume, `/api/sync/snapshot`) | Complete, tested |
-| `plugin/store.py` (shared transaction primitive) | Complete, tested |
-| `tests/test_event_replay.py` | 33 tests, all green |
-| `app/src/features/event-replay/{protocol,session,merge}.ts` | Written, **not typechecked, not tested, not wired** |
-| `app/src/lib/store.ts` integration | **Not started** (only imports, `sync?` field, `resyncNow` signature, cursor maps) |
-| `app/tests/eventReplay.test.ts` | **Not written** |
-| `SyncStatus` chip / Connection screen row | **Not written** |
-| Web/native build, screenshots, fixture script | **Not run** |
-| PR | **Not opened** |
+![Connection at 320 px](event-replay/connection-320.png)
+![Retry after synthetic snapshot failure](event-replay/blocked-320.png)
+![Wide dark Connection](event-replay/connection-1440-dark.png)
 
-### What is proven
+## MOBILE VALIDATION PENDING
 
-Commands, all in the worktree `C:\Users\vikas\Documents\winglet-agents\08-event-replay`:
+Use PR 51's reviewed final integration merge/build, not a stale feature-only APK. The orchestrator
+owns signed native builds and all emulator/physical testing. Suggested Android API 35+ emulator,
+320/390 dp phone, tablet and larger font settings; physical Android for process death, backgrounding,
+keychain/storage recovery and genuine network handoffs. iPhone behavior is unvalidated.
 
-- `python -m pytest -q` (full plugin suite, interpreter `C:\Users\vikas\Documents\winglet\.venv\Scripts\python.exe`,
-  the only one on this machine with `aiohttp`/`pytest-aiohttp`): **329 passed, 17 skipped**. Baseline
-  before this work was 296 passed / 17 skipped, so the 33 new tests all pass and nothing regressed.
-- `python -m pytest tests/test_event_replay.py -q`: 33 passed.
-- `python -m pytest tests/test_hub.py -q`: 51 passed (the existing socket/HTTP contract still holds
-  with `seq` added to live frames).
+1. Export this branch's web app into `app/dist-replay-web`; run
+   `python scripts/event_replay_fixture.py` from the repository root with aiohttp installed.
+   It binds only 127.0.0.1:9308, prints a disposable pairing code, uses a temporary database and
+   never connects to Hermes or push providers. The orchestrator can forward that test port for
+   its later emulator/device checks. Fixture-only authenticated routes `/fixture/message` and
+   `/fixture/epoch` generate synthetic arrivals and rotate epoch.
+2. Pair two test clients. Disconnect/force-stop one; add messages, edits, Inbox outcomes and deletions
+   on the other. Reopen: no duplicate, stale deleted preview or repeated chime; cursor covers
+   persisted applied state. Acknowledged client_id must not re-enter the send queue.
+3. Disconnect before hello, during replay, while committing a page and during snapshot/history fetch.
+   Relaunch and verify ordered recovery without losing draft text, attachments or reply context.
+4. Rotate the fixture epoch, trim retention and inject a malformed/stale cursor. Verify snapshot,
+   history reconciliation, second resume, eventual quiet idle and readable cached chats throughout.
+5. Revoke/rotate token or change role while offline. Old auth cannot replay; old role/device/bot
+   cursor is refused; member replies contain only current accessible chats and sanitized state.
+6. Throttle network/storage, background during streaming and fill storage. Verify bounded recovery
+   or Retry; no persisted cursor ahead of state, no automatic control execution, no full-screen
+   loading barrier. Check narrow, tablet, dark/light, large fonts and reduced motion natively.
 
-Not run, and why:
+## Review priorities
 
-- `npx tsc --noEmit` / `npm test` / `expo export`: `app/node_modules` does not exist in this worktree
-  (`npm ci` never ran here), so `tsc` fails on every file with `Cannot find module 'expo-router'`,
-  `Cannot find module 'react'`, `'--jsx' is not set`. That output says nothing about these changes.
-  Installing deps is the first step of resuming.
-- Any browser/Playwright check, screenshot, or fixture server.
-- Any Android build, emulator or phone run.
-
-### Resuming: the exact remaining work
-
-1. `cd app && npm ci` (must succeed before any TypeScript claim is made).
-2. `npx tsc --noEmit` — the three new modules have never been compiled. Expect minor type fixes; they
-   import only each other and `lib/types`.
-3. Wire `store.ts`. The scaffolding already committed is: `sync?: SyncState` on `ServerState`, a
-   `resyncNow(serverId)` action signature, and `replayCursors` / `saveCursor` (debounced 400 ms write
-   to `cacheSet('replay:<serverId>')`). Still to do:
-   - `Connection` owns a `SyncSession` per socket. In `ws.onmessage`, call
-     `if (session.intercept(event)) return;` before `cb.onEvent(event)`, then `session.note(event)`
-     after. `onclose` and `open()` must call `session.closed()`.
-   - The host's `read()` is `replayCursors.get(id)` primed from `cacheGet('replay:<id>')` during
-     `hydrateServer`; `write()` is `replayCursors.set` + `saveCursor`; `apply()` reuses `handleEvent`
-     (it takes the same event shape, `seq` included); `view()` patches `sync`; `applySnapshot()` is
-     `mergeSnapshot(runtime, snapshot)` patched in, then `cacheSet('chats:<id>')`.
-   - `send` is `Connection.send({type:'resume',cursor,epoch})`; `fetch` is
-     `api(server, '/api/sync/snapshot')` (already allowed: `h_sync_snapshot` is `"device"` policy).
-   - `resyncNow` calls the live session's `retry()`.
-4. `SyncStatus` chip in `ChatView.tsx` (next to `ConnectionBanner`, below the title row at 320 px) and a
-   "Sync" row on `app/src/app/connection/[serverId].tsx`. States and copy are in the UI plan above;
-   nothing renders for `unsupported` or `idle`.
-5. `app/tests/eventReplay.test.ts` — `node --test`, transpiling the modules with `typescript` like
-   `tests/connection.test.ts` does, with a fake host. The cases worth having: pages applied in order,
-   a duplicate seq dropped, a held frame applied after the replay, a refusal taking the snapshot path,
-   a failed snapshot leaving `blocked` + Retry, and a snapshot merge that leaves drafts and outbox
-   alone.
-6. Then the full gate: `npm test`, `npx tsc --noEmit`, `npx expo export --platform web` and
-   `--platform android`, and the plugin suite again.
-
-### Decisions a reviewer should not have to rediscover
-
-- **Gaps are normal.** The client advances to the server's `watermark` (or a page's `cursor`), never to
-  the last seq it saw, because filtering is per device.
-- **Filtering happens at replay time** against the refreshed device row, so a promotion, a demotion or
-  an unpair applies to rows already in the journal. Tests pin all three.
-- **A journal failure rolls the change back** (it raises inside the publisher's transaction). A
-  committed change with no replay row would be invisible to a reconnecting phone, which is worse than
-  a refused write.
-- **`sync.hint`** is stored under the same seq as an oversize payload; the live frame still carries the
-  full event, so only replay degrades to "refetch this chat".
-- **Not journaled on purpose:** `typing`, `pet.update`, `system.bots`, `system.job`, `pong`.
-
-### Mobile validation pending
-
-No phone, emulator or live server was used. Codex validates mobile. The recipe, once the client lands:
-
-1. Pair a phone against a development gateway from this branch; confirm `hello` carries
-   `event_stream` and that `GET /api/sync/snapshot` answers with the phone's own token.
-2. Send a message from a second paired device while the first is force-stopped; reopen it and confirm
-   the message appears with no full reload and no duplicate.
-3. Kill the app mid-stream (a reply in flight), reopen it: the partial reply must be completed by the
-   replay, and the chat must not show the message twice.
-4. As an owner, run `python -c` to call `hub.events.rotate_epoch()`, then reopen a phone holding a
-   cursor: it must take the snapshot path and end up consistent, with the chip saying it caught up.
-5. Demote a member while their phone is offline, promote them back, and confirm replay never leaks
-   another member's chat in either direction.
-
-## Validation run in this session
-
-Filled in for the server layer only; see the table above for what is deliberately unrun.
+1. Current ACL and record-reference replay in `_resume`; explicit `scope` and `event_seq` compatibility.
+2. Actual socket queue/checkpoint/hydration ordering; safe acknowledgement and recovery histories.
+3. Publisher bot derivation, subscription lock, private project broadcaster and slow-consumer bounds.
+4. Honest non-atomic external-feature/upstream limits and final combined native validation.

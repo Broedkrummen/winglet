@@ -38,7 +38,7 @@ from aiohttp import WSMsgType, web
 
 from . import checkpoints as checkpoints_api, keys, recovery, uploads, webpush
 from .projects import ProjectConflict, ProjectError, Projects
-from .event_replay import EventStream
+from .event_replay import EventStream, MAX_PAYLOAD
 from .store import ROLES, Store, new_id
 
 logger = logging.getLogger(__name__)
@@ -1825,7 +1825,21 @@ class Hub:
                     else:
                         event = {**event, "item": current}
                 shaped.append(self._shape(device, event, latest if "pending" in event else None))
-            reply["events"] = shaped
+            bounded = []
+            size = 0
+            for event in shaped:
+                encoded_size = len(json.dumps(event, ensure_ascii=False).encode("utf8"))
+                if encoded_size > MAX_PAYLOAD:
+                    event = {"type": "sync.hint", "reason": "oversize", "event_seq": event["event_seq"],
+                             "chat_id": event.get("chat_id")}
+                    encoded_size = len(json.dumps(event).encode("utf8"))
+                if size + encoded_size > 512 * 1024:
+                    reply["has_more"] = True
+                    reply["cursor"] = bounded[-1]["event_seq"]
+                    break
+                bounded.append(event)
+                size += encoded_size
+            reply["events"] = bounded
         await ws.send_json({"type": "resume", "scope": self._replay_scope(device), **reply})
 
     def sync_snapshot(self, device: Dict[str, Any]) -> Dict[str, Any]:

@@ -83,6 +83,22 @@ CREATE TABLE IF NOT EXISTS jobs (
     updated_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS jobs_created ON jobs (created_at);
+-- Opt-in phone tools (Assignment 11). Grants are per device and per tool; a scope of '' is the main bot,
+-- a bot name is that bot, and '*' is every bot on this server. Events are metadata only: never the note,
+-- location, contact fields or event titles that a tool returned.
+CREATE TABLE IF NOT EXISTS phone_tool_grants (
+    device_id TEXT NOT NULL, tool TEXT NOT NULL, scope TEXT NOT NULL DEFAULT '',
+    mode TEXT NOT NULL DEFAULT 'ask', enabled INTEGER NOT NULL DEFAULT 1, updated_at REAL NOT NULL,
+    PRIMARY KEY (device_id, tool)
+);
+CREATE INDEX IF NOT EXISTS phone_tool_grants_device ON phone_tool_grants (device_id);
+CREATE TABLE IF NOT EXISTS phone_tool_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, device_id TEXT NOT NULL DEFAULT '',
+    bot TEXT NOT NULL DEFAULT '', chat_id TEXT NOT NULL DEFAULT '', tool TEXT NOT NULL,
+    event TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS phone_tool_events_device ON phone_tool_events (device_id, ts);
+CREATE INDEX IF NOT EXISTS phone_tool_events_ts ON phone_tool_events (ts);
 """
 
 # Columns added after v0.3. Existing phones become owners, unverified until they scan a fresh code.

@@ -28,7 +28,7 @@ from gateway.platforms._shared import extra_or_secret, get_scoped_secret, seed_e
 from gateway.platforms.base import BasePlatformAdapter, ExecApprovalPrompt, SendResult
 from gateway.platforms.event import MessageEvent, MessageType
 
-from . import bridge, cli, execution, hermes_api, teamwork
+from . import bridge, checkpoints, cli, execution, hermes_api, teamwork
 from .dependencies import missing_dependencies
 from .store import Store
 
@@ -255,6 +255,9 @@ class WingletAdapter(BasePlatformAdapter):
             hub.hermes_version = hermes_api.hermes_version
             hub.commands_provider = hermes_api.list_commands
             hub.hermes = hermes_api
+            # Hermes's own workspace snapshots, only where this Hermes keeps them.
+            hub.checkpoints = (checkpoints.CheckpointService(hermes_api, busy=hub.busy_chats)
+                               if hermes_api.checkpoints_available() else None)
             hub.chat_model = self._chat_model
             # Structured task activity is on only when every hook it needs was accepted. Old Hermes
             # versions, or a host that refuses hooks, keep the feature off rather than showing guesses.

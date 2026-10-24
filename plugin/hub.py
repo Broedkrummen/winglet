@@ -36,7 +36,7 @@ from urllib.parse import quote, unquote, urlsplit
 
 from aiohttp import WSMsgType, web
 
-from . import keys, recovery, uploads, webpush
+from . import checkpoints as checkpoints_api, keys, recovery, uploads, webpush
 from .projects import ProjectConflict, ProjectError, Projects
 from .store import ROLES, Store, new_id
 
@@ -128,6 +128,7 @@ ROUTE_POLICY = {
     "h_devices": "owner", "h_audit": "owner",
     "h_agent": "device", "h_picker_select": "owner",
     "h_chat_goal": "device", "h_goals": "device", "h_search": "device", "h_chat_files": "device",
+    "h_checkpoints": "owner", "h_checkpoint": "owner", "h_checkpoint_restore": "owner_signed",
     "h_task": "device",
     "h_projects": "device", "h_project_create": "signed", "h_project_update": "signed",
     "h_project_order": "signed", "h_project_delete": "signed", "h_project_chat_create": "signed",
@@ -256,6 +257,9 @@ class Hub:
         # Hermes functions for model, providers, persona, memory and usage (plugin/hermes_api.py),
         # installed by the adapter; None turns those features off.
         self.hermes: Any = None
+        # Workspace checkpoints (plugin/checkpoints.py), installed by the adapter when Hermes keeps
+        # them; None hides the feature entirely.
+        self.checkpoints: Optional[checkpoints_api.CheckpointService] = None
         # chat id -> the model that chat is really using, when Hermes knows (installed by the adapter).
         self.chat_model: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None
         # chat id -> the standing goal (/goal) its Hermes session is working on (installed by the adapter).
@@ -316,6 +320,9 @@ class Hub:
         r.add_get("/api/chats/{chat_id}/goal", self.h_chat_goal)
         r.add_get("/api/task", self.h_task)
         r.add_get("/api/chats/{chat_id}/files", self.h_chat_files)
+        r.add_get("/api/checkpoints", self.h_checkpoints)
+        r.add_get("/api/checkpoints/{hash}", self.h_checkpoint)
+        r.add_post("/api/checkpoints/{hash}/restore", self.h_checkpoint_restore)
         r.add_get("/api/goals", self.h_goals)
         r.add_get("/api/search", self.h_search)
         r.add_get("/api/projects", self.h_projects)
@@ -717,6 +724,7 @@ class Hub:
 
     def features(self) -> Dict[str, bool]:
         """What this server can do. The app hides anything that isn't listed as true."""
+        checkpoints = self.checkpoints is not None
         branching = bool(self.branching is not None and self._has(self.branching, "available")
                          and self.branching.available())
         return {"webpush": True, "ntfy": True, "approvals": True, "questions": True, "uploads": True, "voice": True,
@@ -727,6 +735,9 @@ class Hub:
                 "sessions": self.hermes is not None and self._has(self.hermes, "sessions_available"),
                 "pets": self.hermes is not None and self._has(self.hermes, "pets_available"),
                 "bots": self.bots_provider is not None and self.hermes is not None and self._has(self.hermes, "bots_available"),
+                # Checkpoints: listing/preview, and the separate live restore this Hermes can do.
+                "checkpoints": checkpoints, "checkpoint_diff": checkpoints,
+                "checkpoint_restore": checkpoints and self.checkpoints.can_restore,
                 "chat_branching": branching, "message_editing": branching, "regeneration": branching,
                 "task_activity": self.execution is not None,
                 "connection_status": True, "projects": True}
@@ -1342,6 +1353,78 @@ class Hub:
         chat = self._visible_chat(device, request.match_info["chat_id"])
         return _json({"files": self.store.chat_attachments(chat["id"])})
 
+    # -- workspace checkpoints: Hermes's snapshots of the folder it works in ---------------------
+    #
+    # Owners only: a checkpoint names files on the server and a restore changes them. Reading is a
+    # plain owner request; restoring is a signed owner action and never part of the offline outbox.
+
+    def _checkpoints(self) -> "checkpoints_api.CheckpointService":
+        if self.checkpoints is None:
+            raise web.HTTPNotFound(text=json.dumps({"error": "This server can't show checkpoints."}),
+                                   content_type="application/json")
+        return self.checkpoints
+
+    @staticmethod
+    def _checkpoint_refusal(exc: "checkpoints_api.CheckpointError") -> web.Response:
+        payload: Dict[str, Any] = {"error": str(exc), **exc.extra}
+        if exc.needs:
+            payload["needs"] = exc.needs
+        return _json(payload, status=exc.status)
+
+    async def h_checkpoints(self, request: web.Request) -> web.Response:
+        """The workspace's checkpoints, with the exact folder and whether restoring is possible."""
+        self._require(request)
+        service = self._checkpoints()
+        try:
+            return _json(await service.listing())
+        except checkpoints_api.CheckpointError as exc:
+            return self._checkpoint_refusal(exc)
+        except Exception:
+            logger.warning("[winglet] could not list checkpoints", exc_info=True)
+            return _error(502, "Hermes couldn't read its checkpoints just now. Try again.")
+
+    async def h_checkpoint(self, request: web.Request) -> web.Response:
+        """One checkpoint: what changed since, bounded, with the revision a restore must match."""
+        self._require(request)
+        service = self._checkpoints()
+        try:
+            return _json(await service.preview(request.match_info["hash"]))
+        except checkpoints_api.CheckpointError as exc:
+            return self._checkpoint_refusal(exc)
+        except Exception:
+            logger.warning("[winglet] could not preview a checkpoint", exc_info=True)
+            return _error(502, "Hermes couldn't read those changes just now. Try again.")
+
+    async def h_checkpoint_restore(self, request: web.Request) -> web.Response:
+        """Put the workspace back as it was at a checkpoint, after it was previewed and signed for."""
+        device = self._require(request)
+        service = self._checkpoints()
+        body = await self._body(request)
+        # A safe restore is the default; anything but an explicit JSON false keeps it safe.
+        safe = body.get("safe", True)
+        if not isinstance(safe, bool):
+            safe = True
+        try:
+            result = await service.restore(
+                request.match_info["hash"], revision=str(body.get("revision") or ""),
+                safe=safe, operation_id=str(body.get("operation_id") or ""),
+                device=device["name"])
+        except checkpoints_api.CheckpointError as exc:
+            self.audit("checkpoint.restore", device, f"refused: {exc}", outcome="refused")
+            return self._checkpoint_refusal(exc)
+        except Exception:
+            logger.warning("[winglet] could not restore a checkpoint", exc_info=True)
+            return _error(502, "Hermes couldn't restore that checkpoint just now.")
+        if result.get("ok"):
+            self.audit("checkpoint.restore", device, result.get("message") or "restored a checkpoint")
+        else:
+            self.audit("checkpoint.restore", device, f"failed: {result.get('error') or 'unknown error'}",
+                       outcome="failed")
+        # Other owners' phones refresh their list; members never receive checkpoint events.
+        await self.broadcast({"type": "checkpoint.restored", "bot": _BOT.get(), "at": time.time(),
+                              "result": result, "by": device["name"]})
+        return _json({"result": result})
+
     async def h_commands(self, request: web.Request) -> web.Response:
         """Slash commands this Hermes accepts from the app, with their hints."""
         device = self._require(request)
@@ -1504,6 +1587,15 @@ class Hub:
         await self.broadcast({"type": "message.delete", "chat_id": message["chat_id"], "message_id": message_id})
         return True
 
+    def busy_chats(self) -> List[str]:
+        """This bot's chats with a reply running now, by name. A workspace restore waits for them."""
+        names = []
+        for chat_id in self._typing:
+            chat = self.store.get_chat(chat_id)
+            if chat is not None and (chat.get("bot") or None) == _BOT.get():
+                names.append(str(chat.get("title") or chat_id))
+        return sorted(names)
+
     async def set_typing(self, chat_id: str, on: bool) -> None:
         """``on`` is re-sent every few seconds while the agent works; the app expires it after ~8s."""
         if not on and chat_id not in self._typing:
@@ -1640,7 +1732,7 @@ class Hub:
             return True
         if event.get("type") == "system.paused":
             return True
-        if str(event.get("type") or "").startswith("system."):
+        if str(event.get("type") or "").startswith(("system.", "checkpoint.")):
             return False
         if event.get("type") == "chat.delete":
             return event.get("owner_device") == device["id"]

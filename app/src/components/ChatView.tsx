@@ -25,7 +25,7 @@ import { chatMessages, groupActivity, isActivity, type Entry } from '../lib/mess
 import { useModelSheet } from '../lib/modelSheet';
 import { easeOut, spring, useReducedMotion } from '../lib/motion';
 import { usePrefs } from '../lib/prefs';
-import { homeChat, isTyping, useApp, useServerState } from '../lib/store';
+import { homeChat, isOwner, isTyping, useApp, useServerState } from '../lib/store';
 import { plainText } from '../lib/text';
 import { FIXED } from '../lib/theme';
 import { makeStyles, useTheme } from '../lib/themeContext';
@@ -230,7 +230,9 @@ export function ChatView({ server, chatId, showBack, embedded, landing }: { serv
         dockHeight={dockHeight} frame={petFrame} sent={sendCount} perched={!landing} /> : null}
       <ChatMenu server={server} chatId={chatId} title={title} visible={menu} onClose={() => setMenu(false)}
         onGoal={goalsSupported && chat?.kind !== 'home' ? () => setGoalOpen(true) : undefined} hasGoal={!!goal && goal.status !== 'done'}
-        onFiles={runtime?.info?.features?.files ? () => setFilesOpen(true) : undefined} onDeleted={() => router.replace('/chats')} onArchived={() => router.replace('/chats')} />
+        onFiles={runtime?.info?.features?.files ? () => setFilesOpen(true) : undefined}
+        onCheckpoints={runtime?.info?.features?.checkpoints && isOwner(runtime) ? () => router.push('/checkpoints') : undefined}
+        onDeleted={() => router.replace('/chats')} onArchived={() => router.replace('/chats')} />
       <GoalSheet server={server} chatId={chatId} goal={goal} visible={goalOpen} onClose={() => setGoalOpen(false)} onChanged={refreshGoal} />
       <FilesSheet server={server} chatId={chatId} visible={filesOpen} onClose={() => setFilesOpen(false)}
         onJump={(id) => requestFocus(server.id, chatId, id)} />

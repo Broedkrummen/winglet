@@ -1,0 +1,11 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+group = 'dev.winglet'
+version = '1.0.0'
+android { namespace 'expo.modules.wingletphonetools' }
+dependencies {
+  implementation 'androidx.core:core-ktx:1.17.0'
+  implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2'
+}

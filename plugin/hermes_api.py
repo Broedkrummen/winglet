@@ -56,6 +56,131 @@ async def cache_media(path: str, name: str, mime: str, voice: bool = False):
     return cached.path, cached.media_type, cached.kind
 
 
+# -- hands-free voice: the profile's own speech-to-text and text-to-speech --------------------
+#
+# Winglet's live voice is turn-based: the app records one utterance, this server transcribes it
+# with the same provider chain Hermes uses for voice notes, the transcript becomes a normal chat
+# message, and the finished reply is synthesized with the same TTS chain as `/speak`. The app
+# never receives provider keys. Both operations run off the event loop under the profile's scope.
+
+_SPEECH_MIME_BY_EXT = {
+    ".mp3": "audio/mpeg", ".ogg": "audio/ogg", ".opus": "audio/ogg", ".wav": "audio/wav",
+    ".flac": "audio/flac", ".m4a": "audio/mp4", ".aac": "audio/aac",
+}
+
+
+def speech_available() -> bool:
+    """Whether this Hermes has the two functions the voice loop calls. A missing one leaves the
+    capability false rather than half-working."""
+    try:
+        from tools.voice_mode import transcribe_recording
+        from tools.tts_tool import text_to_speech_tool
+    except Exception:
+        logger.debug("[winglet] speech functions unavailable")
+        return False
+    return callable(transcribe_recording) and callable(text_to_speech_tool)
+
+
+def _speech_error(message: str) -> str:
+    """A user-facing reason, on one line and short enough for a phone toast."""
+    # Provider responses may embed credentials, signed URLs or private request bodies.
+    return "Speech provider failed. Check the configured speech provider and try again."
+
+
+class SpeechBackend:
+    """One object the hub can call without importing Hermes itself (plugin/live_voice.py)."""
+
+    def __init__(self) -> None:
+        self._available: Optional[bool] = None
+
+    def available(self) -> bool:
+        if self._available is None:
+            self._available = speech_available()
+        return self._available
+
+    def status(self) -> dict:
+        """Configured provider names for the app's explicit provider choice (never secrets)."""
+        out = {"stt": {"provider": ""}, "tts": {"provider": ""}}
+        try:
+            from tools.transcription_tools import _get_provider as stt_provider, _load_stt_config
+            with _profile_scope():
+                out["stt"]["provider"] = str(stt_provider(_load_stt_config()) or "")
+        except Exception:
+            logger.debug("[winglet] could not read the STT provider")
+        try:
+            from tools.tts_tool import _get_provider as tts_provider, _load_tts_config
+            with _profile_scope():
+                out["tts"]["provider"] = str(tts_provider(_load_tts_config()) or "")
+        except Exception:
+            logger.debug("[winglet] could not read the TTS provider")
+        return out
+
+    async def transcribe(self, path: str, mime: str) -> dict:
+        """A whole utterance as text. An empty transcript is silence, not a failure."""
+        import asyncio
+
+        def run() -> dict:
+            with _profile_scope():
+                from tools.voice_mode import transcribe_recording
+                return transcribe_recording(path)
+
+        try:
+            result = await asyncio.to_thread(run)
+        except Exception as exc:
+            logger.warning("[winglet] speech-to-text provider failed")
+            raise ValueError(_speech_error(f"Transcription failed: {exc}")) from exc
+        if not isinstance(result, dict):
+            raise ValueError("Transcription failed: unexpected response.")
+        if not result.get("success"):
+            error = str(result.get("error") or "Transcription failed.")
+            # Hermes's own audio bridge treats "empty transcript" as silence: a quiet room should
+            # re-listen, not show a failure card.
+            if "empty transcript" in error.lower():
+                return {"text": "", "provider": str(result.get("provider") or ""), "no_speech": True}
+            raise ValueError(_speech_error(error))
+        text = str(result.get("transcript") or "").strip()
+        return {"text": text, "provider": str(result.get("provider") or ""), "no_speech": not text}
+
+    async def speak(self, text: str) -> tuple:
+        """Synthesized audio as (bytes, mime, provider). The temporary file is always removed."""
+        import asyncio
+
+        def run() -> tuple:
+            import os
+            from pathlib import Path
+
+            with _profile_scope():
+                from tools.tts_tool import text_to_speech_tool
+                raw = text_to_speech_tool(text=text)
+                try:
+                    payload = json.loads(raw) if isinstance(raw, str) else raw
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("Speech synthesis returned an unreadable response.") from exc
+                if not isinstance(payload, dict) or not payload.get("success"):
+                    error = payload.get("error") if isinstance(payload, dict) else ""
+                    raise ValueError(_speech_error(str(error or "Speech synthesis failed.")))
+                paths = [p for p in (payload.get("file_paths") or [payload.get("file_path")]) if p]
+                if not paths:
+                    raise ValueError("Speech synthesis returned no audio.")
+                first = Path(paths[0])
+                try:
+                    if len(paths) != 1:
+                        raise ValueError(_speech_error("The provider returned multiple audio files."))
+                    data = first.read_bytes()
+                finally:
+                    for name in paths:
+                        try:
+                            os.unlink(name)
+                        except OSError:
+                            pass
+                if not data:
+                    raise ValueError("Speech synthesis returned empty audio.")
+                mime = _SPEECH_MIME_BY_EXT.get(first.suffix.lower(), "audio/mpeg")
+                return data, mime, str(payload.get("provider") or "")
+
+        return await asyncio.to_thread(run)
+
+
 def list_commands() -> list:
     """Gateway slash commands and skill commands, for the app's command palette."""
     with _profile_scope():  # each bot has its own skills, so its own commands
@@ -595,7 +720,7 @@ def _cron():
 
 
 _JOB_FIELDS = ("id", "name", "prompt", "schedule_display", "state", "enabled", "next_run_at", "last_run_at",
-               "last_status", "last_error", "deliver", "created_at", "paused_reason")
+               "last_status", "last_error", "deliver", "created_at", "paused_reason", "manual_run_at")
 
 
 def _job_view(job: dict) -> dict:
@@ -659,6 +784,139 @@ def change_routine(job_id: str, action: str, updates: Optional[dict] = None) -> 
     return _job_view(job) if job else None
 
 
+def routine_history_available() -> bool:
+    try:
+        from cron import executions, jobs
+        from hermes_state import SessionDB
+        from hermes_time import get_timezone_name
+        return (all(callable(getattr(executions, k, None)) for k in ('list_executions', 'get_execution', '_owner_is_live'))
+                and all(callable(getattr(jobs, k, None)) for k in ('_current_cron_store', '_normalize_job_record', 'get_cron_output_dir'))
+                and isinstance(getattr(executions, 'MAX_TERMINAL_EXECUTIONS', None), int)
+                and hasattr(executions, 'EXECUTIONS_FILE')
+                and callable(get_timezone_name) and callable(getattr(SessionDB, 'list_cron_job_runs', None)))
+    except Exception:
+        return False
+
+
+@_scoped
+def routine_history_source(routine_id: Optional[str] = None) -> dict:
+    """Read the pinned scheduler's real ledger, output documents and session records.
+
+    No recovery/migration/tick API is invoked: observation cannot execute a job or rewrite
+    Hermes state. All paths resolve inside the current authenticated profile context.
+    """
+    import hashlib
+    import re
+    import sqlite3
+    from pathlib import Path
+    from cron import executions
+    from hermes_constants import get_hermes_home
+    from hermes_time import get_timezone_name, now
+    from hermes_state import SessionDB
+    if not routine_history_available(): raise HermesUnavailable('routine history unavailable')
+    if routine_id is not None and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', routine_id):
+        raise HermesRefused('Invalid routine identity.')
+    home = get_hermes_home().resolve()
+    # list_jobs() invokes load_jobs() repair and latest_executions() schema setup.
+    # Observe the canonical file directly so opening History cannot repair or execute.
+    jobs_path = _cron()._current_cron_store().jobs_file
+    if jobs_path.is_file():
+        with jobs_path.open('rb') as handle: raw_jobs = handle.read(4 * 1024 * 1024 + 1)
+        if len(raw_jobs) > 4 * 1024 * 1024: raise HermesUnavailable('Routine definitions exceed the read bound.')
+        data = json.loads(raw_jobs)
+        jobs = data.get('jobs', []) if isinstance(data, dict) else data
+        if not isinstance(jobs, list) or any(not isinstance(j, dict) for j in jobs):
+            raise HermesUnavailable('Routine definitions need repair in Hermes.')
+        jobs = [_cron()._normalize_job_record(j) for j in jobs]
+    else: jobs = []
+    ledger = Path(executions.EXECUTIONS_FILE) if executions.EXECUTIONS_FILE else home / 'cron/executions.db'
+    records = []
+    complete_executions = True
+    complete_records = True
+    coverage_from = None
+    if ledger.is_file():
+        db = sqlite3.connect(ledger.resolve().as_uri() + '?mode=ro', uri=True, timeout=0.5)
+        db.row_factory = sqlite3.Row
+        try:
+            db.execute('PRAGMA query_only=ON')
+            db.execute('BEGIN')  # Counts, coverage and rows describe one consistent ledger snapshot.
+            where, args = (' WHERE job_id=?', (routine_id,)) if routine_id else ('', ())
+            count = db.execute('SELECT COUNT(*) FROM executions' + where, args).fetchone()[0]
+            terminals = db.execute("SELECT COUNT(*) FROM executions WHERE status IN ('completed','failed','unknown')").fetchone()[0]
+            complete_records = count <= 5000
+            complete_executions = complete_records
+            if terminals >= executions.MAX_TERMINAL_EXECUTIONS:
+                # Native pruning removes the oldest FINISHED terminal rows, never active
+                # attempts. Beyond this boundary all potentially overlapping rows survive.
+                oldest = db.execute("SELECT finished_at FROM executions WHERE status IN ('completed','failed','unknown') ORDER BY julianday(finished_at),finished_at LIMIT 1").fetchone()
+                coverage_from = oldest[0] if oldest else None
+                if not coverage_from: complete_executions = False
+            records = [dict(x) for x in db.execute('SELECT * FROM executions' + where + ' ORDER BY julianday(claimed_at) DESC,claimed_at DESC,id DESC LIMIT 5000', args)]
+        finally: db.close()
+    for record in records:
+        if record.get('status') in {'claimed', 'running'}:
+            try: record['owner_gone'] = not executions._owner_is_live(int(record['pid']), record.get('process_started_at'))
+            except Exception: record['owner_gone'] = False
+    selected = [routine_id] if routine_id else list(dict.fromkeys(str(x['job_id']) for x in records))[:40]
+    output_root = _cron().get_cron_output_dir().resolve()
+    outputs = []
+    complete_outputs = True
+    for job_id in selected:
+        if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', job_id): continue
+        directory = (output_root / job_id).resolve()
+        if directory.parent != output_root or not directory.is_dir(): continue
+        files = []
+        for path in directory.glob('*.md'):
+            try:
+                if path.is_file() and path.resolve().parent == directory:
+                    files.append((path.stat().st_mtime, path))
+            except FileNotFoundError: continue
+        if len(files) > 50: complete_outputs = False
+        files = [path for _, path in sorted(files, key=lambda x: x[0], reverse=True)[:50]]
+        for path in files:
+            try:
+                with path.open('rb') as handle: raw = handle.read(65537)
+                stamp = path.stat().st_mtime
+            except (FileNotFoundError, PermissionError): continue
+            digest = hashlib.sha256((job_id + ':' + path.name).encode() + raw).hexdigest()[:32]
+            outputs.append({'id': digest, 'job_id': job_id, 'at': stamp,
+                            'text': raw[:65536].decode('utf8', errors='replace'), 'truncated': len(raw) > 65536})
+            if len(outputs) >= 200: break
+        if len(outputs) >= 200:
+            complete_outputs = False
+            break
+    sessions = []
+    complete_sessions = True
+    if (home / 'state.db').is_file():
+        db = SessionDB(db_path=home / 'state.db', read_only=True)
+        try:
+            for job_id in selected:
+                limit = min(200, 500-len(sessions))
+                batch = db.list_cron_job_runs(job_id, limit=limit, offset=0)
+                if len(batch) >= limit: complete_sessions = False
+                for row in batch:
+                    sessions.append({k: row.get(k) for k in ('id', 'started_at', 'ended_at', 'source') } | {'job_id': job_id})
+                if len(sessions) >= 500:
+                    complete_sessions = False
+                    break
+        finally: db.close()
+    return {'jobs': jobs[:1000], 'complete_jobs': len(jobs) <= 1000, 'executions': records,
+            'coverage_from': coverage_from, 'routine_id': routine_id, 'complete_records': complete_records, 'complete_executions': complete_executions, 'complete_outputs': complete_outputs, 'complete_sessions': complete_sessions, 'outputs': outputs, 'sessions': sessions, 'timezone': get_timezone_name() or str(now().tzinfo)}
+
+
+def watch_routine_history(callback):
+    """A supported content-free lifecycle wakeup; durable polling also covers other processes."""
+    try:
+        from agent.monitoring.emitter import get_emitter
+        emitter = get_emitter()
+        def observed(batch):
+            if any(getattr(event, 'EVENT', '') == 'cron_execution' or (isinstance(event, dict) and event.get('event') == 'cron_execution') for event in batch): callback()
+        emitter.subscribe(observed)
+        return lambda: emitter.unsubscribe(observed)
+    except Exception:
+        return lambda: None
+
+
 # -- goals ---------------------------------------------------------------------------------
 
 
@@ -694,6 +952,216 @@ def chat_goal(runner, session_key: str) -> Optional[dict]:
             "subgoals": list(state.subgoals), "last_verdict": state.last_verdict, "last_reason": state.last_reason,
             "paused_reason": state.paused_reason, "waiting_reason": state.waiting_reason if waiting else None,
             "created_at": state.created_at, "last_turn_at": state.last_turn_at}
+
+
+# -- workspace checkpoints --------------------------------------------------------------------
+#
+# Hermes snapshots the folder a bot works in just before the agent changes files (its own
+# /rollback, tools/checkpoint_manager.py). These read and restore those snapshots; they never
+# touch the transcript. A snapshot belongs to one folder and one Hermes profile.
+
+
+def checkpoints_available() -> bool:
+    """Whether this Hermes keeps filesystem checkpoints at all."""
+    try:
+        from tools.checkpoint_manager import CheckpointManager  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+def checkpoint_restore_available() -> bool:
+    """Whether it can also put them back (a list-only Hermes keeps the restore button hidden)."""
+    try:
+        from tools.checkpoint_manager import CheckpointManager
+    except Exception:
+        return False
+    return callable(getattr(CheckpointManager, "restore", None))
+
+
+def _checkpoint_dir() -> str:
+    """The folder this bot works in: Hermes's own terminal scope, never a caller-supplied path."""
+    import os
+    from pathlib import Path
+
+    raw = ""
+    try:
+        from gateway.run import _terminal_scope_cwd
+    except ImportError:
+        _terminal_scope_cwd = None
+    if _terminal_scope_cwd is not None:
+        # Raises rather than borrowing the launch profile's folder when a refusal scope is active.
+        raw = _terminal_scope_cwd("") or ""
+    else:
+        try:
+            from tools.terminal_scope import terminal_env
+            raw = terminal_env("TERMINAL_CWD", "") or ""
+        except Exception:
+            raw = os.environ.get("TERMINAL_CWD", "") or ""
+    path = Path(raw).expanduser() if raw else Path.cwd()
+    try:
+        return str(path.resolve(strict=False))
+    except OSError:
+        return str(path)
+
+
+def _display_path(path: str) -> str:
+    """A folder for the screen: its home is shown as ``~``, never the server's whole path."""
+    try:
+        from pathlib import Path
+        home = str(Path.home())
+        text = str(path)
+        if text == home:
+            return "~"
+        if text.startswith(home + ("\\" if "\\" in home else "/")):
+            return "~" + text[len(home):]
+        return text
+    except Exception:
+        return str(path)
+
+
+def _checkpoint_manager():
+    """Hermes's manager for this profile's checkpoint settings, or None if it has none."""
+    try:
+        from tools.checkpoint_manager import CheckpointManager
+    except Exception:
+        return None
+    try:
+        from hermes_cli.config import DEFAULT_CONFIG, load_config
+        config = load_config() or {}
+    except Exception as exc:
+        raise HermesUnavailable("checkpoint settings unavailable") from exc
+    section = config.get("checkpoints") if isinstance(config, dict) else None
+    if isinstance(section, bool):
+        section = {"enabled": section}
+    if not isinstance(section, dict):
+        section = {}
+    defaults = DEFAULT_CONFIG.get("checkpoints") if isinstance(DEFAULT_CONFIG, dict) else {}
+    defaults = defaults if isinstance(defaults, dict) else {}
+
+    def pick(name, fallback):
+        value = section.get(name, defaults.get(name, fallback))
+        return value
+
+    def number(name, fallback):
+        try:
+            return int(pick(name, fallback))
+        except (TypeError, ValueError):
+            return fallback
+
+    return CheckpointManager(enabled=bool(pick("enabled", False)), max_snapshots=number("max_snapshots", 20),
+                             max_total_size_mb=number("max_total_size_mb", 500),
+                             max_file_size_mb=number("max_file_size_mb", 10))
+
+
+def _checkpoint_epoch(value) -> float:
+    from datetime import datetime
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _checkpoint_workspace(manager) -> str:
+    """The folder Hermes checkpoints for this bot: its project-marker resolution, or the cwd."""
+    directory = _checkpoint_dir()
+    try:
+        return str(manager.get_working_dir_for_path(directory))
+    except Exception:
+        logger.debug("[winglet] checkpoint folder resolution failed", exc_info=True)
+        return directory
+
+
+@_scoped
+def checkpoints_state() -> dict:
+    """{supported, enabled, reason, can_restore, workspace}: what this bot can do with checkpoints."""
+    import os
+
+    manager = _checkpoint_manager()
+    if manager is None:
+        return {"supported": False, "enabled": False, "can_restore": False,
+                "reason": "This Hermes version doesn't keep checkpoints.", "workspace": {"path": "", "name": ""}}
+    directory = _checkpoint_workspace(manager)
+    reason = ""
+    try:
+        # Refused for a container terminal: the paths belong inside the container, not this host.
+        reason = str(manager.unsupported_backend_reason() or "")
+    except Exception:
+        reason = ""
+    enabled = bool(manager.enabled) and not reason
+    if not manager.enabled:
+        reason = ""
+    return {"supported": True, "enabled": enabled, "reason": reason,
+            "can_restore": callable(getattr(manager, "restore", None)),
+            "workspace": {"path": _display_path(directory), "name": os.path.basename(directory.rstrip("/\\")) or directory}}
+
+
+@_scoped
+def list_checkpoints() -> list:
+    """The workspace's snapshots, newest first, in one shape whatever Hermes calls the fields."""
+    manager = _checkpoint_manager()
+    if manager is None:
+        raise HermesUnavailable("checkpoints unavailable")
+    directory = _checkpoint_workspace(manager)
+    rows = []
+    for entry in manager.list_checkpoints(directory) or []:
+        if not isinstance(entry, dict):
+            continue
+        digest = str(entry.get("hash") or "")
+        rows.append({"hash": digest, "short": str(entry.get("short_hash") or digest[:8]),
+                     "at": _checkpoint_epoch(entry.get("timestamp")),
+                     "label": str(entry.get("reason") or "Checkpoint"),
+                     "files": int(entry.get("files_changed") or 0),
+                     "insertions": int(entry.get("insertions") or 0),
+                     "deletions": int(entry.get("deletions") or 0)})
+    return rows
+
+
+@_scoped
+def checkpoint_diff(commit_hash: str) -> dict:
+    """What changed in the workspace since a checkpoint: {success, stat, diff} or {success: False, error}."""
+    manager = _checkpoint_manager()
+    if manager is None:
+        raise HermesUnavailable("checkpoints unavailable")
+    directory = _checkpoint_workspace(manager)
+    result = manager.diff(directory, commit_hash)
+    return dict(result) if isinstance(result, dict) else {"success": False, "error": "Couldn't read the changes."}
+
+
+@_scoped
+def restore_checkpoint(commit_hash: str, safe: bool = True) -> dict:
+    """Put the workspace files back as they were at a checkpoint, Hermes's own safe restore when
+    asked: files the owner edited themselves since are left alone."""
+    manager = _checkpoint_manager()
+    if manager is None:
+        raise HermesUnavailable("checkpoints unavailable")
+    directory = _checkpoint_workspace(manager)
+    if safe:
+        # Hermes falls back to a full restore when its write ledger is empty. Keep the
+        # app's safe-mode promise: validate its plan inside the manager's own store lock.
+        # This manager belongs to this call; no global patch or second lock is needed.
+        planner = getattr(manager, "_safe_restore_plan", None)
+        refusal = {"success": False, "error": (
+            "Hermes can't safely distinguish your edits because its file-write history is unavailable. "
+            "Nothing was restored. To overwrite your edits too, turn on "
+            "'Also revert files I edited myself' and confirm again.")}
+        if not callable(planner):
+            return refusal
+
+        def guarded_plan(*args, **kwargs):
+            plan = planner(*args, **kwargs)
+            if isinstance(plan, dict) and plan.get("success") is False:
+                return plan
+            if (not isinstance(plan, dict) or plan.get("success") is not True
+                    or plan.get("ledger_empty")
+                    or not isinstance(plan.get("restore"), list)
+                    or not isinstance(plan.get("skipped"), list)):
+                return dict(refusal)
+            return plan
+
+        manager._safe_restore_plan = guarded_plan
+    result = manager.restore(directory, commit_hash, safe=bool(safe))
+    return dict(result) if isinstance(result, dict) else {"success": False, "error": "The restore failed."}
 
 
 # -- abilities: skills, toolsets, MCP servers ------------------------------------------------

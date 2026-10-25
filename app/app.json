@@ -56,7 +56,7 @@
       [
         "expo-audio",
         {
-          "microphonePermission": "Winglet records a voice note while you hold the mic button.",
+          "microphonePermission": "Winglet uses the microphone for voice notes and hands-free voice after you tap to start. Recording stops when you leave the foreground.",
           "enableBackgroundRecording": false,
           "enableBackgroundPlayback": false
         }

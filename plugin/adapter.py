@@ -28,7 +28,7 @@ from gateway.platforms._shared import extra_or_secret, get_scoped_secret, seed_e
 from gateway.platforms.base import BasePlatformAdapter, ExecApprovalPrompt, SendResult
 from gateway.platforms.event import MessageEvent, MessageType
 
-from . import bridge, cli, hermes_api, teamwork
+from . import bridge, checkpoints, cli, execution, hermes_api, teamwork
 from .dependencies import missing_dependencies
 from .store import Store
 
@@ -46,6 +46,33 @@ GENERAL_CHAT_ID = "general"
 RECONCILE_SECONDS = 5.0
 MAX_MESSAGE_LENGTH = 16_000
 _TRUTHY = ("1", "true", "yes", "on")
+
+# -- structured execution activity ------------------------------------------------------------
+#
+# Hermes fires plugin hooks for every platform and every profile in this process. The tracker below is
+# shared by the one Winglet adapter this gateway runs; its resolvers keep only sessions that really
+# belong to a Winglet chat, and only that chat's bot.
+
+_TRACKER: Optional[execution.Tracker] = None
+_TRACKER_HOOKS: Dict[str, bool] = {}
+_ACTIVE: Optional["WingletAdapter"] = None
+
+
+def _resolve_session_chat(session_id: str) -> Optional[Dict[str, Any]]:
+    adapter = _ACTIVE
+    return adapter._session_chat(session_id) if adapter is not None else None
+
+
+def _resolve_session_key_chat(session_key: str) -> Optional[str]:
+    adapter = _ACTIVE
+    return adapter._session_key_chat(session_key) if adapter is not None else None
+
+
+def _publish_task_event(event: Dict[str, Any]) -> None:
+    adapter = _ACTIVE
+    if adapter is not None:
+        adapter._publish_task_event(event)
+
 
 PLATFORM_HINT = (
     "You are talking to your owner through Winglet, their personal mobile app. It renders full "
@@ -196,8 +223,13 @@ class WingletAdapter(BasePlatformAdapter):
         self._runner = None
         self._tunnel = None
         self._reconcile_task: Optional[asyncio.Task] = None
+        self._routine_history_due = 0.0
+        self._unwatch_routines = lambda: None
         # (chat_id, status_key) -> message id, so a repeated status edits one line in place.
         self._status_ids: Dict[tuple, str] = {}
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        # Broadcasts started by hook callbacks; kept referenced until they finish.
+        self._execution_tasks: set = set()
 
     # -- lifecycle -------------------------------------------------------------------------
 
@@ -225,7 +257,29 @@ class WingletAdapter(BasePlatformAdapter):
             hub.hermes_version = hermes_api.hermes_version
             hub.commands_provider = hermes_api.list_commands
             hub.hermes = hermes_api
+            if hermes_api.routine_history_available():
+                from .routine_history import RoutineHistory
+                hub.routine_history = RoutineHistory(Path(store.path).parent / 'routine-history.sqlite')
+                self._unwatch_routines = hermes_api.watch_routine_history(lambda: setattr(self, '_routine_history_due', 0.0))
+            # Speech-to-text and text-to-speech from this profile's own configuration. The app only sees
+            # the capability and provider names; keys and models stay on the server.
+            hub.speech = hermes_api.SpeechBackend() if hermes_api.speech_available() else None
+            # Hermes's own workspace snapshots, only where this Hermes keeps them.
+            hub.checkpoints = (checkpoints.CheckpointService(hermes_api, busy=hub.busy_chats)
+                               if hermes_api.checkpoints_available() else None)
             hub.chat_model = self._chat_model
+            # Structured task activity is on only when every hook it needs was accepted. Old Hermes
+            # versions, or a host that refuses hooks, keep the feature off rather than showing guesses.
+            self._loop = asyncio.get_running_loop()
+            from . import phone_tools_hermes
+            if phone_tools_hermes._REGISTERED:
+                from .phone_tools import PhoneTools
+                hub.phone_tools = PhoneTools(hub)
+            global _ACTIVE
+            _ACTIVE = self
+            if _TRACKER is not None and _TRACKER_HOOKS and all(_TRACKER_HOOKS.values()):
+                _TRACKER.reset()
+                hub.execution = _TRACKER
             # The app only offers goals when this Hermes has them (features.goals).
             hub.chat_goal = self._chat_goal if hermes_api.goals_available() else None
             hub.command_resolver = hermes_api.resolve_command
@@ -239,6 +293,25 @@ class WingletAdapter(BasePlatformAdapter):
             # Members' tool limits hold only if every turn's final toolsets can be capped (see toolset_limit).
             hub.limits_members = hermes_api.limit_turn_toolsets(self.gateway_runner, PLATFORM) \
                 if getattr(self, "gateway_runner", None) is not None else False
+            # Conversation branching is installed here and fails closed inside HermesBranchBridge
+            # when this Hermes lacks the session-store operations it needs.
+            from .branching import BranchService
+            hub.branching = BranchService(hub, self)
+            from .context_insights import ContextInsights
+            hub.context_insights = ContextInsights(hub, self)
+            from .processes import Processes
+            hub.processes = Processes(self)
+            # A private hosted-room worker reuses Hermes's durable scheduler. It
+            # owns separate storage and never adopts the user's dashboard rooms.
+            from .rooms import Rooms
+            from .rooms_hermes import build_worker
+            try:
+                worker = await asyncio.to_thread(build_worker, self, Path(store.path).parent / "rooms-runtime.sqlite", hub)
+                hub.rooms = Rooms(hub, worker, Path(store.path).parent / "rooms-meta.sqlite")
+                worker.start()
+            except Exception:
+                logger.warning("[%s] hosted rooms unavailable on this Hermes", self.name, exc_info=True)
+
             from gateway.platforms.shared_ingress import bind_listener
             # No access log: device tokens ride in WebSocket/media query strings and must not reach log files.
             self._runner = await bind_listener(self, hub.build_app(), self._host, self._port, "/api/ws",
@@ -264,18 +337,30 @@ class WingletAdapter(BasePlatformAdapter):
 
     async def disconnect(self) -> None:
         self._running = False
+        self._unwatch_routines()
         self._mark_disconnected()
+        global _ACTIVE
+        if _ACTIVE is self:
+            _ACTIVE = None
+        if _TRACKER is not None:
+            _TRACKER.reset()
+        self._loop = None
+        self._execution_tasks.clear()
         if self._tunnel is not None:
             await self._tunnel.stop()
             self._tunnel = None
         if self._reconcile_task is not None:
             self._reconcile_task.cancel()
+            try: await self._reconcile_task
+            except asyncio.CancelledError: pass
             self._reconcile_task = None
         if self._runner is not None:
             await self._runner.cleanup()
             self._runner = None
         if self._hub is not None:
             await self._hub.aclose()
+            if self._hub.routine_history is not None:
+                await asyncio.to_thread(self._hub.routine_history.close)
             self._hub.store.close()
             self._hub = None
 
@@ -344,9 +429,21 @@ class WingletAdapter(BasePlatformAdapter):
             # A routine (cron job) delivered its result: keep it in the chat and surface it in the inbox.
             name = _routine_name(str(metadata["job_id"]))
             text = _unwrap_routine(text)
-            message = await hub.post_message(chat_id, text, push=False, meta={"routine": name} if name else None)
-            await hub.add_inbox("result", chat_id, f"Routine finished: {name}"[:120] if name else "Routine finished", text,
-                                {"message_id": message["id"], "job_id": metadata["job_id"]})
+            job_id = str(metadata['job_id'])
+            run_id = None
+            if getattr(hub, 'routine_history', None) is not None:
+                chat = hub.store.get_chat(chat_id)
+                bot = (chat or {}).get('bot')
+                try:
+                    with hub._bot_context(bot):
+                        await hub._sync_routine_history(job_id)
+                        run_id = hub.routine_history.delivery_run(bot, job_id, text)
+                except Exception:
+                    logger.debug('Routine delivery history is not available yet', exc_info=True)
+            link = {'routine_id': job_id, **({'run_id': run_id} if run_id else {})}
+            message = await hub.post_message(chat_id, text, push=False, meta={'routine': name, **link})
+            await hub.add_inbox("result", chat_id, f"Routine result: {name}"[:120] if name else "Routine result", text,
+                                {"message_id": message["id"], "job_id": job_id, **link})
         elif metadata.get("expect_edits"):
             message = await hub.post_message(chat_id, text, status="streaming")
         else:
@@ -479,6 +576,74 @@ class WingletAdapter(BasePlatformAdapter):
         event = MessageEvent(text="/reload-mcp", message_type=MessageType.COMMAND, source=source,
                              timestamp=datetime.now(tz=timezone.utc))
         return await hermes_api.reload_mcp(getattr(self, "gateway_runner", None), event)
+
+    # -- structured execution activity ---------------------------------------------------------
+
+    def _chat_for_entry(self, entry: Any) -> Optional[Dict[str, Any]]:
+        """The Winglet chat (and bot) a Hermes session entry belongs to, or None.
+
+        Authority is Hermes's own session record: its origin platform must be Winglet, the chat must
+        still exist here, and the profile must be that chat's bot. A session for Telegram, a removed
+        bot, a deleted chat or another profile produces no activity in this app.
+        """
+        hub = self._hub
+        if hub is None or entry is None:
+            return None
+        origin = getattr(entry, "origin", None)
+        platform = getattr(origin, "platform", None)
+        if str(getattr(platform, "value", platform) or "") != PLATFORM:
+            return None
+        chat_id = str(getattr(origin, "chat_id", "") or "")
+        if not chat_id:
+            return None
+        chat = hub.store.get_chat(chat_id)
+        if chat is None:
+            return None
+        profile = getattr(origin, "profile", None) or None
+        if (chat.get("bot") or None) != profile:
+            return None
+        return {"chat_id": chat_id, "bot": profile}
+
+    def _session_chat(self, session_id: str) -> Optional[Dict[str, Any]]:
+        store = getattr(getattr(self, "gateway_runner", None), "session_store", None)
+        if store is None or not session_id:
+            return None
+        try:
+            return self._chat_for_entry(store.lookup_by_session_id(session_id))
+        except Exception:
+            logger.debug("[%s] could not map a session to a chat", self.name, exc_info=True)
+            return None
+
+    def _session_key_chat(self, session_key: str) -> Optional[str]:
+        store = getattr(getattr(self, "gateway_runner", None), "session_store", None)
+        if store is None or not session_key:
+            return None
+        try:
+            target = self._chat_for_entry(store.lookup_by_session_key(session_key))
+        except Exception:
+            logger.debug("[%s] could not map a session key to a chat", self.name, exc_info=True)
+            return None
+        return (target or {}).get("chat_id")
+
+    def _publish_task_event(self, event: Dict[str, Any]) -> None:
+        """Send one structured activity event from a hook (possibly a worker thread) to the app."""
+        hub, loop = self._hub, self._loop
+        if hub is None or loop is None or loop.is_closed():
+            return
+
+        def send() -> None:
+            try:
+                task = asyncio.ensure_future(hub.broadcast(event))
+                self._execution_tasks.add(task)
+                task.add_done_callback(self._execution_tasks.discard)
+            except Exception:
+                logger.debug("[%s] task event not delivered", self.name, exc_info=True)
+
+        try:
+            loop.call_soon_threadsafe(send)
+        except RuntimeError:
+            # The loop closed between the check and the hand-off (a restart): nothing to deliver to.
+            pass
 
     def _session_key(self, chat_id: str) -> Optional[str]:
         """The key Hermes files this chat's session under, or None outside a gateway."""
@@ -649,6 +814,17 @@ class WingletAdapter(BasePlatformAdapter):
             await asyncio.sleep(RECONCILE_SECONDS)
             try:
                 await self._reconcile_once()
+                import time
+                hub = self._hub
+                if hub is not None and hub.routine_history is not None and time.monotonic() >= self._routine_history_due:
+                    self._routine_history_due = time.monotonic() + 30
+                    for bot in [None] + [b['name'] for b in hub.bots() if b.get('served', True)]:
+                        try:
+                            with hub._bot_context(bot):
+                                for event in await hub._sync_routine_history():
+                                    await hub.broadcast({**event, 'bot': bot})
+                        except asyncio.CancelledError: raise
+                        except Exception: logger.debug('Routine history observation failed for a served profile', exc_info=True)
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -719,6 +895,11 @@ def _message_type(text: str, kinds: list):
 
 
 def register(ctx) -> None:
+    global _TRACKER, _TRACKER_HOOKS
+    if _TRACKER is None:
+        _TRACKER = execution.Tracker(_resolve_session_chat, publish=_publish_task_event,
+                                     resolve_key=_resolve_session_key_chat)
+        _TRACKER_HOOKS = execution.register_hooks(ctx, _TRACKER)
     platform = dict(
         name=PLATFORM, label="Winglet", adapter_factory=lambda cfg: WingletAdapter(cfg),
         check_fn=check_requirements, validate_config=validate_config, is_connected=is_connected,
@@ -736,3 +917,5 @@ def register(ctx) -> None:
         description="Winglet: your Hermes agents on your phone. Start with `hermes winglet setup`.")
     # Bots ask each other, and make new ones with an owner's approval.
     teamwork.register(ctx)
+    from .phone_tools_hermes import register as register_phone_tools
+    register_phone_tools(ctx)

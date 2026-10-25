@@ -1,3 +1,4 @@
+import { VoicePanel } from '../features/live-voice/VoicePanel';
 import { Image } from 'expo-image';
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { ActivityIndicator, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
@@ -21,7 +22,7 @@ import type { DraftFile, Server } from '../lib/types';
 import { useVoiceNote } from '../lib/voiceNote';
 import { Glass } from './Glass';
 import { ModelButton } from './ModelSheet';
-import { ArrowUp, Camera, FileText, ImagePlus, Mic, Plus, RotateCcw, X } from './icons';
+import { AudioLines, ArrowUp, Camera, FileText, ImagePlus, Mic, Plus, RotateCcw, X } from './icons';
 import { Sheet, SheetAction } from './Sheet';
 import { TaskProgress } from './TaskProgress';
 import { Chip, Tap, Toggle } from './ui';
@@ -70,6 +71,7 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
   const busyMode = usePrefs((st) => st.prefs.busyMode);
   const updatePrefs = usePrefs((st) => st.update);
   const [height, setHeight] = useState(MIN_INPUT);
+  const [voiceChat, setVoiceChat] = useState<string | null>(null);
   const [attachOpen, setAttachOpen] = useState(false);
   const [keepOriginal, setKeepOriginal] = useState(false);
   const [commands, setCommands] = useState<Command[]>([]);
@@ -223,7 +225,7 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
           </ScrollView>
         </Glass>
       ) : null}
-      {!prepareChat ? <TaskProgress key={key} server={server} chatId={chatId} busy={busy} /> : null}
+      {!prepareChat ? <TaskProgress key={`task:${key}`} server={server} chatId={chatId} busy={busy} /> : null}
       {showBusyModes ? (
         <Animated.View entering={FadeIn.duration(160)} exiting={FadeOut.duration(120)} style={s.modes} accessibilityLabel="While it works">
           <Text style={s.modesLabel}>While it works:</Text>
@@ -277,6 +279,12 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
           ) : <View style={{ width: 8 }} />}
           <ModelButton server={server} chatId={chatId} variant="composer" prepareChat={prepareChat} />
           <View style={{ flex: 1 }} />
+          {!busy && online && !text.trim() && !files.length && !replyTo && features?.voice_handsfree ? (
+            <Tap accessibilityLabel="Open hands-free voice" onPress={async () => {
+              const destination = prepareChat ? await prepareChat() : chatId;
+              if (destination) { onBeforeSend?.(destination); setVoiceChat(destination); }
+            }} style={s.attach}><AudioLines size={21} color={t.colors.accent} /></Tap>
+          ) : null}
           {!busy && !text.trim() && !files.length && voice ? (
             <VoiceButton server={server} chatId={chatId} onSent={onSent} prepareChat={prepareChat} onBeforeSend={onBeforeSend} />
           ) : (
@@ -291,6 +299,8 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
       </Glass>
       </View>
       {perch ? <View pointerEvents="box-none" style={[s.perch, { top: boxY - PERCH_RISE }]}>{perch}</View> : null}
+      {voiceChat ? <VoicePanel key={`voice:${server.id}:${voiceChat}`} server={server} chatId={voiceChat}
+        onClose={() => setVoiceChat(null)} onType={() => { setVoiceChat(null); focusComposer(server.id, voiceChat); }} /> : null}
       <Sheet visible={attachOpen} onClose={() => setAttachOpen(false)} title="Attach">
         {Platform.OS !== 'web' ? <SheetAction icon={<Camera size={20} color={t.colors.text} />} label="Take a photo" onPress={() => pick('camera')} /> : null}
         <SheetAction icon={<ImagePlus size={20} color={t.colors.text} />} label="Photos and videos" onPress={() => pick('photos')} />

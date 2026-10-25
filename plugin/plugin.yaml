@@ -48,3 +48,10 @@ optional_env:
     description: "Allow entering API keys from the web app over the automatic HTTPS tunnel (default: off; the Android app and direct connections are always allowed)"
     prompt: "Allow API keys from the web app over the tunnel? (true/false)"
     password: false
+
+provides_tools:
+  - phone_status
+  - phone_shared_note
+  - phone_location
+  - phone_contacts
+  - phone_calendar

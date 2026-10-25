@@ -2,6 +2,7 @@
 # Build the web app and bundle it into the plugin (plugin/web), which serves it to phones.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+python3 "$ROOT/scripts/generate_third_party_notices.py"
 cd "$ROOT/app"
 [ -d node_modules ] || npm ci
 rm -rf dist

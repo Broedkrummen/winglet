@@ -4,6 +4,8 @@ import type { AccentName } from './theme';
 import type { SavedModel } from './modelOptions';
 
 export type Prefs = {
+  voiceListenWith: 'server' | 'device';
+  voiceSpeakWith: 'server' | 'device';
   theme: 'system' | 'light' | 'dark';
   accent: AccentName;
   /** Bubbles: your messages in accent bubbles, replies unboxed. Compact: everything left-aligned. */
@@ -33,6 +35,7 @@ export type Prefs = {
 };
 
 export const DEFAULT_PREFS: Prefs = {
+  voiceListenWith: 'server', voiceSpeakWith: 'server',
   theme: 'system', accent: 'iris', layout: 'bubbles', motion: 'system', transparency: 'system', haptics: true, sounds: true, busyMode: 'steer', appLock: false, updateCheck: true, mainBot: '', sidebar: 'auto', pinnedChats: [], archivedChats: [], favoriteModels: [], recentModels: [],
 };
 

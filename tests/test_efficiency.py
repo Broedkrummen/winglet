@@ -154,9 +154,18 @@ async def test_a_broadcast_works_things_out_once_for_all_sockets(hub, monkeypatc
     monkeypatch.setattr(hub.store, "get_chat", lambda chat_id: lookups.append(chat_id) or real_get(chat_id))
     monkeypatch.setattr("plugin.hub.json.dumps", lambda value, **kw: encodes.append(1) or real_dumps(value, **kw))
     await hub.broadcast({"type": "message.update", "chat_id": "general", "message": {"id": "m", "chat_id": "general"}})
-    assert len(lookups) == 1 and len(encodes) == 1  # not once per socket
+    # One wire encode plus two bounded journal encodes (size check + content reference).
+    assert len(lookups) == 1 and len(encodes) == 3
+    # Prove that journal overhead stays constant when many more phones join.
+    for i in range(20):
+        device = hub.store.add_device(f"More owner {i}")[0]
+        hub._sockets[Socket()] = {"device": device, "bot": None}
+    lookups.clear()
+    encodes.clear()
+    await hub.broadcast({"type": "message.update", "chat_id": "general", "message": {"id": "m", "chat_id": "general"}})
+    assert len(lookups) == 1 and len(encodes) == 3
     got = [s.sent for s in sockets]
-    assert all(len(g) == 1 for g in got[:3]) and got[3] == []  # the member can't see the main chat
+    assert all(len(g) == 2 for g in got[:3]) and got[3] == []  # the member can't see the main chat
     await hub.broadcast({"type": "inbox.new", "item": {"chat_id": mine["id"]}, "pending": 0})
     assert [g[-1]["pending"] for g in got] == [2, 2, 2, 1]
 

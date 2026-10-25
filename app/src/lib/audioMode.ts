@@ -8,22 +8,36 @@ import { setAudioModeAsync } from 'expo-audio';
 // No mode turns off playback on a silenced phone: on Android that switch is app-wide and would stop voice notes.
 
 let recording = false;
+let conversation = false;
+
+/** One foreground conversation owns audio routing; chimes must not change focus beneath it. */
+export function claimVoiceAudio(): (() => void) | null {
+  if (conversation || recording) return null;
+  conversation = true;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true; conversation = false;
+    void defaultMode().catch(() => undefined);
+  };
+}
 
 /** Before a chime. False while a voice note records: play it without touching the mode. */
 export async function chimeMode(): Promise<boolean> {
-  if (recording) return false;
+  if (recording || conversation) return false;
   await setAudioModeAsync({ playsInSilentMode: true, interruptionMode: 'mixWithOthers' });
   return true;
 }
 
 /** After a chime: back to the app's own mode. */
 export async function defaultMode(): Promise<void> {
-  if (recording) return;
+  if (recording || conversation) return;
   await setAudioModeAsync({ playsInSilentMode: true });
 }
 
 /** Around a voice note's recording. */
 export async function recordingMode(on: boolean): Promise<void> {
   recording = on;
-  await setAudioModeAsync({ allowsRecording: on, playsInSilentMode: true });
+  await setAudioModeAsync({ allowsRecording: on, playsInSilentMode: true,
+    ...(conversation ? { interruptionMode: 'doNotMix', shouldPlayInBackground: false, allowsBackgroundRecording: false } : {}) });
 }

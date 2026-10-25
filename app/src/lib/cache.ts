@@ -96,3 +96,9 @@ export async function cacheRemove(prefix: string): Promise<void> {
     });
   } catch { /* ignore */ }
 }
+
+/** Durable replay checkpoints must learn when storage failed. */
+export async function cacheSetStrict(key: string, value: unknown): Promise<void> {
+  const raw = JSON.stringify(value);
+  await ordered(async () => { await ready(); await db.setItemAsync(key, seal(key, raw)); });
+}

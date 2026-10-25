@@ -223,6 +223,8 @@ class WingletAdapter(BasePlatformAdapter):
         self._runner = None
         self._tunnel = None
         self._reconcile_task: Optional[asyncio.Task] = None
+        self._routine_history_due = 0.0
+        self._unwatch_routines = lambda: None
         # (chat_id, status_key) -> message id, so a repeated status edits one line in place.
         self._status_ids: Dict[tuple, str] = {}
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -255,6 +257,10 @@ class WingletAdapter(BasePlatformAdapter):
             hub.hermes_version = hermes_api.hermes_version
             hub.commands_provider = hermes_api.list_commands
             hub.hermes = hermes_api
+            if hermes_api.routine_history_available():
+                from .routine_history import RoutineHistory
+                hub.routine_history = RoutineHistory(Path(store.path).parent / 'routine-history.sqlite')
+                self._unwatch_routines = hermes_api.watch_routine_history(lambda: setattr(self, '_routine_history_due', 0.0))
             # Speech-to-text and text-to-speech from this profile's own configuration. The app only sees
             # the capability and provider names; keys and models stay on the server.
             hub.speech = hermes_api.SpeechBackend() if hermes_api.speech_available() else None
@@ -331,6 +337,7 @@ class WingletAdapter(BasePlatformAdapter):
 
     async def disconnect(self) -> None:
         self._running = False
+        self._unwatch_routines()
         self._mark_disconnected()
         global _ACTIVE
         if _ACTIVE is self:
@@ -344,12 +351,16 @@ class WingletAdapter(BasePlatformAdapter):
             self._tunnel = None
         if self._reconcile_task is not None:
             self._reconcile_task.cancel()
+            try: await self._reconcile_task
+            except asyncio.CancelledError: pass
             self._reconcile_task = None
         if self._runner is not None:
             await self._runner.cleanup()
             self._runner = None
         if self._hub is not None:
             await self._hub.aclose()
+            if self._hub.routine_history is not None:
+                await asyncio.to_thread(self._hub.routine_history.close)
             self._hub.store.close()
             self._hub = None
 
@@ -418,9 +429,21 @@ class WingletAdapter(BasePlatformAdapter):
             # A routine (cron job) delivered its result: keep it in the chat and surface it in the inbox.
             name = _routine_name(str(metadata["job_id"]))
             text = _unwrap_routine(text)
-            message = await hub.post_message(chat_id, text, push=False, meta={"routine": name} if name else None)
-            await hub.add_inbox("result", chat_id, f"Routine finished: {name}"[:120] if name else "Routine finished", text,
-                                {"message_id": message["id"], "job_id": metadata["job_id"]})
+            job_id = str(metadata['job_id'])
+            run_id = None
+            if getattr(hub, 'routine_history', None) is not None:
+                chat = hub.store.get_chat(chat_id)
+                bot = (chat or {}).get('bot')
+                try:
+                    with hub._bot_context(bot):
+                        await hub._sync_routine_history(job_id)
+                        run_id = hub.routine_history.delivery_run(bot, job_id, text)
+                except Exception:
+                    logger.debug('Routine delivery history is not available yet', exc_info=True)
+            link = {'routine_id': job_id, **({'run_id': run_id} if run_id else {})}
+            message = await hub.post_message(chat_id, text, push=False, meta={'routine': name, **link})
+            await hub.add_inbox("result", chat_id, f"Routine result: {name}"[:120] if name else "Routine result", text,
+                                {"message_id": message["id"], "job_id": job_id, **link})
         elif metadata.get("expect_edits"):
             message = await hub.post_message(chat_id, text, status="streaming")
         else:
@@ -791,6 +814,17 @@ class WingletAdapter(BasePlatformAdapter):
             await asyncio.sleep(RECONCILE_SECONDS)
             try:
                 await self._reconcile_once()
+                import time
+                hub = self._hub
+                if hub is not None and hub.routine_history is not None and time.monotonic() >= self._routine_history_due:
+                    self._routine_history_due = time.monotonic() + 30
+                    for bot in [None] + [b['name'] for b in hub.bots() if b.get('served', True)]:
+                        try:
+                            with hub._bot_context(bot):
+                                for event in await hub._sync_routine_history():
+                                    await hub.broadcast({**event, 'bot': bot})
+                        except asyncio.CancelledError: raise
+                        except Exception: logger.debug('Routine history observation failed for a served profile', exc_info=True)
             except asyncio.CancelledError:
                 raise
             except Exception:

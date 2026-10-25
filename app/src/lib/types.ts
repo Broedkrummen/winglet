@@ -159,6 +159,7 @@ export type Message = {
     picker?: Picker;
     /** The routine (scheduled job) whose result this is. */
     routine?: string;
+    routine_id?: string; run_id?: string;
     /** Set by the server on Hermes's own progress (a tool running), which the chat folds away. */
     activity?: boolean;
     /** A local delivery error; never sent to Hermes as part of the prompt. */
@@ -183,6 +184,7 @@ export type InboxItem = {
     question?: string;
     multi_select?: boolean;
     message_id?: string;
+    job_id?: string; routine_id?: string; run_id?: string;
   };
   status: 'pending' | 'resolved' | 'expired';
   resolution: string;

@@ -287,6 +287,8 @@ class Hub:
         self.execution: Any = None
         self.phone_tools = None
         self.processes = None
+        self.routine_history = None
+        self._routine_history_lock = asyncio.Lock()
         self.rooms = None
         self.context_insights = None
         self._pickers: Dict[str, Dict[str, Any]] = {}
@@ -457,6 +459,9 @@ class Hub:
         _register_process_routes(app)
         from . import rooms_routes
         rooms_routes.register_routes(app)
+        if self.routine_history is not None:
+            from .routine_history_routes import register_routes as register_routine_history
+            register_routine_history(app, self)
         from . import context_insights_routes
         context_insights_routes.register_routes(app)
         r.add_get("/{tail:.*}", self.h_static)
@@ -775,7 +780,7 @@ class Hub:
         checkpoints = self.checkpoints is not None
         branching = bool(self.branching is not None and self._has(self.branching, "available")
                          and self.branching.available())
-        return {"phone_tools": self.phone_tools is not None, **(self.context_insights.capabilities() if self.context_insights else {k:False for k in ("session_context","context_compression","provider_limits","usage_insights")}), "rooms": self.rooms is not None and self.rooms.available(),
+        return {"phone_tools": self.phone_tools is not None, "routine_history": self.routine_history is not None, "routine_run_detail": self.routine_history is not None, **(self.context_insights.capabilities() if self.context_insights else {k:False for k in ("session_context","context_compression","provider_limits","usage_insights")}), "rooms": self.rooms is not None and self.rooms.available(),
                 "room_mentions": self.rooms is not None and self.rooms.available(), "rooms_member_write": False,
                 "webpush": True, "ntfy": True, "approvals": True, "questions": True, "uploads": True, "voice": True,
                 "replies": True, "export": True, "mute": True, "status_updates": True, "roles": True,
@@ -1928,7 +1933,7 @@ class Hub:
             return True
         if event.get("type") == "system.paused":
             return True
-        if str(event.get("type") or "").startswith(("system.", "checkpoint.")):
+        if str(event.get("type") or "").startswith(("system.", "checkpoint.", "routine.")):
             return False
         if event.get("type") == "chat.delete":
             return event.get("owner_device") == device["id"]
@@ -2940,6 +2945,25 @@ class Hub:
                                 level=(q.get("level") or "").upper(), query=(q.get("q") or "")[:200])
         return _json(data)
 
+    def _routine_history_actor(self, request):
+        device = self._device(request)
+        if device is None: raise web.HTTPUnauthorized()
+        if device.get('role') != 'owner': raise web.HTTPForbidden()
+        bot, problem = self._requested_bot(request, device)
+        if problem is not None or bot != _BOT.get(): raise web.HTTPForbidden()
+        return device
+
+    async def _sync_routine_history(self, routine_id=None):
+        # Keep source snapshots in commit order across HTTP, delivery and reconciliation.
+        async with self._routine_history_lock:
+            source = await self._call(self._need_hermes().routine_history_source, routine_id)
+            task = asyncio.create_task(asyncio.to_thread(self.routine_history.sync, _BOT.get(), source))
+            try:
+                return await asyncio.shield(task)
+            except asyncio.CancelledError:
+                await task  # Drain an already dispatched SQLite write before shutdown closes it.
+                raise
+
     async def h_schedule(self, request: web.Request) -> web.Response:
         self._require(request)
         return _json({"routines": await self._call(self._need_hermes().list_schedule)})
@@ -2974,9 +2998,13 @@ class Hub:
 
     async def h_routine_edit(self, request: web.Request) -> web.Response:
         device = self._require(request)
+        if self.routine_history is not None:
+            try: await self._sync_routine_history(request.match_info["routine_id"])
+            except Exception: return _error(503, "History could not be preserved. Retry when the scheduler store is available.")
         fields = self._routine_fields(await self._body(request), partial=True)
         if not fields:
             return _error(400, "nothing to change")
+        if self.routine_history is not None: device = self._routine_history_actor(request)
         routine = await self._call(self._need_hermes().change_routine, request.match_info["routine_id"], "update", fields)
         if routine is None:
             return _error(404, "no such routine")
@@ -2985,9 +3013,15 @@ class Hub:
 
     async def h_routine_delete(self, request: web.Request) -> web.Response:
         device = self._require(request)
+        if self.routine_history is not None:
+            try: await self._sync_routine_history(request.match_info["routine_id"])
+            except Exception: return _error(503, "History could not be preserved. Retry when the scheduler store is available.")
+        if self.routine_history is not None: device = self._routine_history_actor(request)
         result = await self._call(self._need_hermes().change_routine, request.match_info["routine_id"], "delete")
         if not (result or {}).get("deleted"):
             return _error(404, "no such routine")
+        if self.routine_history is not None:
+            self.routine_history.archive(_BOT.get(), request.match_info["routine_id"])
         self.audit("routine.delete", device, request.match_info["routine_id"])
         return _json({"ok": True})
 

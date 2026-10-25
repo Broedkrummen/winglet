@@ -1,3 +1,5 @@
+import { ArchivedRoutineLinks } from '../features/routine-history/ArchivedRoutineLinks';
+import { routineHref } from '../features/routine-history/model';
 import { router } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Text, View } from 'react-native';
@@ -21,7 +23,7 @@ const IDEAS = [
   { name: 'Weekly review', prompt: 'Summarise what we worked on this week and list anything still open.', schedule: 'every friday 5pm' },
   { name: 'Break reminder', prompt: 'Remind me to stand up and take a short break.', schedule: 'in 1h' },
 ];
-type Draft = { id?: string; name: string; prompt: string; schedule: string };
+export type Draft = { id?: string; name: string; prompt: string; schedule: string };
 
 /** Prompts your agent runs on its own schedule. Results arrive in the Updates chat. */
 export default withSelectedServer(ScheduleScreen);
@@ -30,6 +32,7 @@ function ScheduleScreen() {
   const t = useTheme();
   const s = useStyles();
   const server = useApp((st) => st.servers.find((x) => x.id === st.selection.serverId) ?? st.servers[0]);
+  const history = useApp(st => !!server && st.runtime[server.id]?.info?.features?.routine_history === true);
   const [routines, setRoutines] = useState<Routine[] | null>(null);
   const [error, setError] = useState('');
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -50,7 +53,7 @@ function ScheduleScreen() {
       setRoutines((list) => (list ?? []).map((x) => (x.id === r.id ? routine : x)));
       haptic.success();
       if (action === 'run') {
-        useApp.getState().toast({ serverId: server.id, title: 'Running now', body: `${r.name || 'The routine'} posts its result in Updates.`,
+        useApp.getState().toast({ serverId: server.id, title: 'Run requested', body: `${r.name || 'The routine'} posts its result in Updates.`,
           href: `/chat/${server.id}/home` });
       }
     } catch (e) {
@@ -77,16 +80,17 @@ function ScheduleScreen() {
         <View style={{ gap: 12, marginTop: 16 }}>
           {active.map((r) => (
             <RoutineCard key={r.id} routine={r} busy={busy} onAction={(a) => act(r, a)}
-              onEdit={() => setDraft({ id: r.id, name: r.name ?? '', prompt: r.prompt, schedule: r.schedule_display ?? '' })} />
+              history={history} onEdit={() => history ? router.push(routineHref(server.id, r.id) as any) : setDraft({ id: r.id, name: r.name ?? '', prompt: r.prompt, schedule: r.schedule_display ?? '' })} />
           ))}
           {finished.length ? <Text style={s.group}>Done</Text> : null}
           {finished.map((r) => (
             <RoutineCard key={r.id} routine={r} busy={busy} onAction={(a) => act(r, a)}
-              onEdit={() => setDraft({ id: r.id, name: r.name ?? '', prompt: r.prompt, schedule: r.schedule_display ?? '' })} />
+              history={history} onEdit={() => history ? router.push(routineHref(server.id, r.id) as any) : setDraft({ id: r.id, name: r.name ?? '', prompt: r.prompt, schedule: r.schedule_display ?? '' })} />
           ))}
           <Button title="Open Updates" variant="ghost" onPress={() => router.push(`/chat/${server.id}/home`)} />
         </View>
       )}
+      {history ? <ArchivedRoutineLinks server={server} revision={routines} /> : null}
       <EditSheet server={server} draft={draft} onClose={() => setDraft(null)} onSaved={() => { setDraft(null); load(); }} />
     </Screen>
   );
@@ -117,8 +121,8 @@ function Empty({ onPick }: { onPick: (d?: Draft) => void }) {
   );
 }
 
-function RoutineCard({ routine: r, busy, onAction, onEdit }: {
-  routine: Routine; busy: string | null; onAction: (a: 'pause' | 'resume' | 'run') => void; onEdit: () => void;
+function RoutineCard({ routine: r, busy, onAction, onEdit, history }: {
+  routine: Routine; busy: string | null; history?: boolean; onAction: (a: 'pause' | 'resume' | 'run') => void; onEdit: () => void;
 }) {
   const t = useTheme();
   const s = useStyles();
@@ -129,7 +133,7 @@ function RoutineCard({ routine: r, busy, onAction, onEdit }: {
   const spin = (a: string) => busy === `${r.id}:${a}`;
   return (
     <Animated.View layout={LinearTransition.duration(180)}>
-      <Card onPress={onEdit} accessibilityLabel={`${r.name || r.prompt}, ${r.schedule_display}. ${paused ? 'Paused.' : next ? `Next ${next}.` : ''} Edit`}
+      <Card onPress={onEdit} accessibilityLabel={`${r.name || r.prompt}, ${r.schedule_display}. ${paused ? 'Paused.' : next ? `Next ${next}.` : ''} ${history ? 'History' : 'Edit'}`}
         style={[s.card, done && { opacity: 0.7 }]}>
         <View style={s.head}>
           <View style={[s.icon, { backgroundColor: paused ? t.colors.warningSoft : t.colors.accentSoft }]}>
@@ -162,7 +166,7 @@ function RoutineCard({ routine: r, busy, onAction, onEdit }: {
   );
 }
 
-function EditSheet({ server, draft, onClose, onSaved }: { server: Server; draft: Draft | null; onClose: () => void; onSaved: () => void }) {
+export function EditSheet({ server, draft, onClose, onSaved }: { server: Server; draft: Draft | null; onClose: () => void; onSaved: () => void }) {
   const t = useTheme();
   const s = useStyles();
   const [form, setForm] = useState<Draft>({ name: '', prompt: '', schedule: '' });

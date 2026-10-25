@@ -124,7 +124,9 @@ async def test_routine_results_drop_hermes_wrapper_and_carry_the_routine_name(ad
     message = adapter._hub.store.list_messages("home")[-1]
     assert message["text"] == "Good morning! **9:30** Standup."
     assert message["meta"]["routine"] == "Morning briefing"
-    assert [i["title"] for i in adapter._hub.store.list_inbox()] == ["Routine finished: Morning briefing"]
+    assert message["meta"]["routine_id"] == "abc123"
+    assert "run_id" not in message["meta"]  # Delivery alone is not an execution outcome.
+    assert [i["title"] for i in adapter._hub.store.list_inbox()] == ["Routine result: Morning briefing"]
 
 
 def test_routine_text_that_is_not_hermes_wrapper_is_left_alone(adapter):

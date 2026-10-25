@@ -172,7 +172,9 @@ class WingletPhoneToolsModule : Module() {
     val selection = "(${ContactsContract.Data.MIMETYPE}=? OR ${ContactsContract.Data.MIMETYPE}=? OR ${ContactsContract.Data.MIMETYPE}=?) AND (instr(lower(${ContactsContract.Data.DISPLAY_NAME_PRIMARY}),lower(?))>0 OR instr(lower(${ContactsContract.Data.DATA1}),lower(?))>0)"
     val selectionArgs = arrayOf(ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE, ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE, ContactsContract.CommonDataKinds.Email.CONTENT_ITEM_TYPE, query.trim(), query.trim())
     resolver.query(uri, arrayOf(ContactsContract.Data.CONTACT_ID, ContactsContract.Data.DISPLAY_NAME_PRIMARY), selection, selectionArgs, ContactsContract.Data.DISPLAY_NAME_PRIMARY + " ASC", signal)?.use { rows ->
-      while (out.size < 5 && rows.moveToNext()) {
+      var candidates = 0
+      while (out.size < 5 && candidates < 100 && rows.moveToNext()) {
+        candidates += 1
         currentCoroutineContext().ensureActive()
         val contactId = rows.getString(0)
         if (!seen.add(contactId)) continue

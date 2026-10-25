@@ -41,7 +41,8 @@ The Hermes adapter reads `HERMES_SESSION_PLATFORM`, `USER_ID`, `CHAT_ID`, and `P
 `gateway.session_context` API. Only `winglet:<paired device id>` in a Winglet chat may call. Device, bot,
 chat ownership, current role and grant are derived from authenticated server records, never tool arguments.
 The originating phone is the only target. Of its foreground/unlocked sockets for this bot, exactly one is
-chosen; requests are never broadcast or queued for offline delivery.
+chosen; requests are never broadcast or queued for offline delivery. The event journal explicitly
+rejects both phone namespaces, and the generic broadcast path drops them even if misrouted by a future caller.
 
 | Event | Meaning |
 | --- | --- |
@@ -58,7 +59,8 @@ native operations have a 15 s deadline. Server protocol timestamps/audit use epo
 APIs use milliseconds. Client timers measure the advertised interval locally; the gateway is authoritative
 for expiry. Old, duplicate, wrong-socket, wrong-device and wrong-bot decisions/answers cannot settle a request.
 The client rejects transport-buffered requests from before background/resume or app-lock transitions,
-and the gateway rechecks the request's lifecycle instance before execution/answer.
+and the gateway rechecks the request's lifecycle instance before execution/answer. On startup, the app
+advertises locked until persisted app-lock preferences have been applied (`phoneSecurityReady`).
 
 The app fetches authoritative grants before deciding, immediately before reading and after reading.
 The native module independently rechecks OS permissions, activity foreground, device lock and expiry before
@@ -156,7 +158,8 @@ registry, uncached checks, session ContextVars, thread dispatch and interrupt AP
 
 Private toolchain (not committed):
 `C:/Users/vikas/Documents/winglet-agents/11-phone-tools/.venv/phone-native/`.
-SDK root: `sdk/`, Android platform 36/build-tools 36.0.0.
+SDK root: `sdk/`, Android platform 36/build-tools 36.0.0 and 35.0.0; NDK 27.1.12297006.
+The normal Gradle module task also installs platform-tools as a build dependency; none were used on a device.
 Command-line tools: Google's `commandlinetools-win-15859902_latest.zip`, SHA-256
 `90ae805d20434428bffcb699c290860f19bb5f66a67e6b330067e3de801fb04a`, verified against
 https://developer.android.com/studio. JDK:
@@ -167,11 +170,12 @@ Set process-local `JAVA_HOME`, `ANDROID_HOME`/`ANDROID_SDK_ROOT`, `GRADLE_USER_H
 from `app/android/` after `rtk proxy npx expo prebuild --platform android --no-install`, run:
 
 ```text
-rtk proxy ./gradlew.bat :winglet-phone-tools:compileDebugKotlin --no-daemon --max-workers=1 -Dorg.gradle.parallel=false "-Dorg.gradle.jvmargs=-Xmx1024m -XX:MaxMetaspaceSize=384m" -Pkotlin.compiler.execution.strategy=in-process
+rtk proxy ./gradlew.bat :winglet-phone-tools:compileDebugKotlin --no-daemon --max-workers=1 -Dorg.gradle.parallel=false "-Dorg.gradle.jvmargs=-Xmx1024m -XX:MaxMetaspaceSize=512m" -Pkotlin.compiler.execution.strategy=in-process
 ```
 
 The runnable local wrapper is `output/run-phone-gradle.py`, logs in `.venv/phone-native/gradle-compile.log`.
-It is not committed; the command and environment above reproduce it. Native compilation is independent
+It is not committed; the command and environment above reproduce it. The bounded retry started above
+5 GiB free; the wrapper stops only its own process tree if free disk drops below 1.5 GiB. Native compilation is independent
 of APK installation, signing or runtime testing. No release/version/CI/workflow/generated plugin-web changes.
 
 ## Distinct security review
@@ -188,7 +192,9 @@ permission/lock/expiry error codes. Review entry points: `phone_tools_hermes.py`
 
 Use a combined integration commit that includes this PR and the other reviewed features. Root owns the
 integration SHA, final regenerated web bundle and signed/dev APK; do not use the stopped baseline. Build a
-native app, since Expo Go/old development clients do not include this module. Record exact integration/build
+native app, since Expo Go/old development clients do not include this module. Use the existing
+`WINGLET_DEV=1` app-config mode for the separate dev package/scheme and preserve the installed production
+app's data, pairing and signing identity. No new QA package/version/config is required. Record exact integration/build
 SHA in the later validation report.
 
 1. Disposable Android emulator API 30 and API 35/36, phone and tablet; synthetic profile only. Keep the real
@@ -223,11 +229,14 @@ Final focused app policy/runtime/store suite: **56 passed**. Final typecheck: **
 Backend final revoke suite: **23 passed**; actual pinned-Hermes registry/context/Stop suite: **3 passed**.
 The initial no-Hermes PR CI job exposed integration tests importing Hermes unconditionally. They now
 skip only when the real optional Hermes package is absent; the dedicated pinned-Hermes job still runs them.
-Latest integration fetch remains `87cf6269c42ea4610880ef158110e48837e34848`; no additional contract drift.
+Approved integration `fc4df428edb01f4177843f9b82f40d4cf14c41df` merged in `8200205`.
+Focused merge checks: **75 backend/Hermes/replay passed, 60 app policy/runtime/store/replay passed**, typecheck passed.
+Both replay recovery and phone lifecycle interception are retained; private phone frames cannot be journaled or broadcast.
 PR: https://github.com/VIKASRP24/winglet/pull/52 (draft, not merged).
 CI at source `30fe014`: **all four jobs passed** (run `40166102861`): pinned Hermes **486 passed/1 skipped**;
 Linux and Windows each **441 passed/23 skipped**; app **335 passed**, typecheck and both exports passed.
 A further lifecycle-instance regression adds app/server coverage: buffered pre-background requests cannot
-execute after resume. Focused latest app policy/runtime **11 passed**, backend **24 passed**.
+execute after resume. The startup app-lock gate adds another actual-runtime case; final policy/runtime **12 passed** before integration.
+The merged backend checks include five namespace privacy regressions.
 NDK 27.1.12297006 was successfully installed after preserving the failed 211-byte partial metadata.
 Native build final result will be recorded here before final handoff.

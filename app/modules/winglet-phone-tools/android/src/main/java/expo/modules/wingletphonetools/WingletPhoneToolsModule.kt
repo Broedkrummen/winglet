@@ -28,6 +28,10 @@ import expo.modules.kotlin.exception.CodedException
 import expo.modules.kotlin.functions.Coroutine
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
@@ -94,7 +98,12 @@ class WingletPhoneToolsModule : Module() {
       signals[id] = signal
       try {
         val answer: Map<String, Any> = withTimeout(15000) {
-          withContext(Dispatchers.IO) {
+          coroutineScope {
+            // A blocking provider query must receive cancellation while it is blocked, including timeout.
+            val cancellation = launch(start = CoroutineStart.UNDISPATCHED) {
+              try { awaitCancellation() } finally { signal.cancel() }
+            }
+            try { withContext(Dispatchers.IO) {
             guard(tool, expires, precise)
             when (tool) {
               "phone_status" -> { require(args.isEmpty()); status() }
@@ -103,6 +112,7 @@ class WingletPhoneToolsModule : Module() {
               "phone_calendar" -> { require(args.keys == setOf("start_ms", "end_ms")); calendar((args["start_ms"] as? Number)?.toLong() ?: 0, (args["end_ms"] as? Number)?.toLong() ?: 0, signal) }
               else -> throw CodedException("Unsupported phone read")
             }
+            } } finally { cancellation.cancel() }
           }
         }
         currentCoroutineContext().ensureActive()

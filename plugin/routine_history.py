@@ -88,6 +88,8 @@ class RoutineHistory:
         self.keep_runs = max(1, int(keep_runs))
         self.keep_bot_runs = max(1, int(keep_bot_runs))
         self.db = sqlite3.connect(path, check_same_thread=False)
+        try: Path(path).chmod(0o600)
+        except OSError: pass
         self.db.row_factory = sqlite3.Row
         self.db.execute('PRAGMA journal_mode=WAL')
         self.db.execute('PRAGMA busy_timeout=3000')
@@ -117,8 +119,12 @@ class RoutineHistory:
         coverage = source.get('complete_executions', False)
         covered_outputs = set()
         output_links = _unique_links(rows, source.get('outputs', []), covered=covered_outputs)
+        candidates = dict(output_links)
+        session_candidates = _unique_links(rows, source.get('sessions', []), session=True)
+        present_outputs = {str(x['id']) for x in source.get('outputs', [])}
+        present_sessions = {str(x['id']) for x in source.get('sessions', [])}
         if not coverage or not source.get('complete_outputs', False): output_links = {}
-        session_links = _unique_links(rows, source.get('sessions', []), session=True) if coverage and source.get('complete_sessions', False) else {}
+        session_links = session_candidates if coverage and source.get('complete_sessions', False) else {}
         linked_outputs = {x['id'] for x in output_links.values()}
         changed = []
         with self._lock, self.db:
@@ -133,7 +139,7 @@ class RoutineHistory:
                 run_id, job_id = str(raw['id']), str(raw['job_id'])
                 previous = self.db.execute('SELECT body FROM routine_history_runs WHERE bot=? AND id=?', (scope, run_id)).fetchone()
                 old = json.loads(previous['body']) if previous else {}
-                definition = old.get('definition') or _definition(jobs.get(job_id, {'id': job_id}))
+                definition = old.get('observed_definition') or old.get('definition') or _definition(jobs.get(job_id, {'id': job_id}))
                 status = str(raw.get('status') or 'unknown')
                 mapped = {'claimed': 'pending', 'running': 'running', 'completed': 'completed', 'failed': 'failed', 'unknown': 'unknown'}.get(status, 'unknown')
                 error = clean(raw.get('error'), 2000)
@@ -145,18 +151,25 @@ class RoutineHistory:
                 if status == 'unknown':
                     error = error or 'The scheduler could not establish an outcome after restart.'
                 # The pin explicitly clears scheduled_instant for a manual ticker fire.
-                if raw.get('source') == 'direct': trigger = 'manual'
-                elif raw.get('source') == 'builtin' and 'scheduled_instant' in raw:
+                if raw.get('source') in {'direct','builtin'} and 'scheduled_instant' in raw:
                     trigger = 'scheduled' if raw.get('scheduled_instant') else 'manual'
+                elif raw.get('source') == 'direct': trigger = 'manual'
                 else: trigger = 'unknown'
                 body = {**old, 'id': run_id, 'routine_id': job_id, 'recorded': True,
                         'status': mapped, 'scheduler_status': status, 'source': raw.get('source'), 'trigger': trigger,
                         'claimed_at': instant(raw.get('claimed_at')), 'started_at': instant(raw.get('started_at')),
                         'finished_at': instant(raw.get('finished_at')), 'scheduled_at': instant(raw.get('scheduled_instant')),
                         'error': error or None, 'delivery_outcome': clean(raw.get('delivery_outcome'), 120) or None,
-                        'definition': definition, 'title': definition.get('name') or job_id,
+                        'definition': old.get('definition') or definition, 'observed_definition': definition, 'title': old.get('title') or definition.get('name') or job_id,
                         'definition_provenance': old.get('definition_provenance') or 'first_observed',
-                        'timezone': source.get('timezone') or 'Server local time'}
+                        'timezone': old.get('timezone') or source.get('timezone') or 'Server local time'}
+                # Later evidence can invalidate an earlier provisional association.
+                if str(old.get('output_id')) in present_outputs and run_id not in candidates:
+                    for field in ('output','output_id','output_truncated','output_evidence'): body.pop(field,None)
+                    body.update(definition=definition,title=definition.get('name') or job_id,definition_provenance='first_observed')
+                    self.db.execute('DELETE FROM routine_history_outputs WHERE bot=? AND run_id=?', (scope,run_id))
+                if str(old.get('session_id')) in present_sessions and run_id not in session_candidates:
+                    body.pop('session_id',None); body.pop('session_evidence',None)
                 output = output_links.get(run_id)
                 if output:
                     body.update(output=clean(output.get('text'), MAX_OUTPUT), output_truncated=bool(output.get('truncated')),
@@ -259,12 +272,17 @@ class RoutineHistory:
     @staticmethod
     def _view(body, current, archived, *, detail):
         out = dict(body)
+        out.pop('observed_definition',None)
         out['archived'] = archived
         out['definition_changed'] = bool(current and body.get('definition', {}).get('revision') != current.get('revision'))
         out['has_output'] = bool(body.get('output'))
         out['duration_seconds'] = max(0, body['finished_at'] - (body.get('started_at') or body.get('claimed_at') or body['finished_at'])) if body.get('finished_at') else None
         if not detail:
-            out['summary'] = clean(body.get('output') or body.get('error'), 180).replace('\n', ' ')
+            output = body.get('output') or ''
+            response = re.search(r'\n## Response\n\n(.*)\Z', output, re.S)
+            summary = response[1] if response else body.get('error') or ('Output retained.' if output else '')
+            summary = re.sub(r'(?m)^#{1,6}\s*|[*`]', '', summary)
+            out['summary'] = clean(summary, 180).replace('\n', ' ')
             out.pop('output', None)
             out.pop('definition', None)
         return out

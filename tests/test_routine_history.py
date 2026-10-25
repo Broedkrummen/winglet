@@ -41,7 +41,7 @@ def test_only_ledger_status_establishes_outcome(history, raw, expected):
 def test_trigger_is_explicit_pin_occurrence_not_latest_job_state(history):
     rows = [execution('scheduled'), execution('manual'), execution('direct'), execution('old'), execution('external')]
     rows[1]['scheduled_instant'] = None
-    rows[2]['source'] = 'direct'
+    rows[2]['source'] = 'direct'; rows[2]['scheduled_instant'] = None
     del rows[3]['scheduled_instant']
     rows[4]['source'] = 'custom-provider'
     history.sync(None, source(*rows))
@@ -261,3 +261,31 @@ def test_correlation_precomputes_times_in_linear_number_of_parses(monkeypatch):
     docs=[{'id':str(i),'job_id':'job-'+str(i),'at':105} for i in range(500)]
     assert len(_unique_links(rows,docs))==500
     assert len(calls)<=3500
+
+
+def test_late_overlap_revokes_provisional_output_and_session_link(history):
+    s=source(execution('a'))
+    s['outputs']=[{'id':'doc','job_id':'job','at':109,'text':'# Cron Job: Captured title\n\n## Response\n\nResult'}]
+    s['sessions']=[{'id':'session','job_id':'job','started_at':102}]
+    history.sync(None,s)
+    assert history.detail(None,'job','a')['session_id']=='session'
+    s['executions'].append(execution('b'))
+    history.sync(None,s)
+    run=history.detail(None,'job','a')
+    assert not run.get('output') and not run.get('session_id')
+    assert run['title']=='Morning report' and run['definition_provenance']=='first_observed'
+
+
+def test_direct_dispatch_with_scheduled_occurrence_keeps_scheduled_trigger(history):
+    row=execution(); row['source']='direct'
+    history.sync(None,source(row))
+    assert history.detail(None,'job','run-1')['trigger']=='scheduled'
+
+
+def test_list_summary_uses_response_instead_of_dispatch_document_or_prompt(history):
+    s=source(execution()); s['outputs']=[{'id':'doc','job_id':'job','at':109,'text':'# Cron Job: title\n\n## Prompt\n\nPrivate synthetic instruction\n\n## Response\n\n## Health\n\nAll **12** checks passed.'}]
+    history.sync(None,s)
+    row=history.page(None,'job')['runs'][0]
+    assert '12 checks passed' in row['summary']
+    assert 'Private synthetic instruction' not in row['summary'] and 'Cron Job' not in row['summary']
+    assert 'definition' not in row and 'observed_definition' not in row

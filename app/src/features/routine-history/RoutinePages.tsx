@@ -87,17 +87,17 @@ function RoutineHistoryBody() {
       <View style={[s.stack, { marginTop: 18 }]}>
         <Text style={s.eyebrow}>{data.archived ? 'PAST ROUTINE' : paused ? 'PAUSED' : routine.state === 'completed' ? 'FINISHED SCHEDULE' : 'CURRENT SCHEDULE'}</Text>
         <Text style={s.schedule}>{routine.schedule_display || 'Schedule unavailable'}</Text>
-        <Text style={s.note}>{routine.timezone || 'Server local time'} · Local-clock schedules follow this zone’s daylight-saving rules.</Text>
+        <Text style={s.note}>{routine.timezone ? `${routine.timezone} · Local-clock schedules follow this zone’s daylight-saving rules.` : 'The original time zone is unavailable.'}</Text>
         {!data.archived && routine.next_run_at && !paused ? <Text style={s.note}>Next · {dateText(routine.next_run_at, routine.timezone)}</Text> : null}
         {routine.manual_run_at ? <Text style={s.notice}>Run requested · waiting for the scheduler to claim an execution.</Text> : null}
-        {routine.prompt ? <Text style={s.prompt} selectable>{routine.prompt}</Text> : <Text style={s.note}>This routine runs a script or saved skill.</Text>}
+        {routine.prompt ? <Text style={s.prompt} selectable>{routine.prompt}</Text> : <Text style={s.note}>The original prompt is unavailable.</Text>}
         {!data.archived ? <>
           <View style={s.actions}>
-            {routine.state !== 'completed' ? <Button size="sm" title={data.runs.length ? 'Run again' : 'Run now'} disabled={!online || !!busy}
+            {routine.state !== 'completed' ? <Button size="sm" style={s.control} title={data.runs.length ? 'Run again' : 'Run now'} disabled={!online || !!busy}
               loading={busy === 'run'} onPress={() => act('run')} /> : null}
-            {routine.state !== 'completed' ? <Button size="sm" variant="secondary" title={paused ? 'Resume' : 'Pause'} disabled={!online || !!busy}
+            {routine.state !== 'completed' ? <Button size="sm" style={s.control} variant="secondary" title={paused ? 'Resume' : 'Pause'} disabled={!online || !!busy}
               loading={busy === 'pause' || busy === 'resume'} onPress={() => act(paused ? 'resume' : 'pause')} /> : null}
-            {routine.prompt ? <Button size="sm" variant="ghost" title="Edit routine" disabled={!online || !!busy} onPress={() => setDraft({ id: routineId,
+            {routine.prompt ? <Button size="sm" style={s.control} variant="ghost" title="Edit routine" disabled={!online || !!busy} onPress={() => setDraft({ id: routineId,
               name: routine.name || '', prompt: routine.prompt || '', schedule: routine.schedule_display || '' })} /> : null}
           </View>
           <Text style={s.caption}>Run again uses the current definition above. It never replays a historical execution.</Text>
@@ -197,7 +197,7 @@ function RecordedRun() {
 
 
 const useStyles = makeStyles(t => ({
-  stack: { gap: 12 }, rows: { borderTopWidth: 1, borderColor: t.colors.border },
+  control: { minHeight: 44 }, stack: { gap: 12 }, rows: { borderTopWidth: 1, borderColor: t.colors.border },
   row: { paddingVertical: 16, paddingHorizontal: 2, minHeight: 76, gap: 6, borderBottomWidth: 1, borderColor: t.colors.border },
   rowHead: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 10 },
   actions: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 },

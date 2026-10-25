@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { Linking, Text, View } from 'react-native';
 import { InstallButton } from '../components/AppUpdate';
 import { AgentFace } from '../components/AgentFace';
-import { Activity, CircleArrowUp, ExternalLink, HardDrive, RefreshCw } from '../components/icons';
+import { Activity, CircleArrowUp, ExternalLink, FileText, HardDrive, RefreshCw } from '../components/icons';
 import { Logo } from '../components/Logo';
 import { Screen } from '../components/Screen';
 import { Button, Card, ListGroup, ListRow, SectionHeader, Toggle } from '../components/ui';
@@ -71,6 +71,7 @@ export default function AboutScreen() {
 
       <SectionHeader title="Help" />
       <ListGroup>
+        <ListRow icon={<FileText size={18} color={t.colors.onAccentSoft} />} title="Open-source notices" subtitle="Licenses and attribution, available offline" onPress={() => router.push('/open-source-notices')} />
         <ListRow icon={<ExternalLink size={18} color={t.colors.onAccentSoft} />} title="Source code & help" onPress={() => Linking.openURL('https://github.com/VIKASRP24/winglet')} />
       </ListGroup>
     </Screen>

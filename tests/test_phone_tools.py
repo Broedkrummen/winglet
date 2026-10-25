@@ -235,3 +235,12 @@ async def test_request_is_bound_to_the_exact_phone_lifecycle_instance(env):
     env.hub._sockets[env.ws]['phone_instance']='new-instance-after-resume'
     await decision(env,r)
     assert await task=={'error':'revoked'}
+
+
+@pytest.mark.parametrize("kind", ["phone_tool.request", "phone_tool.execute", "phone_tool.answer", "phone_tool.cancel", "phone_tools.grants_changed"])
+async def test_private_phone_frames_never_enter_replay_or_broadcast(env, kind):
+    private = {"type": kind, "chat_id": "general", "result": {"note": "synthetic-private"}}
+    assert env.hub.events.append(None, private) is None
+    await env.hub.broadcast(private)
+    assert env.ws.events.empty()
+    assert env.store._all("SELECT * FROM event_log") == []

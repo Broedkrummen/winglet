@@ -37,6 +37,7 @@ import { Composer, focusComposer } from './Composer';
 import { ChatMenu } from './ChatMenu';
 import { ChatPet } from './ChatPet';
 import type { DockPetFrame } from './BotCarousel';
+import { SyncStatus } from '../features/event-replay/SyncStatus';
 import { ConnectionBanner } from './ConnectionBanner';
 import { FilesSheet } from './FilesSheet';
 import { ProcessesSheet } from '../features/processes/ProcessesSheet';
@@ -222,6 +223,7 @@ export function ChatView({ server, chatId, showBack, embedded, landing }: { serv
         </Glass>
         <View style={s.hairline} />
         <ConnectionBanner server={server} compact />
+        <SyncStatus serverId={server.id} />
         <PausedBanner server={server} />
         {!composing ? <BranchStrip server={server} chatId={chatId} state={branching.state} /> : null}
         {!composing && goal ? <GoalStrip goal={goal} onPress={() => setGoalOpen(true)} /> : null}

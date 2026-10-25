@@ -42,3 +42,15 @@ export async function cacheSet(key: string, value: unknown): Promise<void> {
 export async function cacheRemove(prefix: string): Promise<void> {
   await run('readwrite', (s) => s.delete(IDBKeyRange.bound(prefix, `${prefix}￿`)));
 }
+
+/** Resolve on transaction COMMIT, never on the earlier request success. */
+export async function cacheSetStrict(key: string, value: unknown): Promise<void> {
+  const db = await open();
+  if (!db) throw new Error('Offline storage unavailable');
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    tx.oncomplete = () => resolve();
+    tx.onerror = tx.onabort = () => reject(new Error('Offline storage unavailable'));
+    tx.objectStore(STORE).put(value, key);
+  });
+}

@@ -66,6 +66,9 @@ function harness(os = 'web') {
   }
   const helpers = compile('../src/lib/messages.ts', {});
   const taskModel = compile('../src/features/execution/model.ts', {});
+  const replayProtocol = compile('../src/features/event-replay/protocol.ts', {});
+  const replaySession = compile('../src/features/event-replay/session.ts', { './protocol': replayProtocol });
+  const replayMerge = compile('../src/features/event-replay/merge.ts', {});
   const projectHelpers = compile('../src/features/projects/logic.ts', {});
   const { useApp: store } = compile('../src/lib/store.ts', {
     zustand: { create: (fn: any) => createStore(fn) },
@@ -74,11 +77,14 @@ function harness(os = 'web') {
     './recovery': { RecoveryCoordinator: FakeCoordinator },
     './messages': helpers,
     '../features/projects/logic': projectHelpers,
+    '../features/event-replay/session': replaySession,
+    '../features/event-replay/merge': replayMerge,
     './api': { api: (...args: any[]) => request(...args), ApiError, wsUrl: (s: any) => s.url,
       signedApi: (server: any, method: string, path: string, data?: unknown) =>
         request(server, path, { method, body: data === undefined ? undefined : JSON.stringify(data) }) },
     './cache': {
       cacheGet: async (key: string, fallback: any) => (cache.has(key) ? structuredClone(cache.get(key)) : fallback),
+      cacheSetStrict: async (key: string, value: any) => { cache.set(key, structuredClone(value)); },
       cacheSet: async (key: string, value: any) => { cache.set(key, structuredClone(value)); },
       cacheRemove: async (prefix: string) => { for (const k of [...cache.keys()]) if (k.startsWith(prefix)) cache.delete(k); },
     },
@@ -868,4 +874,43 @@ test('overlapping project reads only apply the latest requested snapshot', async
   resolves[0]({ projects: projectSnapshot('Old', 2, 2) });
   await first;
   assert.equal(h.store.getState().runtime.s.projects?.projects[0].name, 'Latest');
+});
+
+
+test('real socket replay persists applied messages with its cursor and suppresses catch-up alerts', async () => {
+  const h = harness(); await h.connect();
+  h.cache.set('replay:s', { cursor: { scope: 'scope', epoch: 'epoch', cursor: 0 }, state: {
+    chats: { general: { id: 'general', kind: 'chat', title: 'General' } }, messages: {}, deleted: {}, loaded: {},
+    inbox: {}, pending: 0, tasks: {},
+  } });
+  await h.store.getState().init();
+  h.setRequest(async (_, route) => route === '/api/inbox' ? { items: [], pending: 0 } : { messages: [], deleted_ids: [] });
+  h.event({ type: 'hello', chats: [{ id: 'general', kind: 'chat', title: 'General' }], pending: 0,
+    features: { event_replay: true }, event_stream: { scope: 'scope', epoch: 'epoch', watermark: 1 } });
+  await h.tick();
+  assert.equal(h.socket().sent.at(-1).type, 'resume');
+  h.event({ type: 'resume', ok: true, scope: 'scope', epoch: 'epoch', watermark: 1, cursor: 1, has_more: false,
+    events: [{ type: 'message.new', event_seq: 1, chat_id: 'general', message: msg(9) }] });
+  await h.tick();
+  const checkpoint = h.cache.get('replay:s');
+  assert.equal(checkpoint.cursor.cursor, 1); assert.equal(checkpoint.state.messages.general[0].id, 'm9');
+  assert.equal(h.store.getState().runtime.s.sync.phase, 'idle'); assert.equal(h.played.length, 0);
+});
+
+
+test('snapshot recovery follows the verified recovered address rather than the original socket address', async () => {
+  const h = harness('android'); await h.connect();
+  h.setRecovery(async (s: any) => ({ ...s, url: 'https://recovered.example.test', recovery: { ...s.recovery, revision: 2 } }));
+  h.disconnect(); await h.tick();
+  const reads: any[] = [];
+  h.setRequest(async (s, route) => {
+    reads.push([s.url, route]);
+    if (route === '/api/sync/snapshot') return { server_id: 'server', bot: null, scope: 'scope', epoch: 'epoch',
+      watermark: 0, chats: [{ id: 'general', kind: 'chat', title: 'General' }], inbox: [], pending: 0, deletions: {} };
+    return route === '/api/inbox' ? { items: [], pending: 0 } : { messages: [], deleted_ids: [] };
+  });
+  h.event({ type: 'hello', chats: [{ id: 'general', kind: 'chat', title: 'General' }], features: { event_replay: true },
+    event_stream: { scope: 'scope', epoch: 'epoch', watermark: 0 } });
+  await h.tick();
+  assert.equal(reads.find(([, route]) => route === '/api/sync/snapshot')[0], 'https://recovered.example.test');
 });

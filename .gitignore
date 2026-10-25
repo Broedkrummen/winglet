@@ -171,3 +171,7 @@ expo-env.d.ts
 .playwright-cli/
 output/
 app/dist-web-preview/
+
+# Event replay private validation outputs
+.pytest-replay-*/
+app/dist-replay-*/

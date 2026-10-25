@@ -1,3 +1,5 @@
+import { phoneSecurityReady } from '../features/phone-tools/runtime';
+import { PhoneRequestSheet } from '../features/phone-tools/RequestSheet';
 import { Inter_400Regular } from '@expo-google-fonts/inter/400Regular';
 import { Inter_500Medium } from '@expo-google-fonts/inter/500Medium';
 import { Inter_600SemiBold } from '@expo-google-fonts/inter/600SemiBold';
@@ -60,7 +62,7 @@ export default function RootLayout() {
   useEffect(() => watchNetwork(setNetwork), [setNetwork]);
 
   useEffect(() => {
-    if (prefsLoaded) lockOnStart();
+    if (prefsLoaded) { lockOnStart(); phoneSecurityReady(); }
   }, [prefsLoaded]);
 
   useEffect(() => {
@@ -74,12 +76,14 @@ export default function RootLayout() {
       document.addEventListener('visibilitychange', onVis);
       return () => document.removeEventListener('visibilitychange', onVis);
     }
-    const sub = AppState.addEventListener('change', (s) => {
+    const applyState = (s: string | null) => {
       setForeground(s === 'active');
       onAppVisibility(s === 'active');
       // Phones keep the app open for days; the check itself only goes to GitHub twice a day.
       if (s === 'active' && usePrefs.getState().prefs.updateCheck) useAppUpdate.getState().check();
-    });
+    };
+    const sub = AppState.addEventListener('change', applyState);
+    applyState(AppState.currentState);
     return () => sub.remove();
   }, [setForeground]);
 
@@ -113,6 +117,7 @@ function Navigator() {
       <Toasts />
       <UpdatePrompt />
       <VerifySheet />
+      <PhoneRequestSheet />
       </AppNavigation>
       <LockScreen />
     </SafeAreaProvider>

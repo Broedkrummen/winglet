@@ -113,3 +113,19 @@ def test_artifact_cap_and_path_refusal(profile):
     assert len(observed['outputs'][0]['text'])==65536 and observed['outputs'][0]['truncated']
     for value in ['../private','bad/path','..','a'*129]:
         with pytest.raises(hermes_api.HermesRefused): hermes_api.routine_history_source(value)
+
+
+def test_native_terminal_pruning_supplies_trusted_finish_coverage(profile,monkeypatch):
+    from datetime import datetime, timezone, timedelta
+    monkeypatch.setattr(executions,'MAX_TERMINAL_EXECUTIONS',2)
+    base=datetime(2026,10,25,10,0,tzinfo=timezone.utc)
+    records=[]
+    for index in range(3):
+        monkeypatch.setattr(executions,'_hermes_now',lambda index=index:base+timedelta(seconds=index*30))
+        row=executions.create_execution('job',source='builtin')
+        executions.mark_execution_running(row['id'])
+        records.append(executions.finish_execution(row['id'],success=True))
+    observed=hermes_api.routine_history_source('job')
+    assert {r['id'] for r in observed['executions']}=={r['id'] for r in records[1:]}
+    assert observed['complete_executions'] and observed['complete_records']
+    assert observed['coverage_from']==records[1]['finished_at']

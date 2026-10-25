@@ -102,6 +102,7 @@ class RoutineHistory:
             body TEXT NOT NULL, terminal INTEGER NOT NULL, PRIMARY KEY(bot,id));
           CREATE TABLE IF NOT EXISTS routine_history_outputs (
             bot TEXT NOT NULL, output_id TEXT NOT NULL, run_id TEXT NOT NULL, PRIMARY KEY(bot,output_id));
+          CREATE INDEX IF NOT EXISTS routine_history_output_run ON routine_history_outputs(bot,run_id);
           CREATE INDEX IF NOT EXISTS routine_history_page ON routine_history_runs(bot,job_id,claim DESC,id DESC);
         """)
 
@@ -123,8 +124,13 @@ class RoutineHistory:
         session_candidates = _unique_links(rows, source.get('sessions', []), session=True)
         present_outputs = {str(x['id']) for x in source.get('outputs', [])}
         present_sessions = {str(x['id']) for x in source.get('sessions', [])}
+        floor = instant(source.get('coverage_from'))
+        def covered(artifact, field):
+            stamp = instant(artifact.get(field))
+            return floor is None or (stamp is not None and stamp > floor + 2)
+        output_links = {key: item for key,item in output_links.items() if covered(item,'at')}
         if not coverage or not source.get('complete_outputs', False): output_links = {}
-        session_links = session_candidates if coverage and source.get('complete_sessions', False) else {}
+        session_links = {key: item for key,item in session_candidates.items() if covered(item,'started_at')} if coverage and source.get('complete_sessions', False) else {}
         linked_outputs = {x['id'] for x in output_links.values()}
         changed = []
         with self._lock, self.db:
@@ -191,6 +197,7 @@ class RoutineHistory:
                 self.db.execute('INSERT INTO routine_history_runs VALUES(?,?,?,?,?,?) ON CONFLICT(bot,id) DO UPDATE SET body=excluded.body,terminal=excluded.terminal',
                                 (scope, job_id, run_id, body.get('claimed_at') or 0, encoded, int(body['status'] in TERMINAL)))
                 if body.get('output_id'):
+                    self.db.execute('DELETE FROM routine_history_outputs WHERE bot=? AND run_id=? AND output_id<>?', (scope,run_id,body['output_id']))
                     self.db.execute('INSERT OR REPLACE INTO routine_history_outputs VALUES(?,?,?)', (scope, body['output_id'], run_id))
                     self.db.execute('DELETE FROM routine_history_runs WHERE bot=? AND id=?', (scope, 'output-' + str(body['output_id'])))
                 if encoded != (json.dumps(old, sort_keys=True) if old else ''):

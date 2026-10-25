@@ -289,3 +289,21 @@ def test_list_summary_uses_response_instead_of_dispatch_document_or_prompt(histo
     assert '12 checks passed' in row['summary']
     assert 'Private synthetic instruction' not in row['summary'] and 'Cron Job' not in row['summary']
     assert 'definition' not in row and 'observed_definition' not in row
+
+
+def test_pruned_ledger_allows_only_artifacts_beyond_trusted_finish_boundary(history):
+    s=source(execution()); s['coverage_from']=105
+    s['outputs']=[{'id':'doc','job_id':'job','at':109,'text':'Newer retained response'}]
+    s['sessions']=[{'id':'older-session','job_id':'job','started_at':102}]
+    history.sync(None,s)
+    row=history.detail(None,'job','run-1')
+    assert row['output']=='Newer retained response' and not row.get('session_id')
+
+
+def test_replaced_output_hash_keeps_only_current_association(history):
+    s=source(execution())
+    for index in range(12):
+        s['outputs']=[{'id':f'doc-{index}','job_id':'job','at':109,'text':f'Observed revision {index}'}]
+        history.sync(None,s)
+    assert history.detail(None,'job','run-1')['output_id']=='doc-11'
+    assert history.db.execute('SELECT COUNT(*) FROM routine_history_outputs').fetchone()[0]==1

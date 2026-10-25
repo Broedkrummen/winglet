@@ -828,6 +828,7 @@ def routine_history_source(routine_id: Optional[str] = None) -> dict:
     records = []
     complete_executions = True
     complete_records = True
+    coverage_from = None
     if ledger.is_file():
         db = sqlite3.connect(ledger.resolve().as_uri() + '?mode=ro', uri=True, timeout=0.5)
         db.row_factory = sqlite3.Row
@@ -838,7 +839,13 @@ def routine_history_source(routine_id: Optional[str] = None) -> dict:
             count = db.execute('SELECT COUNT(*) FROM executions' + where, args).fetchone()[0]
             terminals = db.execute("SELECT COUNT(*) FROM executions WHERE status IN ('completed','failed','unknown')").fetchone()[0]
             complete_records = count <= 5000
-            complete_executions = complete_records and terminals < executions.MAX_TERMINAL_EXECUTIONS
+            complete_executions = complete_records
+            if terminals >= executions.MAX_TERMINAL_EXECUTIONS:
+                # Native pruning removes the oldest FINISHED terminal rows, never active
+                # attempts. Beyond this boundary all potentially overlapping rows survive.
+                oldest = db.execute("SELECT finished_at FROM executions WHERE status IN ('completed','failed','unknown') ORDER BY julianday(finished_at),finished_at LIMIT 1").fetchone()
+                coverage_from = oldest[0] if oldest else None
+                if not coverage_from: complete_executions = False
             records = [dict(x) for x in db.execute('SELECT * FROM executions' + where + ' ORDER BY julianday(claimed_at) DESC,claimed_at DESC,id DESC LIMIT 5000', args)]
         finally: db.close()
     for record in records:
@@ -889,7 +896,7 @@ def routine_history_source(routine_id: Optional[str] = None) -> dict:
                     break
         finally: db.close()
     return {'jobs': jobs[:1000], 'complete_jobs': len(jobs) <= 1000, 'executions': records,
-            'routine_id': routine_id, 'complete_records': complete_records, 'complete_executions': complete_executions, 'complete_outputs': complete_outputs, 'complete_sessions': complete_sessions, 'outputs': outputs, 'sessions': sessions, 'timezone': get_timezone_name() or str(now().tzinfo)}
+            'coverage_from': coverage_from, 'routine_id': routine_id, 'complete_records': complete_records, 'complete_executions': complete_executions, 'complete_outputs': complete_outputs, 'complete_sessions': complete_sessions, 'outputs': outputs, 'sessions': sessions, 'timezone': get_timezone_name() or str(now().tzinfo)}
 
 
 def watch_routine_history(callback):

@@ -131,6 +131,31 @@ async def test_provider_switch_during_fetch_discards_old_account_result(env):
     assert error.value.code=='stale'
 
 
+async def test_account_route_revalidation_cannot_return_data_after_demotion(env):
+    service,hub,bridge,owner,_,_,chat=env
+    calls=0
+    original=bridge.account_route
+    async def route(chat,device):
+        nonlocal calls
+        calls+=1
+        result=await original(chat,device)
+        if calls==2:hub.store.update_device(owner['id'],role='member')
+        return result
+    bridge.account_route=route
+    with pytest.raises(BranchRefused) as error:await service.limits(owner,chat)
+    assert error.value.status==403
+
+
+async def test_failed_accounts_keep_the_same_cache_bound_as_successes(env):
+    service,_,bridge,owner,_,_,chat=env
+    async def failed(route):raise RuntimeError('fixture provider failure')
+    bridge.account=failed
+    for index in range(70):
+        bridge.identity=f'account-{index}'
+        assert not (await service.limits(owner,chat))['available']
+    assert len(service.cache)==64
+
+
 async def test_context_routes_require_owner_signature_and_bot_scope(aiohttp_client,tmp_path):
     store=Store(tmp_path/'db.sqlite');hub=Hub(store,web_root=tmp_path/'web')
     locks={};hub.branching=SimpleNamespace(_lock=lambda key:locks.setdefault(key,asyncio.Lock()),busy=lambda key:locks.setdefault(key,asyncio.Lock()).locked())

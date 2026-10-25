@@ -81,6 +81,7 @@ class ContextInsights:
                     return value
                 except Exception:
                     value={'available':False,'provider':route[1],'reason':'The provider account query failed. Try again later.','windows':[],'details':[]}
+                    if len(self.cache)>=64:self.cache.pop(next(iter(self.cache)))
                     self.cache[identity]=(time.time(),value)
                     return value
                 finally:self.accounts.pop(identity,None)
@@ -93,6 +94,7 @@ class ContextInsights:
         self.actor(device,chat)
         # A model switch can select a different account while the request runs.
         latest=await self.bridge.account_route(chat,device)
+        self.actor(device,chat)
         if latest[0]!=identity:raise BranchRefused('stale','The provider changed. Refresh account limits.')
         return {**value,'cached':False,'age_seconds':0}
 

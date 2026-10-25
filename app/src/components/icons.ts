@@ -122,3 +122,6 @@ export { default as Zap } from 'lucide-react-native/icons/zap';
 export { default as ArrowLeft } from 'lucide-react-native/icons/arrow-left';
 export { default as Send } from 'lucide-react-native/icons/send';
 export { default as Users } from 'lucide-react-native/icons/users';
+
+export { default as AudioLines } from 'lucide-react-native/icons/audio-lines';
+export { default as MicOff } from 'lucide-react-native/icons/mic-off';

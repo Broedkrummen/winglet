@@ -31,18 +31,22 @@ export function parsePairLink(text: string): { url: string; code: string; fp?: s
   return { url: normalizeUrl(match[1]), code: normalizeCode(match[2]), ...(match[3] ? { fp: match[3] } : {}) };
 }
 
-async function request<T>(url: string, init: RequestInit & { token?: string } = {}): Promise<T> {
+async function request<T>(url: string, init: RequestInit & { token?: string; timeoutMs?: number } = {}): Promise<T> {
   const headers: Record<string, string> = { Accept: 'application/json' };
-  if (init.body) headers['Content-Type'] = 'application/json';
+  if (init.body && !(typeof FormData !== 'undefined' && init.body instanceof FormData)) headers['Content-Type'] = 'application/json';
   if (init.token) headers.Authorization = `Bearer ${init.token}`;
   let resp: Response;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 10000);
+  const timer = setTimeout(() => controller.abort(), init.timeoutMs ?? 10000);
+  const abort = () => controller.abort();
+  init.signal?.addEventListener('abort', abort, { once: true });
+  if (init.signal?.aborted) controller.abort();
   try {
-    resp = await fetch(url, { ...init, signal: init.signal ?? controller.signal, redirect: 'error',
+    resp = await fetch(url, { ...init, signal: controller.signal, redirect: 'error',
       headers: { ...headers, ...(init.headers as Record<string, string>) } });
   } catch {
     clearTimeout(timer);
+    init.signal?.removeEventListener('abort', abort);
     throw new ApiError("Can't reach your Hermes server. Check that the gateway is running and the address is accessible from your phone. If you use Tailscale, connect it on this phone.", 0);
   }
   let data: any = null;
@@ -50,7 +54,7 @@ async function request<T>(url: string, init: RequestInit & { token?: string } = 
     data = await resp.json();
   } catch {
     // non-JSON body
-  } finally { clearTimeout(timer); }
+  } finally { clearTimeout(timer); init.signal?.removeEventListener('abort', abort); }
   if (!resp.ok) throw new ApiError(data?.error || `Server returned ${resp.status}`, resp.status, data);
   return data as T;
 }
@@ -61,7 +65,7 @@ export function botPath(server: Server, path: string): string {
   return `${path}${path.includes('?') ? '&' : '?'}bot=${encodeURIComponent(server.profile)}`;
 }
 
-export function api<T>(server: Server, path: string, init: RequestInit = {}): Promise<T> {
+export function api<T>(server: Server, path: string, init: RequestInit & { timeoutMs?: number } = {}): Promise<T> {
   return request<T>(`${server.url}${botPath(server, path)}`, { ...init, token: server.token });
 }
 

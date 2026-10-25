@@ -38,9 +38,11 @@ import { Composer, focusComposer } from './Composer';
 import { ChatMenu } from './ChatMenu';
 import { ChatPet } from './ChatPet';
 import type { DockPetFrame } from './BotCarousel';
+import { SyncStatus } from '../features/event-replay/SyncStatus';
 import { ConnectionBanner } from './ConnectionBanner';
 import { FilesSheet } from './FilesSheet';
 import { ProcessesSheet } from '../features/processes/ProcessesSheet';
+import { ContextSheet } from '../features/context-insights/ContextSheet';
 import { GoalSheet, GoalStrip, useChatGoal } from './Goal';
 import { PausedBanner } from './PausedBanner';
 import { Glass } from './Glass';
@@ -104,6 +106,7 @@ export function ChatView({ server, chatId, showBack, embedded, landing }: { serv
   const [goalOpen, setGoalOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
   const [processesOpen, setProcessesOpen] = useState(false);
+  const [contextOpen, setContextOpen] = useState(false);
   const [branchTarget, setBranchTarget] = useState<BranchTarget | null>(null);
   const target = useRef<View>(null);
   const typing = isTyping(runtime, chatId);
@@ -221,6 +224,7 @@ export function ChatView({ server, chatId, showBack, embedded, landing }: { serv
         </Glass>
         <View style={s.hairline} />
         <ConnectionBanner server={server} compact />
+        <SyncStatus serverId={server.id} />
         <PausedBanner server={server} />
         {!composing ? <BranchStrip server={server} chatId={chatId} state={branching.state} /> : null}
         {!composing && goal ? <GoalStrip goal={goal} onPress={() => setGoalOpen(true)} /> : null}
@@ -235,9 +239,11 @@ export function ChatView({ server, chatId, showBack, embedded, landing }: { serv
         onGoal={goalsSupported && chat?.kind !== 'home' ? () => setGoalOpen(true) : undefined} hasGoal={!!goal && goal.status !== 'done'}
         onFiles={runtime?.info?.features?.files ? () => setFilesOpen(true) : undefined}
         onCheckpoints={runtime?.info?.features?.checkpoints && isOwner(runtime) ? () => router.push('/checkpoints') : undefined}
+        onContext={runtime?.info?.features?.session_context && isOwner(runtime) ? () => setContextOpen(true) : undefined}
         onProcesses={runtime?.info?.features?.processes && isOwner(runtime) ? () => setProcessesOpen(true) : undefined}
         onDeleted={() => router.replace('/chats')} onArchived={() => router.replace('/chats')} />
       <GoalSheet server={server} chatId={chatId} goal={goal} visible={goalOpen} onClose={() => setGoalOpen(false)} onChanged={refreshGoal} />
+      <ContextSheet key={`context:${server.id}:${chatId}`} server={server} chatId={chatId} visible={contextOpen} onClose={() => setContextOpen(false)} />
       <ProcessesSheet key={`processes:${server.id}:${chatId}`} server={server} chatId={chatId}
         visible={processesOpen} onClose={() => setProcessesOpen(false)} />
       <FilesSheet server={server} chatId={chatId} visible={filesOpen} onClose={() => setFilesOpen(false)}

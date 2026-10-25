@@ -26,10 +26,10 @@ const MUTE_OPTIONS: { label: string; seconds: number }[] = [
  * What you can do to a chat, the same from the chat itself and from the list: rename, mute, export, delete,
  * and where it's open its goal and files.
  */
-export function ChatMenu({ server, chatId, title, visible, onClose, onGoal, hasGoal, onFiles, onCheckpoints, onProcesses, onDeleted, onArchived }: {
+export function ChatMenu({ server, chatId, title, visible, onClose, onGoal, hasGoal, onFiles, onCheckpoints, onProcesses, onContext, onDeleted, onArchived }: {
   server: Server; chatId: string; title: string; visible: boolean; onClose: () => void;
   /** Only where the chat is open: its goal, files and workspace snapshots live in that screen. */
-  onGoal?: () => void; hasGoal?: boolean; onFiles?: () => void; onCheckpoints?: () => void; onProcesses?: () => void;
+  onGoal?: () => void; hasGoal?: boolean; onFiles?: () => void; onCheckpoints?: () => void; onProcesses?: () => void; onContext?: () => void;
   /** Where to go once the chat is gone: the chat's own screen has nowhere left to show, a list does. */
   onDeleted?: () => void;
   onArchived?: () => void;
@@ -88,6 +88,7 @@ export function ChatMenu({ server, chatId, title, visible, onClose, onGoal, hasG
             onPress={() => setMode('move')} /> : null}
           {onGoal ? <SheetAction icon={<Target size={20} color={t.colors.text} />} label={hasGoal ? 'Goal' : 'Set a goal'} onPress={() => { close(); onGoal(); }} /> : null}
           {onFiles ? <SheetAction icon={<Images size={20} color={t.colors.text} />} label="Files and photos" onPress={() => { close(); onFiles(); }} /> : null}
+          {onContext ? <SheetAction icon={<Activity size={20} color={t.colors.text} />} label="Context and usage" onPress={() => { close(); onContext(); }} /> : null}
           {onProcesses ? <SheetAction icon={<Cpu size={20} color={t.colors.text} />} label="Background processes"
             onPress={() => { close(); onProcesses(); }} /> : null}
           {onCheckpoints ? <SheetAction icon={<FileDiff size={20} color={t.colors.text} />} label="Workspace checkpoints"

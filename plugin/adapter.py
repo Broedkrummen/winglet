@@ -261,6 +261,9 @@ class WingletAdapter(BasePlatformAdapter):
                 from .routine_history import RoutineHistory
                 hub.routine_history = RoutineHistory(Path(store.path).parent / 'routine-history.sqlite')
                 self._unwatch_routines = hermes_api.watch_routine_history(lambda: setattr(self, '_routine_history_due', 0.0))
+            # Speech-to-text and text-to-speech from this profile's own configuration. The app only sees
+            # the capability and provider names; keys and models stay on the server.
+            hub.speech = hermes_api.SpeechBackend() if hermes_api.speech_available() else None
             # Hermes's own workspace snapshots, only where this Hermes keeps them.
             hub.checkpoints = (checkpoints.CheckpointService(hermes_api, busy=hub.busy_chats)
                                if hermes_api.checkpoints_available() else None)
@@ -290,6 +293,8 @@ class WingletAdapter(BasePlatformAdapter):
             # when this Hermes lacks the session-store operations it needs.
             from .branching import BranchService
             hub.branching = BranchService(hub, self)
+            from .context_insights import ContextInsights
+            hub.context_insights = ContextInsights(hub, self)
             from .processes import Processes
             hub.processes = Processes(self)
             # A private hosted-room worker reuses Hermes's durable scheduler. It

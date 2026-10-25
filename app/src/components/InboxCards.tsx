@@ -1,3 +1,4 @@
+import { router } from 'expo-router';
 import { useRef, useState } from 'react';
 import { Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { agoText } from '../lib/agent';
@@ -15,7 +16,7 @@ const CHOICE_ORDER = ['once', 'session', 'always', 'deny'];
 export function InboxCard({ serverId, item, compact, embedded }: { serverId: string; item: InboxItem; compact?: boolean; embedded?: boolean }) {
   if (item.kind === 'approval') return <ApprovalCard serverId={serverId} item={item} compact={compact} embedded={embedded} />;
   if (item.kind === 'question') return <QuestionCard serverId={serverId} item={item} embedded={embedded} />;
-  return <ResultCard item={item} compact={compact} embedded={embedded} />;
+  return <ResultCard serverId={serverId} item={item} compact={compact} embedded={embedded} />;
 }
 
 function StatusLine({ item }: { item: InboxItem }) {
@@ -194,9 +195,11 @@ function QuestionCard({ serverId, item, embedded }: { serverId: string; item: In
   );
 }
 
-function ResultCard({ item, compact, embedded }: { item: InboxItem; compact?: boolean; embedded?: boolean }) {
+function ResultCard({ serverId, item, compact, embedded }: { serverId: string; item: InboxItem; compact?: boolean; embedded?: boolean }) {
   const t = useTheme();
   const s = useStyles();
+  const history = useApp(st => st.runtime[serverId]?.info?.features?.routine_history === true && isOwner(st.runtime[serverId]));
+  const routineId = item.payload.routine_id || item.payload.job_id;
   const limit = compact ? 400 : 1200;
   return (
     <View style={[s.card, embedded && s.embedded]}>
@@ -205,6 +208,8 @@ function ResultCard({ item, compact, embedded }: { item: InboxItem; compact?: bo
         <Text style={[s.title, { flex: 1 }]}>{item.title}</Text>
       </View>
       <Markdown text={item.body.length > limit ? `${item.body.slice(0, limit)}…` : item.body} compact={compact} />
+      {history && typeof routineId === 'string' ? <Button size="sm" variant="ghost" title={item.payload.run_id ? 'View recorded run' : 'View routine history'}
+        onPress={() => router.push(`/routine/${encodeURIComponent(serverId)}/${encodeURIComponent(routineId)}${item.payload.run_id ? `/run/${encodeURIComponent(item.payload.run_id)}` : ''}` as any)} /> : null}
     </View>
   );
 }

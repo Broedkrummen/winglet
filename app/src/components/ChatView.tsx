@@ -14,6 +14,7 @@ import { BranchSheet, type BranchTarget } from '../features/branching/BranchShee
 import { BranchStrip } from '../features/branching/BranchStrip';
 import { actionHint, canBranch, canEdit, canRegenerate, laterCount, type BranchMode } from '../features/branching/plan';
 import { useBranching } from '../features/branching/useBranching';
+import { routineHref } from '../features/routine-history/model';
 import { mediaUrl } from '../lib/api';
 import { projectOf } from '../features/projects/logic';
 import { connectionView } from '../lib/connection';
@@ -562,6 +563,7 @@ const MessageRow = memo(function MessageRow({ server, message, first, last, live
   const entering = fresh ? FadeInDown.duration(260).easing(easeOut) : undefined;
   const [hover, setHover] = useState(false);
   const botColor = useAvatarColor(server);
+  const history = useApp(st => st.runtime[server.id]?.info?.features?.routine_history === true && isOwner(st.runtime[server.id]));
 
   if (message.role === 'system') {
     if (message.meta?.inbox_id && inboxItem) {
@@ -580,13 +582,16 @@ const MessageRow = memo(function MessageRow({ server, message, first, last, live
   const sendable = message.status === 'final';
   const quote = (onAccent: boolean) => replyTo ? <ReplyQuote server={server} reply={replyTo} onAccent={onAccent} onPress={() => actions.jump(replyTo.id)} /> : null;
   const routine = typeof message.meta?.routine === 'string' ? message.meta.routine : '';
+  const routineId = typeof message.meta?.routine_id === 'string' ? message.meta.routine_id : '';
+  const runId = typeof message.meta?.run_id === 'string' ? message.meta.run_id : undefined;
   const text = (onAccent: boolean) => message.meta?.picker ? <PickerCard server={server} message={message} /> : (
     <>
       {routine ? (
-        <View style={s.routine} accessibilityLabel={`From the routine ${routine}`}>
+        <Tap style={s.routine} disabled={!history || !routineId} accessibilityLabel={`From the routine ${routine}${history && routineId ? ", open history" : ""}`}
+          onPress={() => router.push(routineHref(server.id, routineId, runId) as any)}>
           <CalendarClock size={13} color={t.colors.onAccentSoft} />
           <Text style={s.routineText} numberOfLines={1}>{routine}</Text>
-        </View>
+        </Tap>
       ) : null}
       {message.text ? <Markdown text={message.text} resolveUrl={resolve} tone={onAccent ? 'onAccent' : 'default'} selectable={!TOUCH} compact={layout === 'compact'} /> : null}
       {message.status === 'streaming' && live ? <Cursor onAccent={onAccent} /> : null}

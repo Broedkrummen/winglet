@@ -6,7 +6,7 @@ import ts from 'typescript';
 import { createStore } from 'zustand/vanilla';
 import { PhonePolicy, permitted } from '../src/features/phone-tools/policy.ts';
 const tick=()=>new Promise<void>(r=>setImmediate(r));
-function harness(supported=true) {
+function harness(supported=true,securityReady=true) {
  let generation=0;
  const lock=createStore(()=>({locked:false}));let granted=true,reads=0;let finish:((v:any)=>void)|undefined;
  const sent:any[]=[];const cancelled:string[]=[];
@@ -21,7 +21,8 @@ function harness(supported=true) {
  vm.runInNewContext(ts.transpileModule(readFileSync(new URL('../src/features/phone-tools/runtime.ts',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,{exports:output,require:(name:string)=>{if(name in imports)return imports[name];throw new Error(name);},Error});
  const server={id:'fixture',bot:{name:'fixture'}};
  output.phoneHello(server,(event:any)=>sent.push(event));
- const r={id:'a'.repeat(32),nonce:'b'.repeat(48),instance_id:sent[0]?.instance_id ?? 'unsupported-instance',tool:'phone_contacts',args:{query:'Synthetic'},ask:true,mode:'ask',requested_at:1,expires_at:121,bot:{name:'fixture',title:'Synthetic'},chat:{id:'general',title:'Synthetic'}};
+ if(securityReady)output.phoneSecurityReady();
+ const r={id:'a'.repeat(32),nonce:'b'.repeat(48),instance_id:sent.at(-1)?.instance_id ?? 'unsupported-instance',tool:'phone_contacts',args:{query:'Synthetic'},ask:true,mode:'ask',requested_at:1,expires_at:121,bot:{name:'fixture',title:'Synthetic'},chat:{id:'general',title:'Synthetic'}};
  const receive=(request=r)=>output.phoneEvent(server.id,{type:'phone_tool.request',request});
  const decide=async()=>{output.phoneDecide(server.id,r.id,true);await tick();};
  const execute=async()=>{output.phoneEvent(server.id,{type:'phone_tool.execute',id:r.id,nonce:r.nonce});await tick();};
@@ -52,4 +53,14 @@ test('buffered pre-background requests cannot read after the app resumes with a 
  assert.notEqual(h.sent.at(-1).instance_id,old.instance_id);
  h.receive(old);await h.decide();await h.execute();
  assert.equal(h.reads,0);assert.equal(h.output.usePhone.getState().requests.length,0);h.output.phoneDisconnect('fixture');
+});
+
+test('startup does not advertise unlocked or read before persisted app-lock preferences are applied',async()=>{
+ const h=harness(true,false);
+ assert.equal(h.sent[0].unlocked,false);
+ h.receive();await h.decide();await h.execute();assert.equal(h.reads,0);
+ h.output.phoneSecurityReady();
+ assert.equal(h.sent.at(-1).unlocked,true);
+ assert.notEqual(h.sent.at(-1).instance_id,h.request.instance_id);
+ h.receive();await h.decide();await h.execute();assert.equal(h.reads,0);h.output.phoneDisconnect('fixture');
 });

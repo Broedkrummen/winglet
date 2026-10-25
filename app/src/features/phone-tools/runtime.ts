@@ -11,11 +11,13 @@ export const usePhone = create<{ requests: { serverId: string; request: PhoneReq
 const clients = new Map<string,{ policy: PhonePolicy; send: (event: object) => void }>();
 let instance = Crypto.randomUUID();
 let foreground = true;
+let securityReady = false;
+const unlocked = () => securityReady && foreground && !useLock.getState().locked;
 export function phoneHello(server: Server, send: (event: object) => void) {
   phoneDisconnect(server.id);
   if (!phoneSupported) return;
   const policy = new PhonePolicy({
-    ready: () => foreground && !useLock.getState().locked && clients.has(server.id), send,
+    ready: () => unlocked() && clients.has(server.id), send,
     authority: async r => {
       const state = await api<Snapshot>(server,'/api/phone-tools');
       return permitted(state.grants,r,state.bot_scope,state.server_scope_allowed);
@@ -33,7 +35,7 @@ export function phoneHello(server: Server, send: (event: object) => void) {
     changed: requests => usePhone.setState(s => ({ requests: [...s.requests.filter(p => p.serverId !== server.id),...requests.map(request => ({ serverId: server.id,request }))] })),
   });
   clients.set(server.id,{policy,send});
-  send({type:'phone_tools.hello',instance_id:instance,unlocked:!useLock.getState().locked});
+  send({type:'phone_tools.hello',instance_id:instance,unlocked:unlocked()});
 }
 export function phoneEvent(serverId: string, event: any) {
   const client = clients.get(serverId);
@@ -48,15 +50,21 @@ export function phoneDecide(serverId: string,id: string,allow: boolean) { void c
 export function phoneSuspend(serverId?: string) {
   for (const [id,c] of clients) if (!serverId || serverId === id) c.policy.clear();
 }
+/** Called only after persisted app-lock preferences have been applied on startup. */
+export function phoneSecurityReady() {
+  if (securityReady) return;
+  securityReady=true;instance=Crypto.randomUUID();
+  for (const c of clients.values()) c.send({type:'phone_tools.hello',instance_id:instance,unlocked:unlocked()});
+}
 export function phoneVisibility(visible: boolean) {
   if (foreground!==visible) instance=Crypto.randomUUID();
   foreground=visible;
   if (!visible) phoneSuspend();
-  for (const c of clients.values()) c.send({type:'phone_tools.hello',instance_id:instance,unlocked:visible && !useLock.getState().locked});
+  for (const c of clients.values()) c.send({type:'phone_tools.hello',instance_id:instance,unlocked:unlocked()});
 }
 useLock.subscribe((s,previous) => {
   if (s.locked === previous.locked) return;
   instance=Crypto.randomUUID();
   if (s.locked) phoneSuspend();
-  for (const c of clients.values()) c.send({type:'phone_tools.hello',instance_id:instance,unlocked:foreground && !s.locked});
+  for (const c of clients.values()) c.send({type:'phone_tools.hello',instance_id:instance,unlocked:unlocked()});
 });

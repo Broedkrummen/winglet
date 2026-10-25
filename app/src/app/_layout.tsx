@@ -1,3 +1,4 @@
+import { phoneSecurityReady } from '../features/phone-tools/runtime';
 import { PhoneRequestSheet } from '../features/phone-tools/RequestSheet';
 import { Inter_400Regular } from '@expo-google-fonts/inter/400Regular';
 import { Inter_500Medium } from '@expo-google-fonts/inter/500Medium';
@@ -61,7 +62,7 @@ export default function RootLayout() {
   useEffect(() => watchNetwork(setNetwork), [setNetwork]);
 
   useEffect(() => {
-    if (prefsLoaded) lockOnStart();
+    if (prefsLoaded) { lockOnStart(); phoneSecurityReady(); }
   }, [prefsLoaded]);
 
   useEffect(() => {

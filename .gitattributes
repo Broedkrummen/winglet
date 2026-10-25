@@ -1,0 +1,4 @@
+# Keep notice source and generated copies deterministic across Windows/Linux checkouts.
+third_party/notices/*.md text eol=lf
+app/src/generated/third-party-notices.json text eol=lf
+plugin/THIRD_PARTY_NOTICES.md text eol=lf

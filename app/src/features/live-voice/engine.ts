@@ -411,7 +411,7 @@ export class VoiceEngine {
     }
     const turn = this.turn;
     const turnId = turn?.id;
-    const cancellingGeneration = turn?.status === 'waiting';
+    const cancellingGeneration = turn?.status === 'waiting' || turn?.status === 'speaking';
     if (turn) turn.status = 'interrupted';
     const generation = this.state.generation + 1;
     this.pendingStart = false;

@@ -52,3 +52,17 @@ async def test_real_hermes_filtered_silence_is_success(monkeypatch, tmp_path):
                         {"success": False, "transcript": "", "no_speech": True})
     result = await hermes_api.SpeechBackend().transcribe(str(tmp_path / "quiet.wav"), "audio/wav")
     assert result["no_speech"] is True and result["text"] == ""
+
+async def test_synthesis_never_silently_discards_multiple_provider_files(monkeypatch, tmp_path):
+    tts = pytest.importorskip("tools.tts_tool")
+    from plugin import hermes_api
+    import json
+    monkeypatch.setattr(hermes_api, "_profile_scope", contextlib.nullcontext)
+    paths = [tmp_path / "first.wav", tmp_path / "second.wav"]
+    for path in paths:
+        path.write_bytes(b"synthetic")
+    monkeypatch.setattr(tts, "text_to_speech_tool", lambda **kwargs:
+                        json.dumps({"success": True, "file_paths": [str(p) for p in paths]}))
+    with pytest.raises(ValueError, match="Speech provider failed"):
+        await hermes_api.SpeechBackend().speak("A response that the provider split.")
+    assert not any(path.exists() for path in paths)

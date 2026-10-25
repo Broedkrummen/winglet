@@ -164,6 +164,8 @@ class SpeechBackend:
                     raise ValueError("Speech synthesis returned no audio.")
                 first = Path(paths[0])
                 try:
+                    if len(paths) != 1:
+                        raise ValueError(_speech_error("The provider returned multiple audio files."))
                     data = first.read_bytes()
                 finally:
                     for name in paths:

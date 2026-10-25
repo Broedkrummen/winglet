@@ -166,3 +166,13 @@ test('server 429 retries are bounded and interrupted backpressure never retries'
   controller.abort();
   await assert.rejects(pending); assert.equal(calls, 1);
 });
+
+test('an interrupted spoken reply still asks the server to settle generation', () => {
+  const f = setup(); f.text();
+  f.e.replyMessage({ id: 'final', text: 'Answer', createdAtMs: 11000, final: true });
+  assert.ok(f.e.interrupt().some((e: any) => e.type === 'stopGeneration'));
+});
+test('stop phrases may address the selected bot by its own name', () => {
+  assert.equal(isVoiceStopCommand('Hey Winglet, stop!', 'Winglet'), true);
+  assert.equal(isVoiceStopCommand('Hey Winglet, stop the container', 'Winglet'), false);
+});

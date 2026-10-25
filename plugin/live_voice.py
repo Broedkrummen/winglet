@@ -339,7 +339,7 @@ class VoiceBridge:
         try:
             return bool(speech is not None and speech.available())
         except Exception:
-            logger.debug("[winglet] speech availability check failed", exc_info=True)
+            logger.debug("[winglet] speech availability check failed")
             return False
 
     def status(self) -> Dict[str, Any]:
@@ -348,7 +348,7 @@ class VoiceBridge:
         try:
             return dict(self.hub.speech.status() or {})
         except Exception:
-            logger.debug("[winglet] speech status failed", exc_info=True)
+            logger.debug("[winglet] speech status failed")
             return {}
 
     def sweep(self) -> None:

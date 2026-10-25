@@ -121,7 +121,7 @@ const WHITESPACE_ANY = /\s+/g;
  */
 export function isVoiceStopCommand(transcript: string, assistant = 'hermes'): boolean {
   let text = normalize(transcript);
-  const names = [assistant, ...assistant.split(/\s+/), ...ADDRESSES]
+  const names = [`hey ${assistant}`, assistant, ...assistant.split(/\s+/), ...ADDRESSES]
     .map((name) => normalize(name))
     .filter(Boolean)
     .sort((a, b) => b.length - a.length);

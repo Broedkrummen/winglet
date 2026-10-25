@@ -253,3 +253,7 @@ Approved context integration `2b0a6f30b0d5579b05110ed7effa5ddeb211f4a6` is now i
 retains both context route policies/capabilities/shutdown and the phone equivalents. Native source did not
 change during that integration merge. Current head CI is checked separately; the green run above proves
 `30fe014` only and must not be represented as current-head evidence.
+
+Final approved-integration merge checks: **126 backend/Hermes/replay/hub passed; 60 focused app passed;
+TypeScript passed**. These ran after integrating `2b0a6f3`; the native module source is unchanged since
+the successful Kotlin compilation.

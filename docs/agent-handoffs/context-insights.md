@@ -32,3 +32,39 @@ only on explicit request, owner-only and cached per credential/profile route.
 Compression confirms provider work/cost and requires idle, fresh preview and a
 live connection. Phone/tablet/wide layouts use existing tokens, Sheet and UI.
 Native device checks are deferred until07-11integrated as the user requested.
+
+## Verified implementation and evidence
+
+The model route, transcript revision, profile and credential route bind previews
+and account cache entries. Fresh owner/chat checks follow asynchronous reads;
+provider changes reject stale work. The account cache is bounded on both success
+and failure. Retained receipts recover the most recent operation on panel reopen.
+Unsupported Hermes versions report capability absence; unknown model windows
+stay unknown instead of adopting Hermes's generic fallback context size.
+
+Validation: full lightweight backend 421 passed / 24 skipped before the last
+two service regressions; final focused service/routes 10 passed; actual pinned
+Hermes adapter tests 5 passed, including real SessionStore/SessionDB reads,
+model switch invalidation, account raw-body exclusion and the real short-history
+manual-compression no-change path. Full client 329 passed, typecheck and web /
+Android JavaScript exports passed. The local full Hermes suite was interrupted
+for machine memory pressure and is NOT a passing result; CI runs that suite.
+
+Browser fixture scripts/context_insights_fixture.py binds loopback9309 and uses
+disposable SQLite with synthetic tokens/account balances. Real menu navigation,
+explicit account load and signed compression confirmation completed, yielding a
+retained completed receipt and 8400 -> 3200 context tokens. No real provider call
+or session compression was used in this UI check. Screenshots cover390light
+overview,320dark receipt and1440light receipt; responsive runs also cover820.
+These are browser renders, not Android runtime evidence. Native/device testing
+is pending combined integration. Unknown/failure/identity/restart behavior is
+covered by the service and model tests, not claimed from screenshots.
+
+Combined mobile recipe: open a disposable QA chat as owner, inspect known or
+unknown context/window labels and long model names; rotate/reopen the sheet;
+verify offline reads are labelled cached and compression disabled; regain network
+and refresh. Run compression only in a disposable short session with explicit
+provider authorization, reopen while running, confirm final receipt and draft
+preservation; retry same operation ID observes its receipt. Verify members have
+no context/account entry and direct HTTP reads are forbidden. Do not change
+providers or touch personal conversations just to create test outcomes.

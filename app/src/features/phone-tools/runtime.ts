@@ -9,7 +9,7 @@ export type CatalogItem = { title: string; description: string; fields: string; 
 export type Snapshot = { catalog: Record<Tool,CatalogItem>; grants: Grant[]; history: { ts: number; tool: string; event: string }[]; bot_scope: string; server_scope_allowed: boolean };
 export const usePhone = create<{ requests: { serverId: string; request: PhoneRequest }[]; notes: Record<string,string> }>(() => ({ requests: [], notes: {} }));
 const clients = new Map<string,{ policy: PhonePolicy; send: (event: object) => void }>();
-const instance = Crypto.randomUUID();
+let instance = Crypto.randomUUID();
 let foreground = true;
 export function phoneHello(server: Server, send: (event: object) => void) {
   phoneDisconnect(server.id);
@@ -38,7 +38,7 @@ export function phoneHello(server: Server, send: (event: object) => void) {
 export function phoneEvent(serverId: string, event: any) {
   const client = clients.get(serverId);
   if (!client) return;
-  if (event.type === 'phone_tool.request') client.policy.receive(event.request);
+  if (event.type === 'phone_tool.request' && event.request?.instance_id === instance) client.policy.receive(event.request);
   if (event.type === 'phone_tool.execute') void client.policy.execute(event.id,event.nonce);
   if (event.type === 'phone_tool.cancel') client.policy.cancel(event.id);
   if (event.type === 'phone_tool.grants_changed') client.policy.clear();
@@ -49,12 +49,14 @@ export function phoneSuspend(serverId?: string) {
   for (const [id,c] of clients) if (!serverId || serverId === id) c.policy.clear();
 }
 export function phoneVisibility(visible: boolean) {
+  if (foreground!==visible) instance=Crypto.randomUUID();
   foreground=visible;
   if (!visible) phoneSuspend();
   for (const c of clients.values()) c.send({type:'phone_tools.hello',instance_id:instance,unlocked:visible && !useLock.getState().locked});
 }
 useLock.subscribe((s,previous) => {
   if (s.locked === previous.locked) return;
+  instance=Crypto.randomUUID();
   if (s.locked) phoneSuspend();
   for (const c of clients.values()) c.send({type:'phone_tools.hello',instance_id:instance,unlocked:foreground && !s.locked});
 });

@@ -119,6 +119,7 @@ class Pending:
     expires: float
     future: asyncio.Future
     mode: str
+    instance_id: str = ""
     executing: bool = False
 
 
@@ -176,7 +177,7 @@ class PhoneTools:
         return bool(d and d.get("platform") == "android" and d["role"] == p.role and c and self.hub.can_see(d,c)
                     and (c.get("bot") or "") == p.bot and g and (g["scope"] != "*" or d["role"] == "owner") and g["mode"] == p.mode
                     and not p.ws.closed and meta.get("phone_ready") and meta.get("visible") is True and meta.get("phone_unlocked") is True
-                    and (meta.get("bot") or "") == p.bot and time.time() < p.expires)
+                    and (meta.get("bot") or "") == p.bot and (meta.get("phone_instance") or "") == p.instance_id and time.time() < p.expires)
 
     async def request(self, device_id, chat_id, bot, tool, args):
         args = arguments(tool, args)
@@ -192,15 +193,15 @@ class PhoneTools:
             return {"error": "offline"}
         if sum(p.device_id == device_id for p in self.pending.values()) >= 4:
             return {"error": "busy"}
-        ws, _ = candidates[-1]  # Exactly one socket. Never broadcast private requests.
+        ws, meta = candidates[-1]  # Exactly one socket. Never broadcast private requests.
         ask = g["mode"] == "ask" or bool(args.get("precise"))
         ttl = min(self.timeout, 120 if ask else 20)
-        p = Pending(secrets.token_hex(16), secrets.token_hex(24), device_id, bot, chat_id, d["role"], tool, args, ws, time.time()+ttl, self.loop.create_future(), g["mode"])
+        p = Pending(secrets.token_hex(16), secrets.token_hex(24), device_id, bot, chat_id, d["role"], tool, args, ws, time.time()+ttl, self.loop.create_future(), g["mode"], meta.get("phone_instance") or "")
         self.pending[p.id] = p
         try:
             with self.hub._bot_context(bot or None):
                 context = self.hub.bot()
-            await ws.send_json({"type": "phone_tool.request", "request": {"id": p.id, "nonce": p.nonce, "tool": tool, "args": args, "ask": ask, "mode": p.mode, "requested_at": time.time(), "expires_at": p.expires, "bot": context, "chat": {"id": chat_id, "title": c["title"]}}})
+            await ws.send_json({"type": "phone_tool.request", "request": {"id": p.id, "nonce": p.nonce, "instance_id": p.instance_id, "tool": tool, "args": args, "ask": ask, "mode": p.mode, "requested_at": time.time(), "expires_at": p.expires, "bot": context, "chat": {"id": chat_id, "title": c["title"]}}})
             self.audit(device_id, bot, chat_id, tool, "requested")
             return await asyncio.wait_for(asyncio.shield(p.future), ttl)
         except asyncio.TimeoutError:

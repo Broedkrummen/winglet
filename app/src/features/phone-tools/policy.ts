@@ -1,10 +1,10 @@
 export const TOOLS = ['phone_status', 'phone_shared_note', 'phone_location', 'phone_contacts', 'phone_calendar'] as const;
 export type Tool = typeof TOOLS[number];
 export type Grant = { tool: Tool; scope: string; mode: 'ask' | 'while_open'; enabled: number };
-export type PhoneRequest = { id: string; nonce: string; tool: Tool; args: Record<string, unknown>; ask: boolean;
+export type PhoneRequest = { id: string; nonce: string; instance_id: string; tool: Tool; args: Record<string, unknown>; ask: boolean;
   mode: 'ask' | 'while_open'; requested_at: number; expires_at: number; bot: { name: string; title: string }; chat: { id: string; title: string } };
 export function readRequest(value: any): PhoneRequest | null {
-  if (!value || !/^[a-f0-9]{32}$/.test(value.id) || !/^[a-f0-9]{48}$/.test(value.nonce) || !TOOLS.includes(value.tool)
+  if (!value || typeof value.instance_id !== 'string' || value.instance_id.length < 16 || value.instance_id.length > 80 || !/^[a-f0-9]{32}$/.test(value.id) || !/^[a-f0-9]{48}$/.test(value.nonce) || !TOOLS.includes(value.tool)
     || !value.args || typeof value.args !== 'object' || Array.isArray(value.args) || typeof value.ask !== 'boolean'
     || !['ask', 'while_open'].includes(value.mode) || !Number.isFinite(value.requested_at) || !Number.isFinite(value.expires_at)
     || value.expires_at <= value.requested_at || value.expires_at - value.requested_at > 121

@@ -30,7 +30,7 @@ async def env(tmp_path):
     hub = Hub(store,bot_info=lambda: {'name':'hermes','title':'Fixture bot'})
     hub.phone_tools = bridge = PhoneTools(hub,timeout=.3)
     ws = Socket()
-    hub._sockets[ws] = {'device':device,'bot':None,'visible':True,'phone_ready':True,'phone_unlocked':True}
+    hub._sockets[ws] = {'device':device,'bot':None,'visible':True,'phone_ready':True,'phone_unlocked':True,'phone_instance':'fixture-instance-123456'}
     yield SimpleNamespace(store=store,device=device,token=token,hub=hub,bridge=bridge,ws=ws)
     for p in list(bridge.pending.values()): await bridge.finish(p,{'error':'cancelled'})
     store.close()
@@ -225,4 +225,13 @@ async def test_revoke_withdraws_authority_before_awaiting_socket_cancel(env,acti
     await asyncio.wait_for(reached.wait(),1)
     assert await e.bridge.request(e.device['id'],'general','','phone_status',{})=={'error':'revoked'}
     release.set();await revoke
+    assert await task=={'error':'revoked'}
+
+
+async def test_request_is_bound_to_the_exact_phone_lifecycle_instance(env):
+    await enable(env)
+    task,r=await start(env)
+    assert r['instance_id']=='fixture-instance-123456'
+    env.hub._sockets[env.ws]['phone_instance']='new-instance-after-resume'
+    await decision(env,r)
     assert await task=={'error':'revoked'}

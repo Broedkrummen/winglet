@@ -45,8 +45,8 @@ chosen; requests are never broadcast or queued for offline delivery.
 
 | Event | Meaning |
 | --- | --- |
-| app → `phone_tools.hello` | `{instance_id, unlocked}` after the existing authenticated hello; same process shares its instance across bot sockets. New instance cancels prior pending access. |
-| server → `phone_tool.request` | Random 128-bit ID + 192-bit nonce, allowlisted tool/arguments, mode, ask flag, server request/expiry timestamps, authenticated bot and chat context. |
+| app → `phone_tools.hello` | `{instance_id, unlocked}` after the existing authenticated hello; same lifecycle shares its instance across bot sockets. Restart, visibility or app-lock transitions rotate it and cancel prior pending access. |
+| server → `phone_tool.request` | Random 128-bit ID + 192-bit nonce and current lifecycle instance, allowlisted tool/arguments, mode, ask flag, server request/expiry timestamps, authenticated bot and chat context. |
 | app → `phone_tool.decision` | `{id, nonce, allow}`. Ask mode shows the request sheet. While-open mode still performs this authorization step. Precise location always asks. |
 | server → `phone_tool.execute` | `{id, nonce}` only after rechecking role, device/chat/bot scope, grant, mode, foreground, unlock and expiry. This frame is required before any native read. |
 | app → `phone_tool.answer` | `{id, nonce, ok, result/error}`. Exactly one execution/result settles the request. Server rechecks authority and sanitizes every returned field; unknown error text is discarded. |
@@ -57,6 +57,8 @@ Ask-mode deadline: 120 s. While-open deadline: 20 s. At most 4 concurrent reques
 native operations have a 15 s deadline. Server protocol timestamps/audit use epoch seconds, native/calendar
 APIs use milliseconds. Client timers measure the advertised interval locally; the gateway is authoritative
 for expiry. Old, duplicate, wrong-socket, wrong-device and wrong-bot decisions/answers cannot settle a request.
+The client rejects transport-buffered requests from before background/resume or app-lock transitions,
+and the gateway rechecks the request's lifecycle instance before execution/answer.
 
 The app fetches authoritative grants before deciding, immediately before reading and after reading.
 The native module independently rechecks OS permissions, activity foreground, device lock and expiry before
@@ -223,4 +225,9 @@ The initial no-Hermes PR CI job exposed integration tests importing Hermes uncon
 skip only when the real optional Hermes package is absent; the dedicated pinned-Hermes job still runs them.
 Latest integration fetch remains `87cf6269c42ea4610880ef158110e48837e34848`; no additional contract drift.
 PR: https://github.com/VIKASRP24/winglet/pull/52 (draft, not merged).
+CI at source `30fe014`: **all four jobs passed** (run `40166102861`): pinned Hermes **486 passed/1 skipped**;
+Linux and Windows each **441 passed/23 skipped**; app **335 passed**, typecheck and both exports passed.
+A further lifecycle-instance regression adds app/server coverage: buffered pre-background requests cannot
+execute after resume. Focused latest app policy/runtime **11 passed**, backend **24 passed**.
+NDK 27.1.12297006 was successfully installed after preserving the failed 211-byte partial metadata.
 Native build final result will be recorded here before final handoff.

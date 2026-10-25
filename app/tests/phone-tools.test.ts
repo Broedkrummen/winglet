@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { PhonePolicy, permitted, readRequest, type PhoneRequest, type Tool } from '../src/features/phone-tools/policy.ts';
-const request=(tool:Tool='phone_status',args:Record<string,unknown>={}):PhoneRequest=>({id:'a'.repeat(32),nonce:'b'.repeat(48),tool,args,ask:true,mode:'ask',requested_at:100,expires_at:120,bot:{name:'fixture',title:'Fixture bot'},chat:{id:'test',title:'Fixture chat'}});
+const request=(tool:Tool='phone_status',args:Record<string,unknown>={}):PhoneRequest=>({id:'a'.repeat(32),nonce:'b'.repeat(48),instance_id:'fixture-instance-123456',tool,args,ask:true,mode:'ask',requested_at:100,expires_at:120,bot:{name:'fixture',title:'Fixture bot'},chat:{id:'test',title:'Fixture chat'}});
 const flush=()=>new Promise<void>(resolve=>setImmediate(resolve));
 function setup() {
  let ready=true,authorized=true,reads=0,now=0;

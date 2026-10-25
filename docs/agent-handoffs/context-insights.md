@@ -95,3 +95,22 @@ short-history manual command path remains covered without a provider call.
 The new client test covers definite rejection versus ambiguous receipt recovery.
 No new provider request, browser render, native build or device test was run for
 this narrow correction; earlier UI/build evidence above remains the baseline.
+
+## Integration refresh
+
+Merged reviewed integration commit fc4df428edb01f4177843f9b82f40d4cf14c41df
+(features01-08) as fdd49ebaa36eab6c52a8ad930e934cef257b4a57. Shared ChatView,
+Hub and adapter wiring merged without conflicts. ContextSheet, voice controls,
+SyncStatus, context send gating and the replay/voice routes remain present.
+
+After that merge, focused context/replay/voice backend checks, including the
+real pinned-Hermes adapters: 107 passed. Focused context/replay/voice/audio-mode
+client checks: 46 passed. TypeScript typecheck passed. The runtime clone used
+by private .venv09 is Hermes47676981f55de91231fdeef2f0eec47e7c209e78.
+No full suite or exports were repeated locally for this narrow correction;
+final-head CI supplies the complete plugin, real-Hermes and app/export checks.
+
+MOBILE VALIDATION PENDING: the combined feature07-11 integration and its final
+native build remain the required device-test target. No ADB or physical phone
+access occurred. Use the disposable-chat and owner/member recipe above after
+that combined build is ready; browser evidence remains browser-only.

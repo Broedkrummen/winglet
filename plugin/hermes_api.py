@@ -595,7 +595,7 @@ def _cron():
 
 
 _JOB_FIELDS = ("id", "name", "prompt", "schedule_display", "state", "enabled", "next_run_at", "last_run_at",
-               "last_status", "last_error", "deliver", "created_at", "paused_reason")
+               "last_status", "last_error", "deliver", "created_at", "paused_reason", "manual_run_at")
 
 
 def _job_view(job: dict) -> dict:
@@ -657,6 +657,127 @@ def change_routine(job_id: str, action: str, updates: Optional[dict] = None) -> 
     except ValueError as exc:
         raise HermesRefused(str(exc)) from exc
     return _job_view(job) if job else None
+
+
+def routine_history_available() -> bool:
+    try:
+        from cron import executions
+        from hermes_state import SessionDB
+        return all(callable(getattr(executions, k, None)) for k in ('list_executions', 'get_execution')) and callable(getattr(SessionDB, 'list_cron_job_runs', None))
+    except Exception:
+        return False
+
+
+@_scoped
+def routine_history_source(routine_id: Optional[str] = None) -> dict:
+    """Read the pinned scheduler's real ledger, output documents and session records.
+
+    No recovery/migration/tick API is invoked: observation cannot execute a job or rewrite
+    Hermes state. All paths resolve inside the current authenticated profile context.
+    """
+    import hashlib
+    import re
+    import sqlite3
+    from pathlib import Path
+    from cron import executions
+    from hermes_constants import get_hermes_home
+    from hermes_time import get_timezone_name, now
+    from hermes_state import SessionDB
+    if not routine_history_available(): raise HermesUnavailable('routine history unavailable')
+    if routine_id is not None and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', routine_id):
+        raise HermesRefused('Invalid routine identity.')
+    home = get_hermes_home().resolve()
+    # list_jobs() invokes load_jobs() repair and latest_executions() schema setup.
+    # Observe the canonical file directly so opening History cannot repair or execute.
+    jobs_path = _cron()._current_cron_store().jobs_file
+    if jobs_path.is_file():
+        with jobs_path.open('rb') as handle: raw_jobs = handle.read(4 * 1024 * 1024 + 1)
+        if len(raw_jobs) > 4 * 1024 * 1024: raise HermesUnavailable('Routine definitions exceed the read bound.')
+        data = json.loads(raw_jobs)
+        jobs = data.get('jobs', []) if isinstance(data, dict) else data
+        if not isinstance(jobs, list) or any(not isinstance(j, dict) for j in jobs):
+            raise HermesUnavailable('Routine definitions need repair in Hermes.')
+        jobs = [_cron()._normalize_job_record(j) for j in jobs]
+    else: jobs = []
+    ledger = Path(executions.EXECUTIONS_FILE) if executions.EXECUTIONS_FILE else home / 'cron/executions.db'
+    records = []
+    complete_executions = True
+    complete_records = True
+    if ledger.is_file():
+        db = sqlite3.connect(ledger.resolve().as_uri() + '?mode=ro', uri=True, timeout=0.5)
+        db.row_factory = sqlite3.Row
+        try:
+            db.execute('PRAGMA query_only=ON')
+            db.execute('BEGIN')  # Counts, coverage and rows describe one consistent ledger snapshot.
+            where, args = (' WHERE job_id=?', (routine_id,)) if routine_id else ('', ())
+            count = db.execute('SELECT COUNT(*) FROM executions' + where, args).fetchone()[0]
+            terminals = db.execute("SELECT COUNT(*) FROM executions WHERE status IN ('completed','failed','unknown')").fetchone()[0]
+            complete_records = count <= 5000
+            complete_executions = complete_records and terminals < executions.MAX_TERMINAL_EXECUTIONS
+            records = [dict(x) for x in db.execute('SELECT * FROM executions' + where + ' ORDER BY julianday(claimed_at) DESC,claimed_at DESC,id DESC LIMIT 5000', args)]
+        finally: db.close()
+    for record in records:
+        if record.get('status') in {'claimed', 'running'}:
+            try: record['owner_gone'] = not executions._owner_is_live(int(record['pid']), record.get('process_started_at'))
+            except Exception: record['owner_gone'] = False
+    selected = [routine_id] if routine_id else list(dict.fromkeys(str(x['job_id']) for x in records))[:40]
+    output_root = _cron().get_cron_output_dir().resolve()
+    outputs = []
+    complete_outputs = True
+    for job_id in selected:
+        if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', job_id): continue
+        directory = (output_root / job_id).resolve()
+        if directory.parent != output_root or not directory.is_dir(): continue
+        files = []
+        for path in directory.glob('*.md'):
+            try:
+                if path.is_file() and path.resolve().parent == directory:
+                    files.append((path.stat().st_mtime, path))
+            except FileNotFoundError: continue
+        if len(files) > 50: complete_outputs = False
+        files = [path for _, path in sorted(files, key=lambda x: x[0], reverse=True)[:50]]
+        for path in files:
+            try:
+                with path.open('rb') as handle: raw = handle.read(65537)
+                stamp = path.stat().st_mtime
+            except (FileNotFoundError, PermissionError): continue
+            digest = hashlib.sha256((job_id + ':' + path.name).encode() + raw).hexdigest()[:32]
+            outputs.append({'id': digest, 'job_id': job_id, 'at': stamp,
+                            'text': raw[:65536].decode('utf8', errors='replace'), 'truncated': len(raw) > 65536})
+            if len(outputs) >= 200: break
+        if len(outputs) >= 200:
+            complete_outputs = False
+            break
+    sessions = []
+    complete_sessions = True
+    if (home / 'state.db').is_file():
+        db = SessionDB(db_path=home / 'state.db', read_only=True)
+        try:
+            for job_id in selected:
+                limit = min(200, 500-len(sessions))
+                batch = db.list_cron_job_runs(job_id, limit=limit, offset=0)
+                if len(batch) >= limit: complete_sessions = False
+                for row in batch:
+                    sessions.append({k: row.get(k) for k in ('id', 'started_at', 'ended_at', 'source') } | {'job_id': job_id})
+                if len(sessions) >= 500:
+                    complete_sessions = False
+                    break
+        finally: db.close()
+    return {'jobs': jobs[:1000], 'complete_jobs': len(jobs) <= 1000, 'executions': records,
+            'routine_id': routine_id, 'complete_records': complete_records, 'complete_executions': complete_executions, 'complete_outputs': complete_outputs, 'complete_sessions': complete_sessions, 'outputs': outputs, 'sessions': sessions, 'timezone': get_timezone_name() or str(now().tzinfo)}
+
+
+def watch_routine_history(callback):
+    """A supported content-free lifecycle wakeup; durable polling also covers other processes."""
+    try:
+        from agent.monitoring.emitter import get_emitter
+        emitter = get_emitter()
+        def observed(batch):
+            if any(getattr(event, 'EVENT', '') == 'cron_execution' or (isinstance(event, dict) and event.get('event') == 'cron_execution') for event in batch): callback()
+        emitter.subscribe(observed)
+        return lambda: emitter.unsubscribe(observed)
+    except Exception:
+        return lambda: None
 
 
 # -- goals ---------------------------------------------------------------------------------

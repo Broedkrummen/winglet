@@ -1,4 +1,5 @@
 """Real pinned context accounting, stores, manual command and turn lease; no provider."""
+import asyncio
 import contextlib
 from types import SimpleNamespace
 from datetime import datetime,timezone
@@ -15,7 +16,8 @@ from hermes_state import SessionDB
 from plugin.hub import Hub
 from plugin.store import Store
 from plugin.context_insights_hermes import ContextBridge
-from plugin.branching import BranchRefused
+from plugin.branching import BranchRefused,transcript_revision
+from plugin.context_insights import ContextInsights
 
 
 @pytest.fixture
@@ -117,3 +119,93 @@ async def test_normalized_account_response_never_serializes_provider_raw_credent
     assert result['available'] and result['kind']=='credits'
     assert result['windows'][0]['used_percent']==25
     assert 'SHOULD_NEVER_REACH_CLIENT' not in str(result) and 'sk-private-fixture' not in str(result)
+
+
+def switch_to_identical_session(bridge,runner,db,chat,owner):
+    db.create_session('rerouted',source='telegram',model='sample-model')
+    db.append_message('rerouted','user','Do not return this private prompt',platform_message_id='user1')
+    db.append_message('rerouted','assistant','A short answer')
+    assert runner.session_store.switch_session(bridge.sessions.key_for(chat['id']),'rerouted',expected_session_id='current') is not None
+
+
+async def test_identical_transcript_on_another_canonical_session_invalidates_preview(real):
+    bridge,runner,db,hub,owner,chat,_=real
+    old,revision=await bridge.snapshot(chat,owner)
+    switch_to_identical_session(bridge,runner,db,chat,owner)
+    current,latest=await bridge.snapshot(chat,owner)
+    assert transcript_revision([],old.rows)==transcript_revision([],current.rows)
+    assert old.session_id!=current.session_id and revision!=latest
+    with pytest.raises(BranchRefused) as error:
+        await bridge.compress(chat,owner,revision,lambda:None)
+    assert error.value.code=='stale'
+    assert len(db.get_messages('current'))==len(db.get_messages('rerouted'))==2
+
+
+@pytest.mark.parametrize('stage',['snapshot','preflight','profile'])
+@pytest.mark.parametrize('change',['demote','switch'])
+async def test_command_revalidates_after_async_preflight_and_profile_enter(real,stage,change):
+    bridge,runner,db,hub,owner,chat,monkeypatch=real
+    service=ContextInsights(hub,None,bridge)
+    hub.store.add_device('Remaining owner','test',role='owner',verified=True)
+    initial=await bridge.inspect(chat,owner)
+    started=asyncio.Event();resume=asyncio.Event()
+    calls=0;snapshots=0;armed=False;held=False
+    original_snapshot=bridge.snapshot
+    original_inspect=bridge.inspect
+    original_command=runner._handle_compress_command
+    original_scope=runner._async_profile_scope_for_source
+
+    async def pause():
+        nonlocal held
+        if held:return
+        held=True;started.set()
+        await resume.wait()
+
+    async def snapshot(*args):
+        nonlocal snapshots
+        result=await original_snapshot(*args)
+        snapshots+=1
+        if stage=='snapshot' and snapshots==2:await pause()
+        return result
+
+    async def inspect(*args):
+        nonlocal armed
+        result=await original_inspect(*args)
+        if stage=='preflight':await pause()
+        armed=True
+        return result
+
+    @contextlib.asynccontextmanager
+    async def scope(source):
+        async with original_scope(source):
+            if stage=='profile' and armed:await pause()
+            yield
+
+    async def command(event):
+        nonlocal calls
+        calls+=1
+        return await original_command(event)
+
+    monkeypatch.setattr(bridge,'snapshot',snapshot)
+    monkeypatch.setattr(bridge,'inspect',inspect)
+    monkeypatch.setattr(runner,'_async_profile_scope_for_source',scope)
+    monkeypatch.setattr(runner,'_handle_compress_command',command)
+    task=asyncio.create_task(bridge.compress(chat,owner,initial['revision'],lambda:service.actor(owner,chat)))
+    try:
+        await asyncio.wait_for(started.wait(),2)
+        if change=='demote':hub.store.update_device(owner['id'],role='member')
+        else:switch_to_identical_session(bridge,runner,db,chat,owner)
+        resume.set()
+        with pytest.raises(BranchRefused) as error:
+            await asyncio.wait_for(task,2)
+        assert error.value.code==('forbidden' if change=='demote' else 'stale')
+        assert calls==0
+        assert len(db.get_messages('current'))==2
+        if change=='switch':assert len(db.get_messages('rerouted'))==2
+        token=await runner._turn_leases.acquire('current',owner_key='next-turn',generation=2,timeout=.1)
+        assert token is not None and runner._turn_leases.release(token)
+    finally:
+        resume.set()
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):await task

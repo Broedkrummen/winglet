@@ -1,5 +1,8 @@
 export type ContextCategory={id:string;label:string;tokens:number|null};
 export type ContextAmount={used:number|null;window:number|null;source:string;categories:ContextCategory[];estimated_total:number|null};
+export type CompressionRequest={operation_id:string;revision:string};
+// A rejection was not accepted; network, timeout and server failures may hide a receipt.
+export const compressionRetryRequest=(pending:CompressionRequest|null,status?:number)=>status!==undefined&&status>=400&&status<500&&status!==408?null:pending;
 export type ContextOperation={operation_id:string;status:'running'|'completed'|'unchanged'|'refused'|'unknown';outcome:string;before?:ContextAmount;after?:ContextAmount;revision?:string};
 export type ContextView={chat_id:string;revision:string;model:string;provider:string;context:ContextAmount;busy:boolean;can_compress:boolean;sampled_at:number;
   compression_count:number|null;last_operation:ContextOperation|null;warning:string;

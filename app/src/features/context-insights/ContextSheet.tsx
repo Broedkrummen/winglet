@@ -7,7 +7,7 @@ import { api, ApiError, signedApi } from '../../lib/api';
 import { isOwner, useApp } from '../../lib/store';
 import { makeStyles, useTheme } from '../../lib/themeContext';
 import type { Server } from '../../lib/types';
-import { composition, contextPercent, costLabel, sourceLabel, tokenCount, type AccountView, type ContextOperation, type ContextView } from './model';
+import { composition, compressionRetryRequest, contextPercent, costLabel, sourceLabel, tokenCount, type AccountView, type CompressionRequest, type ContextOperation, type ContextView } from './model';
 
 const stamp=(seconds?:number|null)=>seconds?new Date(seconds*1000).toLocaleString():'Unknown';
 
@@ -21,7 +21,7 @@ export function ContextSheet({server,chatId,visible,onClose}:{server:Server;chat
   const [operation,setOperation]=useState<ContextOperation|null>(null);const [error,setError]=useState('');
   const [loading,setLoading]=useState(false);const [accountLoading,setAccountLoading]=useState(false);
   const [refresh,setRefresh]=useState(0);const [confirm,setConfirm]=useState(false);const [starting,setStarting]=useState(false);
-  const generation=useRef(0);const pending=useRef<{operation_id:string;revision:string}|null>(null);
+  const generation=useRef(0);const pending=useRef<CompressionRequest|null>(null);
   const base=`/api/context/chats/${encodeURIComponent(chatId)}`;
   useEffect(()=>{setData(null);setAccount(null);setOperation(null);setError('');setConfirm(false);pending.current=null;},[server.id,chatId,owner]);
   useEffect(()=>{
@@ -46,10 +46,10 @@ export function ContextSheet({server,chatId,visible,onClose}:{server:Server;chat
   };
   const compress=async()=>{
     if(!data||!online||!owner||starting||typing)return;
-    const current=generation.current;pending.current??={operation_id:`context-${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`,revision:data.revision};
+    const current=generation.current;const request=pending.current??={operation_id:`context-${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`,revision:data.revision};
     setStarting(true);setError('');
-    try{const next=await signedApi<ContextOperation>(server,'POST',`${base}/compress`,pending.current);if(current===generation.current){setOperation(next);setConfirm(false);if(next.status!=='running')pending.current=null;}}
-    catch(e){if(current===generation.current)setError((e as Error).message);}
+    try{const next=await signedApi<ContextOperation>(server,'POST',`${base}/compress`,request);if(next.status!=='running'&&pending.current===request)pending.current=null;if(current===generation.current){setOperation(next);setConfirm(false);}}
+    catch(e){if(pending.current===request)pending.current=compressionRetryRequest(request,e instanceof ApiError?e.status:undefined);if(current===generation.current)setError((e as Error).message);}
     finally{setStarting(false);}
   };
   const segments=data?composition(data.context.categories):[];const percent=data?contextPercent(data.context):null;

@@ -43,7 +43,7 @@ class ContextBridge:
             snap.model={'model':str(model or ''),'provider':str(kwargs.get('provider') or ''),'source':'resolved'}
             route_signature=(snap.model,kwargs.get('base_url'),kwargs.get('api_mode'))
         content_revision=transcript_revision(self.adapter._hub.store.all_messages(chat['id']),snap.rows)
-        revision='cx-'+hashlib.sha256(json.dumps([content_revision,snap.model,route_signature],sort_keys=True,default=str).encode()).hexdigest()
+        revision='cx-'+hashlib.sha256(json.dumps([snap.session_id,content_revision,snap.model,route_signature],sort_keys=True,default=str).encode()).hexdigest()
         return snap,revision
 
     async def inspect(self, chat, device):
@@ -160,13 +160,20 @@ class ContextBridge:
         try:
             # Lease acquisition yielded; recheck authority, revision, and runtime.
             check()
-            _,fresh=await self.snapshot(chat,device)
-            if fresh!=expected or runner._is_session_running(snap.session_key):
+            current,fresh=await self.snapshot(chat,device)
+            if current.session_id!=snap.session_id or fresh!=expected or runner._is_session_running(snap.session_key):
                 raise BranchRefused('busy','The chat changed or started a reply. Wait and refresh.')
             before=await self.inspect(chat,device)
             event=MessageEvent(text='/compress',message_type=MessageType.COMMAND,source=source,
                                timestamp=datetime.now(timezone.utc))
             async with runner._async_profile_scope_for_source(source):
+                # Preview reads and entering the profile scope both yield. Bind
+                # the command to the same canonical session whose lease we hold,
+                # then recheck live authority with no intervening await.
+                current,fresh=await self.snapshot(chat,device)
+                check()
+                if current.session_id!=snap.session_id or fresh!=expected or before['revision']!=expected or runner._is_session_running(snap.session_key):
+                    raise BranchRefused('stale','The context changed before compression. Refresh it.')
                 note=await runner._handle_compress_command(event)
             after=await self.inspect(chat,device)
             runner._turn_leases.rebind(lease,after['session_id'])

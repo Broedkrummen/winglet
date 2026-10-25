@@ -68,3 +68,30 @@ provider authorization, reopen while running, confirm final receipt and draft
 preservation; retry same operation ID observes its receipt. Verify members have
 no context/account entry and direct HTTP reads are forbidden. Do not change
 providers or touch personal conversations just to create test outcomes.
+
+## Independent review corrections
+
+The independent source review identified three issues, now corrected:
+compression could continue after an owner was demoted during awaited preflight;
+an identical-content canonical session switch could preserve the old revision
+while the old session lease was held; and a rejected stale preview could remain
+stuck in the client's pending request. Previews now bind the canonical session
+ID in addition to transcript and selected model/route metadata. After preflight
+and profile entry, the adapter resolves the session again, verifies that it
+matches the held lease and reviewed revision, and checks current authority
+immediately before calling the real Hermes manual handler. Definite client
+rejections clear the pending request; ambiguous network, timeout and server
+failures retain the operation ID for receipt recovery. Settlement cannot clear
+a newer request belonging to another view generation.
+
+Focused verification after these corrections: context service/routes plus the
+actual pinned-Hermes adapter: 22 passed; context client model/retry policy:
+6 passed; TypeScript typecheck passed. Seven new real-Hermes regression cases
+cover identical transcript content on another canonical session, and session
+switch/demotion while the second snapshot, preflight inspection or command
+profile entry is held. Each refusal asserts that the manual handler never ran,
+the transcript is unchanged and the original lease was released. The real
+short-history manual command path remains covered without a provider call.
+The new client test covers definite rejection versus ambiguous receipt recovery.
+No new provider request, browser render, native build or device test was run for
+this narrow correction; earlier UI/build evidence above remains the baseline.

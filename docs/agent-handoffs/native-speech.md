@@ -132,3 +132,16 @@ Review first: native authorized/endRecognition/endSpeech callback guards, main-q
 cleanup, nativeSpeech.ts cancellation during permission/TTS init, and VoicePanel's
 explicit availability/provider choice. Native runtime behavior remains pending that
 combined-device phase; the required native operations themselves are implemented.
+
+## Final integration handoff
+
+Draft PR: https://github.com/VIKASRP24/winglet/pull/57.
+Frozen product source: ed9bdd3a038aa8c1d73ce428c291937bc3c5b048, after merging
+integration c2d2ccdc7f8cba6a73617322a79538a8802d6153 (features 07-11).
+Post-merge TypeScript typecheck passed. Focused native adapter/controller, Composer
+identity and routine-history screen checks passed 21/21. The earlier 398-test client
+run and local exports preceded that final routine-history merge; final PR CI checks
+the merged head. No further product changes follow this frozen source in this handoff.
+The parent received that exact source SHA before CI completion to begin combined APK
+work. Local native compilation is not repeated; final hardware/runtime validation
+remains explicitly pending as described above.

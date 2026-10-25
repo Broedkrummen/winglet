@@ -145,3 +145,28 @@ the merged head. No further product changes follow this frozen source in this ha
 The parent received that exact source SHA before CI completion to begin combined APK
 work. Local native compilation is not repeated; final hardware/runtime validation
 remains explicitly pending as described above.
+
+## Device QA follow-up: redundant Android permission requests
+
+The combined Dev APK exposed immediate background suspension before any microphone
+use: native ASR capability was available, but Tap to speak returned to Ready/Paused
+within 0.4s, RECORD_AUDIO was already allowed, and AppOps showed no new capture.
+The exact Paused note comes from background/app-lock suspension, rather than native
+NO_MATCH (which follows the empty-transcript retry path). QA-app PID logs contained
+activity pause/resume pairs. Local Expo PermissionsService source confirmed that
+requestRecordingPermissionsAsync delegates to Activity.requestPermissions even for
+an existing grant.
+
+Both native dictation and server recording now share a fresh get-before-request
+preflight. Granted permission never launches another permission activity; missing
+permission is requested only when the OS allows another ask. Permission is queried
+again for every turn, so a previous grant cannot mask revocation. The AbortSignal is
+checked before and after that asynchronous query, preventing a late permission prompt
+after End/background. Background cancellation and native callback guards are retained.
+A genuine first grant may pause that turn; resuming still requires a deliberate tap.
+
+Validation: 25 focused actual-adapter/capture/controller tests passed, including eight
+new cases for repeated grants, held-query abort, genuine-prompt abort/retry and denial
+for both providers. TypeScript typecheck passed. No local export or native build was
+started for this JS-only fix. Root owns the incremental APK and repeated on-device
+test; device confirmation of the fix remains pending.

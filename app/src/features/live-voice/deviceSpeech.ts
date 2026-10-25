@@ -1,10 +1,10 @@
 import { Platform } from 'react-native';
-import { requestRecordingPermissionsAsync } from 'expo-audio';
+import { microphonePermission } from './microphonePermission';
 import { requireOptionalNativeModule } from 'expo-modules-core';
 import { nativeSpeech, type DeviceSpeechCapabilities, type NativeSpeechPort } from './nativeSpeech';
 
 const speechModule = Platform.OS === 'android' ? requireOptionalNativeModule<NativeSpeechPort>('WingletVoice') : null;
-const native = speechModule ? nativeSpeech(speechModule, async () => (await requestRecordingPermissionsAsync()).granted) : null;
+const native = speechModule ? nativeSpeech(speechModule, microphonePermission) : null;
 let cached: DeviceSpeechCapabilities = { listen:false, speak:false, language:'', voice:'', engine:'',
   listenReason:'Device speech is unavailable in this native build. Use Server.', speakReason:'Device speech is unavailable in this native build. Use Server.' };
 export async function probeDeviceSpeech(): Promise<DeviceSpeechCapabilities> {

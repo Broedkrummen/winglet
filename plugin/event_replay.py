@@ -167,6 +167,9 @@ class EventStream:
         would be invisible to every phone that reconnects, which is worse than a retry.
         """
         kind = str(event.get("type") or "")
+        # Phone capabilities use direct, authenticated socket delivery; never retain private RPCs.
+        if kind.startswith(("phone_tool.", "phone_tools.")):
+            return None
         if kind in {"typing", "pet.update", "system.bots", "system.job", "pong", "hello", "resume", "project.sync"} or "." not in kind:
             return None
         scope = bot or ""

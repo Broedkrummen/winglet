@@ -1,5 +1,7 @@
 """Exercise real pinned Hermes session context and registry; never call native reads."""
 import asyncio
+import contextvars
+from functools import wraps
 import json
 from types import SimpleNamespace
 import pytest
@@ -11,6 +13,16 @@ from plugin.hub import Hub
 from plugin.store import Store
 
 
+def isolated_context(function):
+    # Hermes clear_session_vars deliberately leaves explicit empty values. A sync pytest
+    # test must not leave those in the runner context inherited by later async tests.
+    @wraps(function)
+    def run(*args, **kwargs):
+        return contextvars.copy_context().run(function, *args, **kwargs)
+    return run
+
+
+@isolated_context
 def test_pinned_registry_discovery_is_uncached_per_phone(tmp_path,monkeypatch):
     from gateway.session_context import set_session_vars, clear_session_vars
     from tools.registry import ToolRegistry, _check_fn_cached

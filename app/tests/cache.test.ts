@@ -36,7 +36,7 @@ function harness(rows = new Map<string, string>(), secrets = new Map<string, str
   vm.runInNewContext(ts.transpileModule(readFileSync(new URL('../src/lib/cache.ts', import.meta.url), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText, { exports, require: (id: string) => modules[id], TextEncoder, TextDecoder, Uint8Array });
-  return { rows, secrets, get: exports.cacheGet, set: exports.cacheSet, remove: exports.cacheRemove,
+  return { rows, secrets, get: exports.cacheGet, set: exports.cacheSet, strict: exports.cacheSetStrict, remove: exports.cacheRemove,
     keychain: (available: boolean) => { keychainAvailable = available; },
     writes: (fn: typeof beforeWrite) => { beforeWrite = fn; } };
 }
@@ -122,4 +122,17 @@ test('an interrupted legacy migration retries safely and does not block later wr
   h.writes(async () => {});
   assert.deepEqual(structuredClone(await h.get('outbox:bot', [])), [{ text: 'Keep too' }]);
   assert.equal(h.rows.get('drafts'), alreadySealed);
+});
+
+test('durable replay writes reject on keychain or disk failure and preserve the preceding checkpoint', async () => {
+  const h = harness();
+  h.keychain(false); await assert.rejects(h.strict('replay:bot', { cursor: 1 }));
+  assert.equal(h.rows.size, 0);
+  h.keychain(true); await h.strict('replay:bot', { cursor: 1, messages: ['applied'] });
+  const durable = h.rows.get('replay:bot');
+  h.writes(async () => { throw new Error('Disk full'); });
+  await assert.rejects(h.strict('replay:bot', { cursor: 2 }));
+  assert.equal(h.rows.get('replay:bot'), durable);
+  h.writes(async () => {});
+  assert.deepEqual(structuredClone(await h.get('replay:bot', null)), { cursor: 1, messages: ['applied'] });
 });

@@ -38,6 +38,7 @@ from aiohttp import WSMsgType, web
 
 from . import checkpoints as checkpoints_api, keys, recovery, uploads, webpush
 from .projects import ProjectConflict, ProjectError, Projects
+from .event_replay import EventStream, MAX_PAYLOAD
 from .store import ROLES, Store, new_id
 
 logger = logging.getLogger(__name__)
@@ -156,6 +157,7 @@ ROUTE_POLICY = {
     "h_mcp_test": "owner_signed", "h_mcp_reload": "owner_signed", "h_mcp_sign_in": "owner_signed",
     "h_mcp_sign_in_cancel": "owner_signed",
     "h_rotate_token": "signed",
+    "h_sync_snapshot": "device",
     "h_device_update": "owner_signed", "h_device_delete": "owner_signed", "h_pairing_code": "owner_signed",
     # Branching: paired devices, scoped to a chat they can see (same rule as sending a message).
     "h_branch_state": "device", "h_branch_create": "device", "h_branch_regenerate": "device",
@@ -226,6 +228,10 @@ class Hub:
         self.ntfy_server = (ntfy_server or "https://ntfy.sh").rstrip("/")
         self._http = http_client
         self._sockets: Dict[web.WebSocketResponse, Dict[str, Any]] = {}
+        # Serializes a resumable change and its journal row with the send of that same event, so a
+        # socket sees seq order and can advance its cursor to the highest seq it applied.
+        self._publish_lock = asyncio.Lock()
+        self.events = EventStream(store)
         self._push_tasks: Dict[str, asyncio.Task] = {}
         self._pushed_messages: Dict[str, None] = {}
         self._typing: Set[str] = set()
@@ -357,6 +363,7 @@ class Hub:
         r.add_post("/api/devices/pairing-code", self.h_pairing_code)
         r.add_post("/api/devices/verify", self.h_device_verify)
         r.add_post("/api/devices/me/rotate-token", self.h_rotate_token)
+        r.add_get("/api/sync/snapshot", self.h_sync_snapshot)
         r.add_get("/api/audit", self.h_audit)
         r.add_get("/api/agent", self.h_agent)
         r.add_post("/api/pickers/{picker_id}/select", self.h_picker_select)
@@ -754,7 +761,7 @@ class Hub:
                 "processes": self.processes is not None and self.processes.available(),
                 "process_output": self.processes is not None and self.processes.available(),
                 "process_stop": self.processes is not None and self.processes.available(),
-                "connection_status": True, "projects": True}
+                "connection_status": True, "projects": True, "event_replay": True}
 
     def about(self) -> Dict[str, Any]:
         return {"version": VERSION, "protocol": PROTOCOL, "min_app_protocol": MIN_APP_PROTOCOL,
@@ -972,19 +979,22 @@ class Hub:
     async def h_chat_create(self, request: web.Request) -> web.Response:
         device = self._require(request)
         body = await self._body(request)
-        chat = self.store.create_chat(str(body.get("title") or ""),
-                                      owner_device=None if device["role"] == "owner" else device["id"], bot=_BOT.get())
-        await self.broadcast({"type": "chat.update", "chat": chat})
+        chat = await self.publish(
+            lambda: self.store.create_chat(str(body.get("title") or ""),
+                                           owner_device=None if device["role"] == "owner" else device["id"],
+                                           bot=_BOT.get()),
+            lambda row: {"type": "chat.update", "chat": row})
         return _json({"chat": chat})
 
     async def h_chat_rename(self, request: web.Request) -> web.Response:
         device = self._require(request)
-        self._visible_chat(device, request.match_info["chat_id"])
+        chat_id = request.match_info["chat_id"]
+        self._visible_chat(device, chat_id)
         body = await self._body(request)
-        chat = self.store.rename_chat(request.match_info["chat_id"], str(body.get("title") or ""))
+        chat = await self.publish(lambda: self.store.rename_chat(chat_id, str(body.get("title") or "")),
+                                  lambda row: {"type": "chat.update", "chat": row})
         if chat is None:
             return _error(404, "no such chat")
-        await self.broadcast({"type": "chat.update", "chat": chat})
         return _json({"chat": chat})
 
     async def h_chat_delete(self, request: web.Request) -> web.Response:
@@ -996,13 +1006,18 @@ class Hub:
         if device["role"] != "owner" and chat_id == self.home_chat(device):
             return _error(400, "This is your main chat; it can't be deleted.")
         files = self.store.chat_uploads(chat_id)
-        if not self.store.delete_chat(chat_id):
+
+        def delete() -> Optional[Dict[str, Any]]:
+            if not self.store.delete_chat(chat_id):
+                return None
+            return {"chat_id": chat_id, "owner_device": chat.get("owner_device"), "bot": chat.get("bot")}
+
+        gone = await self.publish(delete, lambda info: {"type": "chat.delete", **info})
+        if gone is None:
             return _error(404, "no such chat")
         if self.execution is not None:
             self.execution.forget_chat(chat_id)
         await asyncio.to_thread(lambda: [self._remove_upload(row) for row in files])
-        await self.broadcast({"type": "chat.delete", "chat_id": chat_id, "owner_device": chat.get("owner_device"),
-                              "bot": chat.get("bot")})
         return _json({"ok": True})
 
     # -- projects (folders) -----------------------------------------------------------------
@@ -1158,9 +1173,10 @@ class Hub:
             meta["attachments"] = [self._upload_public(row) for row in rows]
             files = [{"path": str(self.media_dir / row["id"] / row["name"]), "name": row["name"], "mime": row["mime"],
                       "kind": row["kind"]} for row in rows]
-        message = self.store.add_message(chat_id, "user", text, meta=meta, message_id=message_id)
-        await self.broadcast({"type": "message.new", "chat_id": chat_id, "message": message})
-        await self.broadcast({"type": "chat.update", "chat": self.store.get_chat(chat_id)})
+        message = await self.publish(
+            lambda: self.store.add_message(chat_id, "user", text, meta=meta, message_id=message_id),
+            lambda row: [{"type": "message.new", "chat_id": chat_id, "message": row},
+                         {"type": "chat.update", "chat": self.store.get_chat(chat_id)}])
         if refused:
             # Hermes never sees it: members can't change settings or approve through a slash command either.
             await self.post_message(chat_id, f"Only an owner can use {refused}.", role="system", push=False)
@@ -1538,24 +1554,24 @@ class Hub:
             ok = bool(self.on_answer and await self.on_answer(item, reply))
         else:  # results are simply acknowledged
             ok, resolution = True, "seen"
-        updated = self.store.resolve_inbox(item_id, "resolved" if ok else "expired", resolution if ok else "")
-        item = updated or self.store.get_inbox(item_id)
-        await self.broadcast({"type": "inbox.update", "item": item, "pending": self.store.pending_count()})
-        return ok, item
+        item = await self.publish(
+            lambda: self.store.resolve_inbox(item_id, "resolved" if ok else "expired", resolution if ok else ""),
+            lambda row: {"type": "inbox.update", "item": row, "pending": self.store.pending_count()})
+        return ok, item or self.store.get_inbox(item_id)
 
     async def expire_item(self, item_id: str, note: str = "") -> Optional[Dict[str, Any]]:
         """Mark a pending card dead (its request ended without an answer from Winglet)."""
-        item = self.store.resolve_inbox(item_id, "expired", note[:500])
-        if item is not None:
-            await self.broadcast({"type": "inbox.update", "item": item, "pending": self.store.pending_count()})
-        return item
+        return await self.publish(
+            lambda: self.store.resolve_inbox(item_id, "expired", note[:500]),
+            lambda row: {"type": "inbox.update", "item": row, "pending": self.store.pending_count()})
 
     async def add_inbox(self, kind: str, chat_id: str, title: str, body: str, payload: Dict[str, Any], *,
                         push: bool = True) -> Dict[str, Any]:
         # Results are informational: they land in the inbox history but never count as "needs you".
         status = "resolved" if kind == "result" else "pending"
-        item = self.store.add_inbox(kind, chat_id, title, body, payload, status=status)
-        await self.broadcast({"type": "inbox.new", "item": item, "pending": self.store.pending_count()})
+        item = await self.publish(
+            lambda: self.store.add_inbox(kind, chat_id, title, body, payload, status=status),
+            lambda row: {"type": "inbox.new", "item": row, "pending": self.store.pending_count()})
         if push:
             await self.push_now(self._inbox_notification(item), tag=f"inbox-{item['id']}",
                                 urgency="normal" if kind == "result" else "high", item=item)
@@ -1578,28 +1594,30 @@ class Hub:
                            meta: Optional[Dict[str, Any]] = None, push: bool = True) -> Dict[str, Any]:
         if not push:
             meta = {**(meta or {}), "notify": False}
-        message = self.store.add_message(chat_id, role, text, status=status, meta=meta)
-        await self.broadcast({"type": "message.new", "chat_id": chat_id, "message": message})
-        await self.broadcast({"type": "chat.update", "chat": self.store.get_chat(chat_id)})
+        message = await self.publish(
+            lambda: self.store.add_message(chat_id, role, text, status=status, meta=meta),
+            lambda row: [{"type": "message.new", "chat_id": chat_id, "message": row},
+                         {"type": "chat.update", "chat": self.store.get_chat(chat_id)}])
         if push and self._notifiable(message):
             self.schedule_push(chat_id, message["id"], final=status == "final")
         return message
 
     async def edit_message(self, message_id: str, text: str, *, final: bool = False) -> Optional[Dict[str, Any]]:
-        message = self.store.update_message(message_id, text, status="final" if final else "streaming")
+        message = await self.publish(
+            lambda: self.store.update_message(message_id, text, status="final" if final else "streaming"),
+            lambda row: {"type": "message.update", "chat_id": row["chat_id"], "message": row})
         if message is None:
             return None
-        await self.broadcast({"type": "message.update", "chat_id": message["chat_id"], "message": message})
         if self._notifiable(message):
             self.schedule_push(message["chat_id"], message_id, final=final)
         return message
 
     async def delete_message(self, message_id: str) -> bool:
-        message = self.store.delete_message(message_id)
-        if message is None:
-            return False
-        await self.broadcast({"type": "message.delete", "chat_id": message["chat_id"], "message_id": message_id})
-        return True
+        gone = await self.publish(
+            lambda: self.store.delete_message(message_id),
+            lambda row: [{"type": "message.delete", "chat_id": row["chat_id"], "message_id": message_id},
+                         {"type": "chat.update", "chat": self.store.get_chat(row["chat_id"])}])
+        return gone is not None
 
     def busy_chats(self) -> List[str]:
         """This bot's chats with a reply running now, by name. A workspace restore waits for them."""
@@ -1668,6 +1686,7 @@ class Hub:
     async def h_ws(self, request: web.Request) -> web.StreamResponse:
         legacy = bool(request.query.get("token")) or request.headers.get("Authorization", "").lower().startswith("bearer ")
         device = self._device(request) if legacy else None
+        socket_token = request.query.get("token") or request.headers.get("Authorization", "").partition(" ")[2]
         if legacy and device is None:
             return _error(401, "not paired")
         ws = web.WebSocketResponse(heartbeat=25, max_msg_size=1024 * 1024)
@@ -1681,7 +1700,8 @@ class Hub:
             except (asyncio.TimeoutError, ValueError, TypeError):
                 data = {}
             if isinstance(data, dict) and data.get("type") == "auth":
-                device = self.store.device_for_token(str(data.get("token") or ""))
+                socket_token = str(data.get("token") or "")
+                device = self.store.device_for_token(socket_token)
             if device is None:
                 await ws.close(code=4401, message=b"not paired")
                 return ws
@@ -1689,18 +1709,25 @@ class Hub:
         if problem is not None:
             await ws.close(code=4404, message=b"no such bot")
             return ws
-        self._sockets[ws] = {"device": device, "bot": bot}
         try:
-            with self._bot_context(bot):
-                hello = {"type": "hello", "server_id": self.server_id(), "bot": self.bot(), "device": device,
-                         "me": self.me(device), **self.about(), "chats": self.visible_chats(device),
-                         "typing": sorted(c for c in self._typing if self._in_bot(c)
-                                          and self.can_see(device, self.store.get_chat(c))),
-                         "pending": self.pending_for(device), "paused": self.paused_for(device),
-                         "projects": self.projects.snapshot(device, bot)}
-                if device.get("role") == "owner" and bot is None:
-                    hello["bots"] = self.bots()
-                await ws.send_json(hello)
+            async with self._publish_lock:
+                self._sockets[ws] = {"device": device, "bot": bot, "auth_token": socket_token}
+                with self._bot_context(bot):
+                    # The stream head is read before the snapshot below on purpose: an event committed
+                    # after this point is either after the watermark (and sent live, because the socket
+                    # is registered already) or in the resume reply. Read afterwards, an event could
+                    # fall between the snapshot and the watermark and be lost.
+                    stream = {"epoch": self.events.epoch(), "watermark": self.events.head(bot),
+                              **self.events.retention(), "scope": self._replay_scope(device)}
+                    hello = {"type": "hello", "server_id": self.server_id(), "bot": self.bot(), "device": device,
+                             "me": self.me(device), **self.about(), "chats": self.visible_chats(device),
+                             "typing": sorted(c for c in self._typing if self._in_bot(c)
+                                              and self.can_see(device, self.store.get_chat(c))),
+                             "pending": self.pending_for(device), "paused": self.paused_for(device),
+                             "projects": self.projects.snapshot(device, bot), "event_stream": stream}
+                    if device.get("role") == "owner" and bot is None:
+                        hello["bots"] = self.bots()
+                    await asyncio.wait_for(ws.send_json(hello), timeout=2.0)
             async for msg in ws:
                 if msg.type != WSMsgType.TEXT:
                     continue
@@ -1715,9 +1742,12 @@ class Hub:
         return ws
 
     async def _on_ws(self, ws: web.WebSocketResponse, device: Dict[str, Any], data: Dict[str, Any]) -> None:
-        device = self.store.get_device(device["id"])
-        if device is None:
+        meta = self._sockets.get(ws, {})
+        device = self.store.device_for_token(meta["auth_token"]) if meta.get("auth_token") else self.store.get_device(device["id"])
+        if device is None or (_BOT.get() is not None and device.get("role") != "owner"):
             await ws.close(code=4401, message=b"unpaired")
+            return
+        if not isinstance(data, dict):
             return
         kind = data.get("type")
         if kind == "ping":
@@ -1734,6 +1764,114 @@ class Hub:
                 await ws.send_json({"type": "error", "message": str(exc)})
         elif kind == "presence":
             self._sockets[ws]["visible"] = bool(data.get("visible", True))
+        elif kind == "resume":
+            await self._resume(ws, device, data)
+
+    def _shape(self, device: Dict[str, Any], event: Dict[str, Any],
+               pending: Optional[int] = None) -> Dict[str, Any]:
+        """The per-device parts of a shared event: a member's own count and no owner-only pause note.
+
+        Used on both paths (live broadcast and replay), because a journal row is stored once per bot
+        and the count and the pause reason differ per device.
+        """
+        out = event
+        if pending is not None:
+            out = {**out, "pending": pending}
+        if out.get("type") == "system.paused" and device.get("role") != "owner":
+            out = {**out, "paused": self._member_pause(out.get("paused"))}
+        return out
+
+    def _replay_scope(self, device: Dict[str, Any]) -> str:
+        value = json.dumps([self.server_id(), _BOT.get(), device["id"], device.get("role")])
+        return hashlib.sha256(value.encode()).hexdigest()[:32]
+
+    async def _resume(self, ws: web.WebSocketResponse, device: Dict[str, Any], data: Dict[str, Any]) -> None:
+        """Answer a phone's "what did I miss": events after its cursor, or why it must snapshot.
+
+        The device row was refreshed by ``_on_ws`` for this frame, so a role change or an unpair is
+        already in force when the retained rows are filtered.
+        """
+        chats: Dict[str, Optional[Dict[str, Any]]] = {}
+        if data.get("scope") != self._replay_scope(device):
+            await ws.send_json({"type": "resume", "ok": False, "reason": "cursor",
+                                "epoch": self.events.epoch(), "watermark": self.events.head(_BOT.get())})
+            return
+        reply = self.events.replay(
+            _BOT.get(), after=data.get("cursor"), epoch=data.get("epoch"),
+            visible=lambda event: self._event_visible(device, event, chats),
+            page=data.get("limit") if isinstance(data.get("limit"), int) else None)
+        if reply.get("events"):
+            latest = self.pending_for(device)
+            shaped = []
+            for event in reply["events"]:
+                # Retained notifications never resurrect old/deleted message text or an answered card.
+                # Their sequence is historical; their authoritative content is current.
+                if event.get("type") in {"message.new", "message.update"}:
+                    message_id = (event.get("message") or {}).get("id")
+                    current = self.store.get_message(message_id) if message_id else None
+                    event = ({**event, "message": current} if current else
+                             {"type": "message.delete", "chat_id": event.get("chat_id"),
+                              "message_id": message_id, "event_seq": event["event_seq"]})
+                elif event.get("type") == "chat.update":
+                    previous = event.get("chat") or {}
+                    current = self.store.get_chat(previous.get("id"))
+                    event = ({**event, "chat": current} if current else
+                             {"type": "chat.delete", "chat_id": previous.get("id"),
+                              "owner_device": previous.get("owner_device"), "event_seq": event["event_seq"]})
+                elif event.get("type") in {"inbox.new", "inbox.update"}:
+                    current = self.store.get_inbox((event.get("item") or {}).get("id"))
+                    if current is None:
+                        event = {"type": "sync.hint", "reason": "inbox", "event_seq": event["event_seq"]}
+                    else:
+                        event = {**event, "item": current}
+                shaped.append(self._shape(device, event, latest if "pending" in event else None))
+            bounded = []
+            size = 0
+            for event in shaped:
+                encoded_size = len(json.dumps(event, ensure_ascii=False).encode("utf8"))
+                if encoded_size > MAX_PAYLOAD:
+                    event = {"type": "sync.hint", "reason": "oversize", "event_seq": event["event_seq"],
+                             "chat_id": event.get("chat_id")}
+                    encoded_size = len(json.dumps(event).encode("utf8"))
+                if size + encoded_size > 512 * 1024:
+                    reply["has_more"] = True
+                    reply["cursor"] = bounded[-1]["event_seq"]
+                    break
+                bounded.append(event)
+                size += encoded_size
+            reply["events"] = bounded
+        await ws.send_json({"type": "resume", "scope": self._replay_scope(device), **reply})
+
+    def sync_snapshot(self, device: Dict[str, Any]) -> Dict[str, Any]:
+        """What this device may see right now, with the watermark it is authoritative as of.
+
+        Read the head first, then the state: an event committed in between is after the watermark
+        and reaches the phone live (or in a later resume), so applying the snapshot and then those
+        events cannot skip one.
+        """
+        watermark = self.events.head(_BOT.get())
+        chats = self.visible_chats(device)
+        by_id = {c["id"]: c for c in chats}
+        pending = self.store.pending_items()
+        seen = {i["id"] for i in pending}
+        items = pending + [i for i in self.store.list_inbox() if i["id"] not in seen]
+        items = [i for i in items if self.can_see(device, by_id.get(i["chat_id"]))]
+        # Deletions repaired for chats this phone can see: a message removed while it was offline.
+        deletions: Dict[str, List[str]] = {}
+        for chat in chats:
+            ids = self.store.deleted_message_ids(chat["id"])
+            if ids:
+                deletions[chat["id"]] = ids
+        return {"server_id": self.server_id(), "bot": _BOT.get(), "scope": self._replay_scope(device), "epoch": self.events.epoch(),
+                "watermark": watermark, "chats": chats, "inbox": items, "pending": self.pending_for(device),
+                "paused": self.paused_for(device), "me": self.me(device), "deletions": deletions,
+                "projects": self.projects.snapshot(device, _BOT.get()),
+                "retention": self.events.retention()}
+
+    async def h_sync_snapshot(self, request: web.Request) -> web.Response:
+        """The authoritative scoped state a phone applies after a replay it can't trust."""
+        device = self._require(request)
+        return _json(self.sync_snapshot(device))
 
     def live_clients(self) -> int:
         """Sockets whose app is in the foreground (a backgrounded PWA may keep its socket briefly)."""
@@ -1758,7 +1896,7 @@ class Hub:
                     chat_id = value.get("id") if key == "chat" else value.get("chat_id")
                     break
         if chat_id is None:
-            return True
+            return event.get("type") in {"pet.update", "system.bots"}
         if chats is None:
             return self.can_see(device, self.store.get_chat(chat_id))
         if chat_id not in chats:
@@ -1785,43 +1923,92 @@ class Hub:
         row = chats[chat_id]
         return (row.get("bot") or None) if row else _ANY_BOT
 
+    async def publish(self, write: Callable[[], Any], event_of: Callable[[Any], Any]) -> Any:
+        """Commit a change, journal its event or events and send them, in that order and in stream order.
+
+        ``write`` performs the store change and returns what the caller needs; returning ``None``
+        means nothing actually changed (a rename that matched no chat, a delete that found no row), so
+        nothing is journaled or sent. ``event_of`` builds the wire event from that result, or a list
+        of them when one change is two events (a message also updates its chat row). The store change
+        and its journal rows share one transaction, so a crash cannot leave a committed change with no
+        replay event. Holding the lock across the sends is what lets a phone trust "every seq below
+        this one that I may see has reached me", which is the whole basis for advancing a cursor.
+        """
+        async with self._publish_lock:
+            with self.events.transaction():
+                result = write()
+                events: List[Dict[str, Any]] = []
+                if result is not None:
+                    built = event_of(result)
+                    for payload in built if isinstance(built, list) else [built]:
+                        bot = self._event_bot(payload)
+                        scopes = [bot] if bot is not _ANY_BOT else list({None, *[b["name"] for b in self.bots()]})
+                        for scope in scopes:
+                            seq = self.events.append(scope, payload)
+                            events.append(({**payload, "event_seq": seq} if seq is not None else payload, scope))
+            for event, scope in events:
+                await self._broadcast(event, scope=scope)
+        return result
+
     async def broadcast(self, event: Dict[str, Any]) -> None:
+        """Journal additive feature events without changing their namespaced payloads.
+
+        These already-committed external feature mutations are at-least-once notifications;
+        only publish(write, event_of) provides an atomic mutation + journal transaction.
+        """
+        async with self._publish_lock:
+            chats: Dict[str, Optional[Dict[str, Any]]] = {}
+            bot = self._event_bot(event, chats)
+            scopes = [bot] if bot is not _ANY_BOT else list({None, *[b["name"] for b in self.bots()]})
+            for scope in scopes:
+                seq = self.events.append(scope, event)
+                payload = {**event, "event_seq": seq} if seq is not None else event
+                await self._broadcast(payload, scope=scope if seq is not None else _ANY_BOT, prepared_chats=chats)
+                if seq is None:
+                    break
+
+    async def _broadcast(self, event: Dict[str, Any], scope=_ANY_BOT,
+                         prepared_chats: Optional[Dict[str, Optional[Dict[str, Any]]]] = None) -> None:
         """Send ``event`` to every socket that may see it. What's the same for every socket (the event's bot
         and chat, its JSON, a pending count) is worked out once, not per socket: this runs on each streamed edit."""
         dead = []
-        chats: Dict[str, Optional[Dict[str, Any]]] = {}
+        chats = prepared_chats if prepared_chats is not None else {}
         event_bot = self._event_bot(event, chats) if self._sockets else _ANY_BOT
         pending: Dict[tuple, int] = {}
         encoded: Dict[int, str] = {}
         for ws, meta in list(self._sockets.items()):
-            device = self.current_device(meta["device"]["id"])
+            device = self.store.device_for_token(meta["auth_token"]) if meta.get("auth_token") else self.store.get_device(meta["device"]["id"])
             if device is None:
                 dead.append(ws)
                 with contextlib.suppress(Exception):
                     await ws.close(code=4401, message=b"unpaired")
+                continue
+            if scope is not _ANY_BOT and scope != meta.get("bot"):
                 continue
             if not self._event_visible(device, event, chats):
                 continue
             if event_bot is not _ANY_BOT and event_bot != meta.get("bot"):
                 continue
             out = event
+            count = None
             if "pending" in event:
                 key = (meta.get("bot"), None if device.get("role") == "owner" else device["id"])
                 if key not in pending:
                     with self._bot_context(meta.get("bot")):
                         pending[key] = self.pending_for(device)
-                out = {**event, "pending": pending[key]}
-            if event.get("type") == "system.paused" and device.get("role") != "owner":
-                out = {**event, "paused": self._member_pause(event.get("paused"))}
+                count = pending[key]
+            out = self._shape(device, event, count)
             text = encoded.get(id(out)) if out is event else None
             if text is None:
                 text = json.dumps(out)
                 if out is event:
                     encoded[id(out)] = text
             try:
-                await ws.send_str(text)
+                await asyncio.wait_for(ws.send_str(text), timeout=2.0)
             except Exception:
                 dead.append(ws)
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(ws.close(code=1013, message=b"resync required"), timeout=0.2)
         for ws in dead:
             self._sockets.pop(ws, None)
 
@@ -1835,13 +2022,13 @@ class Hub:
         for ws, meta in list(self._sockets.items()):
             if meta.get("bot") != bot:
                 continue
-            device = self.current_device(meta["device"]["id"])
+            device = self.store.device_for_token(meta["auth_token"]) if meta.get("auth_token") else self.store.get_device(meta["device"]["id"])
             if device is None:
                 dead.append(ws)
                 continue
             try:
-                await ws.send_json({"type": "project.sync", "bot": bot,
-                                    "projects": self.projects.snapshot(device, bot)})
+                await asyncio.wait_for(ws.send_json({"type": "project.sync", "bot": bot,
+                                    "projects": self.projects.snapshot(device, bot)}), timeout=2.0)
             except Exception:
                 dead.append(ws)
         for ws in dead:
@@ -1970,11 +2157,9 @@ class Hub:
             return None
         meta = dict(message["meta"])
         meta["picker"] = {**meta["picker"], **change}
-        updated = self.store.update_message(message_id, text if text is not None else message["text"], meta=meta)
-        if updated is None:
-            return None
-        await self.broadcast({"type": "message.update", "chat_id": updated["chat_id"], "message": updated})
-        return updated
+        return await self.publish(
+            lambda: self.store.update_message(message_id, text if text is not None else message["text"], meta=meta),
+            lambda row: {"type": "message.update", "chat_id": row["chat_id"], "message": row})
 
     async def h_picker_select(self, request: web.Request) -> web.Response:
         device = self._require(request)
@@ -2475,8 +2660,8 @@ class Hub:
         reason = _clip(str(body.get("reason") or ""), 200) or f"Paused from {device['name']}"
         state = await self._call(self._need_hermes().set_paused, on, reason)
         self.audit("system.pause", device, f"paused new work: {reason}" if on else "resumed new work")
-        await self.broadcast({"type": "system.paused", "paused": state})
-        return _json({"paused": state})
+        body = await self.publish(lambda: {"paused": state}, lambda value: {"type": "system.paused", **value})
+        return _json(body)
 
     def _busy_job(self) -> Optional[Dict[str, Any]]:
         return next((j for j in self.store.list_jobs(running=True) if j["detail"].get("boot") == self.boot_id), None)

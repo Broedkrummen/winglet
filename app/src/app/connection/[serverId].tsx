@@ -4,6 +4,7 @@ import { Redirect, router, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { Platform, Text, View } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
+import { SyncStatus } from '../../features/event-replay/SyncStatus';
 import { ConnectionBanner } from '../../components/ConnectionBanner';
 import { Activity, Bell, Cloud, Copy, Globe, Moon, Pencil, Route, ShieldCheck, Smartphone, SquareTerminal, TriangleAlert } from '../../components/icons';
 import { Screen } from '../../components/Screen';
@@ -78,6 +79,7 @@ export default function ConnectionScreen() {
   return (
     <Screen title="Connection" subtitle={server.bot.title}>
       <ConnectionBanner server={server} />
+      <SyncStatus serverId={server.id} details />
       <View style={s.hero}>
         <View style={[s.dot, { backgroundColor: view.kind === 'online' ? t.colors.success : view.tone === 'error' ? t.colors.danger : t.colors.warning }]} />
         <View style={{ flex: 1 }}>

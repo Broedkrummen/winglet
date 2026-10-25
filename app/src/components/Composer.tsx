@@ -225,7 +225,7 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
           </ScrollView>
         </Glass>
       ) : null}
-      {!prepareChat ? <TaskProgress key={key} server={server} chatId={chatId} busy={busy} /> : null}
+      {!prepareChat ? <TaskProgress key={`task:${key}`} server={server} chatId={chatId} busy={busy} /> : null}
       {showBusyModes ? (
         <Animated.View entering={FadeIn.duration(160)} exiting={FadeOut.duration(120)} style={s.modes} accessibilityLabel="While it works">
           <Text style={s.modesLabel}>While it works:</Text>
@@ -299,7 +299,7 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
       </Glass>
       </View>
       {perch ? <View pointerEvents="box-none" style={[s.perch, { top: boxY - PERCH_RISE }]}>{perch}</View> : null}
-      {voiceChat ? <VoicePanel key={server.id + ':' + voiceChat} server={server} chatId={voiceChat}
+      {voiceChat ? <VoicePanel key={`voice:${server.id}:${voiceChat}`} server={server} chatId={voiceChat}
         onClose={() => setVoiceChat(null)} onType={() => { setVoiceChat(null); focusComposer(server.id, voiceChat); }} /> : null}
       <Sheet visible={attachOpen} onClose={() => setAttachOpen(false)} title="Attach">
         {Platform.OS !== 'web' ? <SheetAction icon={<Camera size={20} color={t.colors.text} />} label="Take a photo" onPress={() => pick('camera')} /> : null}

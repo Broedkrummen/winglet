@@ -176,10 +176,11 @@ Browser fixture checks used only synthetic local audio/data:
   model request produced two CORS/network console errors in the first preview. The final source
   gates that request on the agent capability. Existing Reanimated easing warnings were also observed.
 - The preview browser and server were closed after checks.
-- **Observed integration UI issue:** the wide screenshot contains repeated legacy TaskProgress strips
-  behind the voice modal after synthetic turns. The voice panel itself fits and its controls work.
-  TaskProgress was not modified in this PR. The orchestrator should reproduce this in the combined
-  chat layout; the screenshots are retained rather than hiding that observation.
+- **Task strip defect, corrected in the follow-up:** the wide screenshot exposed repeated
+  TaskProgress strips behind the voice modal. Feature07 introduced a duplicate React sibling key:
+  VoicePanel used the same server/chat key as TaskProgress. Voice level updates could accumulate
+  actual task-strip DOM nodes. The follow-up namespaces both keys while preserving chat remounts;
+  the original screenshot remains evidence of the defect, not the corrected layout.
 
 Representative screenshots (synthetic content only):
 [320 light](screenshots/live-voice-320-light.png),
@@ -237,3 +238,25 @@ Pinned Hermes source review additionally confirmed BasePlatformAdapter installs 
 guard before spawning work and dispatches /stop inline via _dispatch_active_session_command,
 awaiting cancel_session_processing. Winglet's acknowledgement still waits for its adapter typing
 lifecycle; it does not infer success from a client-side timer or merely paint an interrupted UI.
+
+## Follow-up: unique composer sibling keys
+
+The repeated rows were actual React-owned DOM nodes, not a Chromium paint
+artifact: the synthetic browser counted97, later131, identical task buttons
+under one Composer. Ordinary text turns settled to zero; the voice loop's
+frequent updates exposed the sibling key collision introduced by feature07.
+TaskProgress and VoicePanel now have separate task:/voice: namespaces, retaining
+their server/chat remount identity. The earlier legacy attribution was wrong.
+
+The actual Composer JSX regression mounts voice through its real action and
+checks unique, stable sibling keys across100 busy/voice updates and a chat
+change. Composer key/focus and voice controller regressions:7 passed.
+TypeScript typecheck and one-worker web export passed. The corrected exported
+bundle (entry-ded60d64a30d1a77410115759c83edaf.js) ran the same synthetic
+MediaRecorder -> fixture STT -> chat -> reply -> browser playback loop. Across
+470 samples at50ms intervals, task-strip count stayed0 or1 (maximum1), then
+settled to0. The1440px dark and320px light documents matched viewport width.
+No physical microphone, provider or personal data was used. No native build was
+run for this two-key correction. Corrected screenshots:
+[live voice1440 dark](screenshots/live-voice-1440-task-key-fixed.png),
+[live voice320 light](screenshots/live-voice-320-task-key-fixed.png).

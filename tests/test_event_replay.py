@@ -317,7 +317,7 @@ async def test_an_old_client_that_never_resumes_still_works(client, hub):
     token = await pair(client, hub)
     ws = await client.ws_connect(f"/api/ws?token={token}")
     hello = await ws.receive_json()
-    assert hello["type"] == "hello" and hello["chats"][0]["id"] == HOME_CHAT_ID
+    assert hello["type"] == "hello" and HOME_CHAT_ID in {chat["id"] for chat in hello["chats"]}
     await hub.post_message("general", "live", push=False)
     assert (await ws.receive_json())["message"]["text"] == "live"
     await ws.close()

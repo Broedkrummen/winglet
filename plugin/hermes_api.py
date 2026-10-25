@@ -786,9 +786,14 @@ def change_routine(job_id: str, action: str, updates: Optional[dict] = None) -> 
 
 def routine_history_available() -> bool:
     try:
-        from cron import executions
+        from cron import executions, jobs
         from hermes_state import SessionDB
-        return all(callable(getattr(executions, k, None)) for k in ('list_executions', 'get_execution')) and callable(getattr(SessionDB, 'list_cron_job_runs', None))
+        from hermes_time import get_timezone_name
+        return (all(callable(getattr(executions, k, None)) for k in ('list_executions', 'get_execution', '_owner_is_live'))
+                and all(callable(getattr(jobs, k, None)) for k in ('_current_cron_store', '_normalize_job_record', 'get_cron_output_dir'))
+                and isinstance(getattr(executions, 'MAX_TERMINAL_EXECUTIONS', None), int)
+                and hasattr(executions, 'EXECUTIONS_FILE')
+                and callable(get_timezone_name) and callable(getattr(SessionDB, 'list_cron_job_runs', None)))
     except Exception:
         return False
 

@@ -129,3 +129,9 @@ def test_native_terminal_pruning_supplies_trusted_finish_coverage(profile,monkey
     assert {r['id'] for r in observed['executions']}=={r['id'] for r in records[1:]}
     assert observed['complete_executions'] and observed['complete_records']
     assert observed['coverage_from']==records[1]['finished_at']
+
+
+def test_missing_readsafe_native_primitive_disables_feature(monkeypatch):
+    assert hermes_api.routine_history_available()
+    monkeypatch.setattr(jobs,'_normalize_job_record',None)
+    assert not hermes_api.routine_history_available()

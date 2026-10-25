@@ -16,14 +16,16 @@ import type { SessionMessage, SessionTranscript } from '../../lib/types';
 /** One past conversation, read-only: what was asked, what the agent said, and the tools it used. */
 export default function SessionScreen() {
   const s = useStyles();
-  const { id } = useLocalSearchParams<{ id: string }>();
-  const server = useApp((st) => st.servers.find((x) => x.id === st.selection.serverId) ?? st.servers[0]);
+  const { id, server: serverId } = useLocalSearchParams<{ id: string; server?: string }>();
+  const server = useApp((st) => serverId ? st.servers.find(x => x.id === serverId) : st.servers.find((x) => x.id === st.selection.serverId) ?? st.servers[0]);
   const [data, setData] = useState<SessionTranscript | null>(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
+    let active = true; setData(null); setError('');
     if (!server || !id) return;
-    api<SessionTranscript>(server, `/api/sessions/${encodeURIComponent(id)}`).then(setData).catch((e) => setError((e as Error).message));
+    api<SessionTranscript>(server, `/api/sessions/${encodeURIComponent(id)}`).then(d => { if (active) setData(d); }).catch(e => { if (active) setError(e.message); });
+    return () => { active = false; };
   }, [server, id]);
 
   if (!server) return null;

@@ -83,6 +83,22 @@ CREATE TABLE IF NOT EXISTS jobs (
     updated_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS jobs_created ON jobs (created_at);
+-- Opt-in phone tools (Assignment 11). Grants are per device and per tool; a scope of '' is the main bot,
+-- a bot name is that bot, and '*' is every bot on this server. Events are metadata only: never the note,
+-- location, contact fields or event titles that a tool returned.
+CREATE TABLE IF NOT EXISTS phone_tool_grants (
+    device_id TEXT NOT NULL, tool TEXT NOT NULL, scope TEXT NOT NULL DEFAULT '',
+    mode TEXT NOT NULL DEFAULT 'ask', enabled INTEGER NOT NULL DEFAULT 1, updated_at REAL NOT NULL,
+    PRIMARY KEY (device_id, tool)
+);
+CREATE INDEX IF NOT EXISTS phone_tool_grants_device ON phone_tool_grants (device_id);
+CREATE TABLE IF NOT EXISTS phone_tool_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, device_id TEXT NOT NULL DEFAULT '',
+    bot TEXT NOT NULL DEFAULT '', chat_id TEXT NOT NULL DEFAULT '', tool TEXT NOT NULL,
+    event TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS phone_tool_events_device ON phone_tool_events (device_id, ts);
+CREATE INDEX IF NOT EXISTS phone_tool_events_ts ON phone_tool_events (ts);
 -- Conversation branching (feature: branching). A branch chat keeps a snapshot of where it came from;
 -- the parent conversation is never rewritten. Older code ignores these tables.
 CREATE TABLE IF NOT EXISTS chat_branches (
@@ -656,7 +672,8 @@ class Store:
     def prune(self, now: Optional[float] = None) -> int:
         """Drop old tombstones and old answered inbox items. Returns how many rows went."""
         now = now or _now()
-        return (self._exec("DELETE FROM message_deletions WHERE deleted_at < ?", (now - DELETIONS_KEEP_SECONDS,))
+        return (self._exec("DELETE FROM phone_tool_events WHERE ts < ? OR id NOT IN (SELECT id FROM phone_tool_events ORDER BY id DESC LIMIT 5000)", (now - 30 * 86400,))
+                + self._exec("DELETE FROM message_deletions WHERE deleted_at < ?", (now - DELETIONS_KEEP_SECONDS,))
                 + self._exec("DELETE FROM inbox WHERE status != 'pending' AND updated_at < ?",
                              (now - INBOX_KEEP_SECONDS,)))
 

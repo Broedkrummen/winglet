@@ -271,6 +271,10 @@ class WingletAdapter(BasePlatformAdapter):
             # Structured task activity is on only when every hook it needs was accepted. Old Hermes
             # versions, or a host that refuses hooks, keep the feature off rather than showing guesses.
             self._loop = asyncio.get_running_loop()
+            from . import phone_tools_hermes
+            if phone_tools_hermes._REGISTERED:
+                from .phone_tools import PhoneTools
+                hub.phone_tools = PhoneTools(hub)
             global _ACTIVE
             _ACTIVE = self
             if _TRACKER is not None and _TRACKER_HOOKS and all(_TRACKER_HOOKS.values()):
@@ -913,3 +917,5 @@ def register(ctx) -> None:
         description="Winglet: your Hermes agents on your phone. Start with `hermes winglet setup`.")
     # Bots ask each other, and make new ones with an owner's approval.
     teamwork.register(ctx)
+    from .phone_tools_hermes import register as register_phone_tools
+    register_phone_tools(ctx)

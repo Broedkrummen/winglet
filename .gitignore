@@ -172,6 +172,9 @@ expo-env.d.ts
 output/
 app/dist-web-preview/
 
+# Private phone-tools validation outputs
+.pytest-phone-*/
+app/dist-phone-*/
 # Event replay private validation outputs
 .pytest-replay-*/
 app/dist-replay-*/

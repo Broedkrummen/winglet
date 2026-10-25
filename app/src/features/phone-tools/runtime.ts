@@ -1,4 +1,5 @@
 import * as Crypto from 'expo-crypto';
+import { AppState } from 'react-native';
 import { create } from 'zustand';
 import { api } from '../../lib/api';
 import { useLock } from '../../lib/appLock';
@@ -10,7 +11,7 @@ export type Snapshot = { catalog: Record<Tool,CatalogItem>; grants: Grant[]; his
 export const usePhone = create<{ requests: { serverId: string; request: PhoneRequest }[]; notes: Record<string,string> }>(() => ({ requests: [], notes: {} }));
 const clients = new Map<string,{ policy: PhonePolicy; send: (event: object) => void }>();
 let instance = Crypto.randomUUID();
-let foreground = true;
+let foreground = AppState.currentState === 'active';
 let securityReady = false;
 const unlocked = () => securityReady && foreground && !useLock.getState().locked;
 export function phoneHello(server: Server, send: (event: object) => void) {

@@ -6,14 +6,15 @@ import ts from 'typescript';
 import { createStore } from 'zustand/vanilla';
 import { PhonePolicy, permitted } from '../src/features/phone-tools/policy.ts';
 const tick=()=>new Promise<void>(r=>setImmediate(r));
-function harness(supported=true,securityReady=true) {
+function harness(supported=true,securityReady=true,initialState: string | null='active',tool='phone_contacts',mode='ask') {
  let generation=0;
  const lock=createStore(()=>({locked:false}));let granted=true,reads=0;let finish:((v:any)=>void)|undefined;
  const sent:any[]=[];const cancelled:string[]=[];
  const imports:Record<string,any>={
+  'react-native':{AppState:{currentState:initialState}},
   'expo-crypto':{randomUUID:()=> 'fixture-instance-'+String(++generation).padStart(12,'0')},
   zustand:{create:(fn:any)=>createStore(fn)},'../../lib/appLock':{useLock:lock},
-  '../../lib/api':{api:async()=>({grants:[{tool:'phone_contacts',scope:'',mode:'ask',enabled:1}],bot_scope:'',server_scope_allowed:true})},
+  '../../lib/api':{api:async()=>({grants:[{tool,scope:'',mode,enabled:1}],bot_scope:'',server_scope_allowed:true})},
   './policy':{PhonePolicy,permitted},
   './native':{phoneSupported:supported,nativePhone:{permission:async()=>({granted,canAskAgain:true}),cancel:(id:string)=>cancelled.push(id),execute:async()=>{reads++;return await new Promise(resolve=>{finish=resolve;});}}},
  };
@@ -22,7 +23,7 @@ function harness(supported=true,securityReady=true) {
  const server={id:'fixture',bot:{name:'fixture'}};
  output.phoneHello(server,(event:any)=>sent.push(event));
  if(securityReady)output.phoneSecurityReady();
- const r={id:'a'.repeat(32),nonce:'b'.repeat(48),instance_id:sent.at(-1)?.instance_id ?? 'unsupported-instance',tool:'phone_contacts',args:{query:'Synthetic'},ask:true,mode:'ask',requested_at:1,expires_at:121,bot:{name:'fixture',title:'Synthetic'},chat:{id:'general',title:'Synthetic'}};
+ const r={id:'a'.repeat(32),nonce:'b'.repeat(48),instance_id:sent.at(-1)?.instance_id ?? 'unsupported-instance',tool,args:tool==='phone_contacts'?{query:'Synthetic'}:{},ask:mode==='ask',mode,requested_at:1,expires_at:121,bot:{name:'fixture',title:'Synthetic'},chat:{id:'general',title:'Synthetic'}};
  const receive=(request=r)=>output.phoneEvent(server.id,{type:'phone_tool.request',request});
  const decide=async()=>{output.phoneDecide(server.id,r.id,true);await tick();};
  const execute=async()=>{output.phoneEvent(server.id,{type:'phone_tool.execute',id:r.id,nonce:r.nonce});await tick();};
@@ -63,4 +64,26 @@ test('startup does not advertise unlocked or read before persisted app-lock pref
  assert.equal(h.sent.at(-1).unlocked,true);
  assert.notEqual(h.sent.at(-1).instance_id,h.request.instance_id);
  h.receive();await h.decide();await h.execute();assert.equal(h.reads,0);h.output.phoneDisconnect('fixture');
+});
+
+
+test('background or unknown startup refuses while-open native reads and shared notes before any lifecycle callback',async()=>{
+ for(const state of ['background','inactive',null,'unknown']) for(const tool of ['phone_contacts','phone_shared_note']) {
+  const h=harness(true,true,state,tool,'while_open');
+  h.output.usePhone.setState({notes:{fixture:'synthetic session note'}});
+  assert.equal(h.sent.at(-1).unlocked,false);
+  h.receive();await tick();await h.execute();await tick();
+  assert.equal(h.reads,0);
+  assert.equal(h.sent.some(e=>e.type==='phone_tool.answer'&&e.ok===true),false);
+  assert.equal(h.output.usePhone.getState().requests.length,0);
+  h.output.phoneVisibility(true);
+  assert.equal(h.sent.at(-1).unlocked,true);
+  const resumed={...h.request,id:'c'.repeat(32),instance_id:h.sent.at(-1).instance_id};
+  h.receive(resumed);await tick();
+  h.output.phoneEvent('fixture',{type:'phone_tool.execute',id:resumed.id,nonce:resumed.nonce});await tick();
+  if(tool==='phone_contacts'){assert.equal(h.reads,1);h.finish({contacts:[]});}
+  await tick();await tick();
+  assert.equal(h.sent.some(e=>e.type==='phone_tool.answer'&&e.ok===true),true);
+  h.output.phoneDisconnect('fixture');
+ }
 });

@@ -21,6 +21,8 @@ import android.os.Looper
 import android.provider.CalendarContract
 import android.provider.ContactsContract
 import android.provider.Settings
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
 import androidx.core.content.ContextCompat
 import expo.modules.interfaces.permissions.Permissions
 import expo.modules.kotlin.Promise
@@ -62,7 +64,8 @@ class WingletPhoneToolsModule : Module() {
   private fun guard(tool: String, expires: Double, precise: Boolean = false) {
     val activity = appContext.currentActivity
     val keyguard = context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
-    if (!foreground || activity == null || activity.isFinishing || keyguard.isDeviceLocked) throw CodedException("E_PHONE_LOCKED", "Phone locked or backgrounded", null)
+    val resumed = (activity as? LifecycleOwner)?.lifecycle?.currentState?.isAtLeast(Lifecycle.State.RESUMED) == true
+    if (!foreground || !resumed || activity == null || activity.isFinishing || keyguard.isDeviceLocked) throw CodedException("E_PHONE_LOCKED", "Phone locked or backgrounded", null)
     if (System.currentTimeMillis() >= expires) throw CodedException("E_PHONE_EXPIRED", "Phone request expired", null)
     if (permissions(tool).any { !granted(it) } || (precise && !granted(Manifest.permission.ACCESS_FINE_LOCATION))) throw CodedException("E_PHONE_PERMISSION", "Phone permission needed", null)
   }

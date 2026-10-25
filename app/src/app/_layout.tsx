@@ -76,12 +76,14 @@ export default function RootLayout() {
       document.addEventListener('visibilitychange', onVis);
       return () => document.removeEventListener('visibilitychange', onVis);
     }
-    const sub = AppState.addEventListener('change', (s) => {
+    const applyState = (s: string | null) => {
       setForeground(s === 'active');
       onAppVisibility(s === 'active');
       // Phones keep the app open for days; the check itself only goes to GitHub twice a day.
       if (s === 'active' && usePrefs.getState().prefs.updateCheck) useAppUpdate.getState().check();
-    });
+    };
+    const sub = AppState.addEventListener('change', applyState);
+    applyState(AppState.currentState);
     return () => sub.remove();
   }, [setForeground]);
 

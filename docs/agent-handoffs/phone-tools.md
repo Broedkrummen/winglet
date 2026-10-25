@@ -61,6 +61,10 @@ for expiry. Old, duplicate, wrong-socket, wrong-device and wrong-bot decisions/a
 The client rejects transport-buffered requests from before background/resume or app-lock transitions,
 and the gateway rechecks the request's lifecycle instance before execution/answer. On startup, the app
 advertises locked until persisted app-lock preferences have been applied (`phoneSecurityReady`).
+Foreground starts from `AppState.currentState === active`; background, inactive and unknown startup states
+fail closed. RootLayout applies current visibility immediately as well as subscribing to later changes.
+The native guard also requires the actual Activity lifecycle to be RESUMED, so correctness does not depend
+on receiving a module lifecycle callback after startup.
 
 The app fetches authoritative grants before deciding, immediately before reading and after reading.
 The native module independently rechecks OS permissions, activity foreground, device lock and expiry before
@@ -242,7 +246,7 @@ The merged backend checks include five namespace privacy regressions.
 NDK 27.1.12297006 was successfully installed after preserving the failed 211-byte partial metadata.
 Native Kotlin compile **PASSED**, including the explicit 100-row candidate counter and timeout-to-provider
 cancellation watcher (`0958736` / `cae67cc`). The real Android SDK/Expo dependencies produced 27 class files;
-`WingletPhoneToolsModule.class` is 47,576 bytes under the ignored module `android/build/tmp/kotlin-classes/debug/`.
+`WingletPhoneToolsModule.class` is under the ignored module `android/build/tmp/kotlin-classes/debug/`.
 This is module compilation, not APK assembly or runtime permission/provider proof. There were upstream
 Expo/Gradle deprecation warnings; no phone module compiler error. Earlier RAM/disk guard stops are superseded
 by this successful bounded attempt. Free disk at finish: 1941 MiB; do not immediately run a full APK build
@@ -257,3 +261,13 @@ change during that integration merge. Current head CI is checked separately; the
 Final approved-integration merge checks: **126 backend/Hermes/replay/hub passed; 60 focused app passed;
 TypeScript passed**. These ran after integrating `2b0a6f3`; the native module source is unchanged since
 the successful Kotlin compilation.
+
+Final orchestrator review additionally closed background startup: **13 phone policy/runtime tests passed**
+(including native-read and shared-note while-open denial for background/inactive/null/unknown startup,
+followed by successful active recovery), plus TypeScript passed. The native RESUMED guard is compiled
+against the real lifecycle API; physical lifecycle behavior remains in the mobile recipe.
+
+Final startup native guard incremental compile: **BUILD SUCCESSFUL in 1m 41s**, exit 0,
+59 tasks (2 executed/57 up-to-date), free disk 9309 MiB. One harmless module warning reports the redundant
+`activity == null` check after the RESUMED guard, which already implies a non-null activity.
+The compiled source retains both checks; no native compiler errors.

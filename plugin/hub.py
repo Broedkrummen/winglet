@@ -119,6 +119,8 @@ class Forbidden(PermissionError):
 #   signed        any verified device, with a signed request
 #   owner_signed  an owner's verified device, with a signed request: every control action
 ROUTE_POLICY = {
+    "h_context_insights": "owner", "h_context_limits": "owner",
+    "h_context_operation": "owner", "h_context_compress": "owner_signed",
     "h_rooms": "paired", "h_room_state": "paired", "h_room_log": "paired",
     "h_room_create": "owner_signed", "h_room_action": "signed",
     "h_info": "public", "h_pair": "public", "h_ws": "public", "h_static": "public", "h_media": "public",
@@ -283,6 +285,7 @@ class Hub:
         self.execution: Any = None
         self.processes = None
         self.rooms = None
+        self.context_insights = None
         self._pickers: Dict[str, Dict[str, Any]] = {}
         # Restarts and updates outlive this process; jobs started by this one carry its boot id.
         self.boot_id = new_id()
@@ -447,6 +450,8 @@ class Hub:
         _register_process_routes(app)
         from . import rooms_routes
         rooms_routes.register_routes(app)
+        from . import context_insights_routes
+        context_insights_routes.register_routes(app)
         r.add_get("/{tail:.*}", self.h_static)
         app.on_startup.append(self._start_janitor)
         app.on_shutdown.append(self._close_sockets)
@@ -763,7 +768,7 @@ class Hub:
         checkpoints = self.checkpoints is not None
         branching = bool(self.branching is not None and self._has(self.branching, "available")
                          and self.branching.available())
-        return {"rooms": self.rooms is not None and self.rooms.available(),
+        return {**(self.context_insights.capabilities() if self.context_insights else {k:False for k in ("session_context","context_compression","provider_limits","usage_insights")}), "rooms": self.rooms is not None and self.rooms.available(),
                 "room_mentions": self.rooms is not None and self.rooms.available(), "rooms_member_write": False,
                 "webpush": True, "ntfy": True, "approvals": True, "questions": True, "uploads": True, "voice": True,
                 "replies": True, "export": True, "mute": True, "status_updates": True, "roles": True,
@@ -1168,6 +1173,8 @@ class Hub:
             existing = self.store.find_user_message(chat_id, client_id)
             if existing is not None:
                 return existing
+        if self.context_insights is not None and self.context_insights.busy(chat_id):
+            raise MessageRejected("Hermes is updating this chat context. Wait for the result before sending.")
         chat = self.store.get_chat(chat_id)
         if not self.can_see(device, chat):
             return None  # deleted (or never created, or someone else's): don't bring it back
@@ -3376,6 +3383,8 @@ class Hub:
         return self._http
 
     async def aclose(self) -> None:
+        if self.context_insights is not None:
+            await self.context_insights.close()
         if self.rooms is not None:
             await self.rooms.close()
         if self.processes is not None:

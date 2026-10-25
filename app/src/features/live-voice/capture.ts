@@ -1,9 +1,10 @@
-import { RecordingPresets, requestRecordingPermissionsAsync, useAudioRecorder } from 'expo-audio';
+import { RecordingPresets, useAudioRecorder } from 'expo-audio';
 import { File } from 'expo-file-system';
 import { useRef } from 'react';
 import { Platform } from 'react-native';
 import { recordingMode } from '../../lib/audioMode';
 import { dbToLevel, EndOfSpeech } from './endOfSpeech';
+import { microphonePermission } from './microphonePermission';
 import type { Recording } from './client';
 
 type Run = { cancel: () => void; finish: () => void };
@@ -26,7 +27,7 @@ export function useCapture() {
       let timer: ReturnType<typeof setInterval> | undefined;
       const vad = new EndOfSpeech(); const began = Date.now();
       try {
-        if (!(await requestRecordingPermissionsAsync()).granted) throw new Error('Microphone permission denied. Allow Winglet microphone access in Settings.');
+        if (!(await microphonePermission(signal))) throw new Error('Microphone permission denied. Allow Winglet microphone access in Settings.');
         if (signal.aborted || cancelled) throw new Error('Cancelled');
         await recordingMode(true);
         await recorder.prepareToRecordAsync(); prepared = true;

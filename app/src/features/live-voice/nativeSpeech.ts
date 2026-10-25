@@ -12,7 +12,7 @@ export interface NativeSpeechPort {
 let next=0;
 const requestId=(kind:string)=>'native-'+kind+'-'+Date.now()+'-'+(++next);
 const cancelled=()=>new Error('Cancelled');
-export function nativeSpeech(port:NativeSpeechPort,permission:()=>Promise<boolean>,language=()=> '') {
+export function nativeSpeech(port:NativeSpeechPort,permission:(signal:AbortSignal)=>Promise<boolean>,language=()=> '') {
   return {
     probe:()=>port.capabilities(language()),
     dictate(signal:AbortSignal,partial:(text:string)=>void,setFinish:(finish:()=>void)=>void,onStarted:()=>void,onLevel:(level:number)=>void=()=>undefined):Promise<string>{
@@ -45,7 +45,7 @@ export function nativeSpeech(port:NativeSpeechPort,permission:()=>Promise<boolea
         setFinish(finish);signal.addEventListener('abort',abort,{once:true});
         if(signal.aborted){abort();return;}
         void (async()=>{
-          if(!await permission())throw new Error('Microphone permission denied. Allow microphone access in Settings.');
+          if(!await permission(signal))throw new Error('Microphone permission denied. Allow microphone access in Settings.');
           if(done||signal.aborted)return;
           started=true;await port.startRecognition(id,language());
           if(done)void port.cancelRecognition(id).catch(()=>undefined);

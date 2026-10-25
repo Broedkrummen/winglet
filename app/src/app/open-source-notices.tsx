@@ -18,7 +18,7 @@ export default function OpenSourceNoticesScreen() {
           const open = expanded.has(notice.file);
           return (
             <Card key={notice.file} style={s.card}>
-              <Tap accessibilityLabel={notice.title} accessibilityState={{ expanded: open }} feedback="selection"
+              <Tap accessibilityLabel={notice.title} accessibilityState={{ expanded: open }} aria-expanded={open} feedback="selection"
                 onPress={() => setExpanded(previous => { const next = new Set(previous); if (open) next.delete(notice.file); else next.add(notice.file); return next; })}
                 style={({ hovered }) => [s.heading, hovered && { backgroundColor: t.colors.pressed }]}>
                 <Text style={s.title}>{notice.title}</Text>

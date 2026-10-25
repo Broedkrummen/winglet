@@ -48,3 +48,14 @@ test('no mode ever turns off playback on a silenced phone (voice notes must stil
   await a.defaultMode();
   assert.ok(a.modes.every((m: any) => m.playsInSilentMode === true));
 });
+
+test('one foreground voice session owns focus and chimes cannot change it until release', async () => {
+  const a = load(); const release = a.claimVoiceAudio();
+  assert.equal(typeof release, 'function'); assert.equal(a.claimVoiceAudio(), null);
+  await a.recordingMode(true);
+  assert.equal(await a.chimeMode(), false); await a.defaultMode();
+  assert.deepEqual(a.modes, [{ allowsRecording: true, playsInSilentMode: true, interruptionMode: 'doNotMix', shouldPlayInBackground: false, allowsBackgroundRecording: false }]);
+  await a.recordingMode(false); release(); release();
+  assert.equal(a.modes.filter((m: any) => Object.keys(m).length === 1).length, 1);
+  assert.equal(await a.chimeMode(), true);
+});

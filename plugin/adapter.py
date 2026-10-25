@@ -255,6 +255,9 @@ class WingletAdapter(BasePlatformAdapter):
             hub.hermes_version = hermes_api.hermes_version
             hub.commands_provider = hermes_api.list_commands
             hub.hermes = hermes_api
+            # Speech-to-text and text-to-speech from this profile's own configuration. The app only sees
+            # the capability and provider names; keys and models stay on the server.
+            hub.speech = hermes_api.SpeechBackend() if hermes_api.speech_available() else None
             # Hermes's own workspace snapshots, only where this Hermes keeps them.
             hub.checkpoints = (checkpoints.CheckpointService(hermes_api, busy=hub.busy_chats)
                                if hermes_api.checkpoints_available() else None)

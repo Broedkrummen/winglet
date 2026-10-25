@@ -8,7 +8,7 @@ import { usePrefs } from '../../lib/prefs';
 import { useApp } from '../../lib/store';
 import { makeStyles, useTheme } from '../../lib/themeContext';
 import type { Server } from '../../lib/types';
-import { deviceCanListen, deviceCanSpeak } from './deviceSpeech';
+import { deviceCanListen, deviceCanSpeak, probeDeviceSpeech } from './deviceSpeech';
 import { phaseTitle } from './engine';
 import { useLiveVoice } from './useLiveVoice';
 import { speakableText } from './voiceText';
@@ -18,6 +18,12 @@ export function VoicePanel({ server, chatId, onClose, onType }: { server: Server
   const voice = useLiveVoice(server, chatId);
   const { state, stopStatus } = voice;
   const [providers, setProviders] = useState(false);
+  const [device, setDevice] = useState({listen:deviceCanListen(),speak:deviceCanSpeak(),language:'',voice:'',engine:'',listenReason:'Checking device speech...',speakReason:'Checking device speech...'});
+  useEffect(() => {
+    let alive=true;
+    void probeDeviceSpeech().then(next=>{if(alive)setDevice(next);});
+    return()=>{alive=false;};
+  },[providers]);
   const [model, setModel] = useState('the selected chat model');
   const prefs = usePrefs((s) => s.prefs);
   const update = usePrefs((s) => s.update);
@@ -49,7 +55,8 @@ export function VoicePanel({ server, chatId, onClose, onType }: { server: Server
     window.addEventListener('keydown', key);
     return () => window.removeEventListener('keydown', key);
   });
-  const disabled = !online || voice.blocked || state.phase === 'connecting' || state.muted && paused;
+  const unavailable = prefs.voiceListenWith === 'device' && !device.listen || prefs.voiceSpeakWith === 'device' && !device.speak;
+  const disabled = !online || voice.blocked || state.phase === 'connecting' || state.muted && paused || paused && unavailable;
   return <Sheet visible onClose={close} title="Hands-free voice" scrollable>
     <View style={s.header}>
       <BotAvatar name={server.bot.name} size={32} />
@@ -74,6 +81,7 @@ export function VoicePanel({ server, chatId, onClose, onType }: { server: Server
       <Text style={s.errorText}>{state.error.message}</Text>
       {state.error.code === 'permission' && Platform.OS !== 'web' ? <Pressable accessibilityRole="button" onPress={() => Linking.openSettings()} style={s.secondary}><Text style={s.link}>Open microphone settings</Text></Pressable> : null}
     </View> : null}
+    {unavailable && paused ? <Text style={s.errorText}>Selected device speech is unavailable. Open Speech providers and choose Server.</Text> : null}
     {!online ? <Text style={s.errorText}>Connection lost. Audio is discarded. Reconnect, then tap to continue.</Text> : null}
     {stopStatus ? <Text style={stopStatus.startsWith('Stop unconfirmed') ? s.errorText : s.small} accessibilityLiveRegion="polite">{stopStatus}</Text> : null}
     {stopStatus.startsWith('Stop unconfirmed') ? <Pressable accessibilityRole="button" onPress={voice.retryStop} style={s.secondary}><Text style={s.link}>Retry Stop</Text></Pressable> : null}
@@ -97,20 +105,21 @@ export function VoicePanel({ server, chatId, onClose, onType }: { server: Server
     <View style={s.provider}>
       <Pressable accessibilityRole="button" accessibilityLabel="Choose speech providers" accessibilityState={{ expanded: providers }} disabled={!paused} onPress={() => setProviders(!providers)} style={{ minHeight: 48, justifyContent: 'center' }}>
         <Text style={s.providerTitle}>Speech providers {providers ? '−' : '+'}</Text>
-        <Text style={s.small}>Listen: {prefs.voiceListenWith === 'device' ? 'This browser' : state.session?.sttProvider || 'Server configuration'}</Text>
-        <Text style={s.small}>Speak: {prefs.voiceSpeakWith === 'device' ? 'This browser' : state.session?.ttsProvider || 'Server configuration'}</Text>
+        <Text style={s.small}>Listen: {prefs.voiceListenWith === 'device' ? Platform.OS === 'web' ? 'This browser' : 'On device · offline' : state.session?.sttProvider || 'Server configuration'}</Text>
+        <Text style={s.small}>Speak: {prefs.voiceSpeakWith === 'device' ? Platform.OS === 'web' ? 'This browser' : 'On device · offline' : state.session?.ttsProvider || 'Server configuration'}</Text>
       </Pressable>
       {!paused ? <Text style={s.small}>Pause voice to change providers.</Text> : null}
       {providers && paused ? (['voiceListenWith', 'voiceSpeakWith'] as const).map((kind) => <View key={kind} style={s.providerOptions}>
         <Text style={s.providerTitle}>{kind === 'voiceListenWith' ? 'Listen with' : 'Speak with'}</Text>
         {(['server', 'device'] as const).map((value) => {
-          const available = value === 'server' || (kind === 'voiceListenWith' ? deviceCanListen() : deviceCanSpeak());
+          const available = value === 'server' || (kind === 'voiceListenWith' ? device.listen : device.speak);
           return <Pressable key={value} accessibilityRole="radio" accessibilityState={{ checked: prefs[kind] === value, disabled: !available }} disabled={!available} onPress={() => update({ [kind]: value })} style={[s.option, prefs[kind] === value && { borderColor: t.colors.accent }, !available && { opacity: 0.6 }]}>
-            <Text style={s.secondaryText}>{prefs[kind] === value ? '● ' : '○ '}{value === 'server' ? 'Server · configured provider' : Platform.OS === 'web' ? 'This browser' : 'Device speech unavailable'}</Text>
-            <Text style={s.small}>{value === 'server' ? 'Uses the speech provider configured in Hermes.' : !available ? Platform.OS === 'web' ? 'Unavailable in this browser.' : 'Device speech is unavailable in this native build. Use Server.' : 'Browser-managed speech may use its own online service.'}</Text>
+            <Text style={s.secondaryText}>{prefs[kind] === value ? '● ' : '○ '}{value === 'server' ? 'Server · configured provider' : Platform.OS === 'web' ? 'This browser' : available ? 'On device · offline' : 'On-device speech unavailable'}</Text>
+            <Text style={s.small}>{value === 'server' ? 'Uses the speech provider configured in Hermes.' : kind === 'voiceListenWith' ? device.listenReason : device.speakReason}</Text>
           </Pressable>;
         })}
       </View>) : null}
+      {Platform.OS === 'android' && prefs.voiceSpeakWith === 'device' && device.speak ? <Text selectable style={s.small}>{device.engine} · {device.voice} · {device.language}</Text> : null}
       <Text style={[s.small, { marginTop: 10 }]}>Replies use {model}. Change the model in the chat.</Text>
     </View>
     <View style={s.transcript}>

@@ -91,7 +91,7 @@ export function useLiveVoice(server: Server, chatId: string) {
         const prefs = usePrefs.getState().prefs;
         if (prefs.voiceListenWith === 'device') {
           const text = await dictate(signal, (text) => { if (valid()) engine.partialTranscript({ ...effect, text }); },
-            (finish) => { dictationFinish.current = finish; }, () => { if (valid()) setMicActive(true); });
+            (finish) => { dictationFinish.current = finish; }, () => { if (valid()) setMicActive(true); }, (n) => { if (valid()) setLevel(n); });
           if (mounted.current) setMicActive(false);
           if (valid()) process(engine.utteranceDone({ ...effect, outcome: { kind: 'transcript', text, durationMs: 0 } }));
         } else {

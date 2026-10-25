@@ -25,6 +25,17 @@ def test_committed_notice_copies_are_current():
     assert result.returncode == 0, result.stderr
 
 
+def test_every_repository_notice_ships_complete_in_both_packages():
+    expected = {path.name: path.read_text(encoding="utf-8")
+                for path in (ROOT / "third_party/notices").glob("*.md")}
+    packaged = json.loads((ROOT / generator.APP).read_text(encoding="utf-8"))
+    assert {item["file"]: item["text"] for item in packaged} == expected
+    assert len(packaged) == len(expected)
+    plugin = (ROOT / generator.PLUGIN).read_text(encoding="utf-8")
+    for text in expected.values():
+        assert text in plugin
+
+
 def test_full_unicode_copyright_license_and_provenance_survive_both_packages(tmp_path):
     complete = '# Attribution é\n\nCopyright (c) Example\n\nPermission is hereby granted.\n\nTHE SOFTWARE IS PROVIDED "AS IS".\n\nAdapted from https://example.invalid/source#revision\n'
     source(tmp_path, "z.md", complete)

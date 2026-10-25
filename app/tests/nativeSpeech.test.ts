@@ -7,7 +7,7 @@ const flush=()=>new Promise(resolve=>setImmediate(resolve));
 function fixture(permission=async()=>true){
   const listeners={recognition:new Set<(event:NativeSpeechEvent)=>void>(),synthesis:new Set<(event:NativeSpeechEvent)=>void>()};
   const starts:string[]=[];const stops:string[]=[];const cancels:string[]=[];const speaks:string[]=[];const speechCancels:string[]=[];
-  let start=async(_id:string)=>{};let speak=async(_id:string)=>{};
+  let start=async(_id:string)=>{};let speak=async(_id:string)=>{};let subscriptionFails=false;
   const port:NativeSpeechPort={
     async capabilities(){return {listen:true,speak:true,language:'en-US',voice:'local-fixture',engine:'fixture',listenReason:'Installed language required',speakReason:'Local voice'};},
     async startRecognition(id){starts.push(id);await start(id);},
@@ -15,11 +15,11 @@ function fixture(permission=async()=>true){
     async cancelRecognition(id){cancels.push(id);},
     async speak(id){speaks.push(id);await speak(id);},
     async cancelSpeech(id){speechCancels.push(id);},
-    addListener(channel,fn){listeners[channel].add(fn);return {remove(){listeners[channel].delete(fn);}};},
+    addListener(channel,fn){if(subscriptionFails)throw new Error('Native host destroyed');listeners[channel].add(fn);return {remove(){listeners[channel].delete(fn);}};},
   };
   return {voice:nativeSpeech(port,permission),starts,stops,cancels,speaks,speechCancels,listeners,
     emit(channel:'recognition'|'synthesis',event:NativeSpeechEvent){listeners[channel].forEach(fn=>fn(event));},
-    setStart(fn:typeof start){start=fn;},setSpeak(fn:typeof speak){speak=fn;}};
+    failSubscriptions(){subscriptionFails=true;},setStart(fn:typeof start){start=fn;},setSpeak(fn:typeof speak){speak=fn;}};
 }
 test('native dictation aborts during permission without starting a late microphone',async()=>{
   const gate=deferred<boolean>();const h=fixture(()=>gate.promise);const control=new AbortController();
@@ -86,4 +86,11 @@ test('native service start errors release listeners and preserve a visible error
   const h=fixture();h.setStart(async()=>{throw new Error('On-device recognition unavailable. Choose Server.');});
   await assert.rejects(h.voice.dictate(new AbortController().signal,()=>{},()=>{},()=>{}),/unavailable/);
   assert.equal(h.listeners.recognition.size,0);assert.equal(h.cancels.length,1);
+});
+
+test('a destroyed native event host fails promptly without opening audio or leaving timers',async()=>{
+  const h=fixture();h.failSubscriptions();
+  await assert.rejects(h.voice.dictate(new AbortController().signal,()=>{},()=>{},()=>{}),/module unavailable/);
+  await assert.rejects(h.voice.say('Reply',new AbortController().signal),/module unavailable/);
+  assert.equal(h.starts.length+h.speaks.length,0);
 });

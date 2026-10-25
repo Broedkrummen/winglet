@@ -34,14 +34,14 @@ export function nativeSpeech(port:NativeSpeechPort,permission:()=>Promise<boolea
           if(!grace)grace=setTimeout(()=>settle(new Error('Device recognition timed out. Choose Server or retry.')),8000);
         };
         const limit=setTimeout(finish,60000);
-        subscription=port.addListener('recognition',(event)=>{
+        try { subscription=port.addListener('recognition',(event)=>{
           if(done||event.id!==id)return;
           if(event.kind==='ready')onStarted();
           else if(event.kind==='partial')partial((event.text??'').slice(0,8000));
           else if(event.kind==='level'&&Number.isFinite(event.level))onLevel(Math.max(0,Math.min(1,event.level!)));
           else if(event.kind==='final')settle(undefined,event.text??'');
           else if(event.kind==='error')settle(new Error(event.text||'On-device recognition failed. Choose Server.'));
-        });
+        }); } catch { settle(new Error('Device speech module unavailable. Choose Server.')); return; }
         setFinish(finish);signal.addEventListener('abort',abort,{once:true});
         if(signal.aborted){abort();return;}
         void (async()=>{
@@ -62,11 +62,11 @@ export function nativeSpeech(port:NativeSpeechPort,permission:()=>Promise<boolea
         };
         const abort=()=>settle(cancelled());
         const limit=setTimeout(()=>settle(new Error('Device speech timed out. Choose Server or retry.')),90000);
-        subscription=port.addListener('synthesis',(event)=>{
+        try { subscription=port.addListener('synthesis',(event)=>{
           if(done||event.id!==id)return;
           if(event.kind==='done')settle();
           else if(event.kind==='error')settle(new Error(event.text||'Device speech failed. Choose Server.'));
-        });
+        }); } catch { settle(new Error('Device speech module unavailable. Choose Server.')); return; }
         signal.addEventListener('abort',abort,{once:true});
         if(signal.aborted){abort();return;}
         void port.speak(id,text,language()).then(()=>{if(done)void port.cancelSpeech(id).catch(()=>undefined);})

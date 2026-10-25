@@ -107,6 +107,10 @@ class WingletVoiceModule : Module() {
     routeCallback = callback
     audio.registerAudioDeviceCallback(callback, main)
   }
+  private fun authorized(id: String, microphone: Boolean): Boolean = try {
+    guard(id)
+    !microphone || ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+  } catch (_: Exception) { false }
   private fun endRecognition(id: String, kind: String, text: String = "") {
     val run = recognition ?: return
     if (run.first != id) return
@@ -114,14 +118,16 @@ class WingletVoiceModule : Module() {
     try { run.second.cancel() } catch (_: Exception) {}
     try { run.second.destroy() } catch (_: Exception) {}
     releaseFocus(id)
-    event("recognition", id, kind, text)
+    if (kind == "final" && !authorized(id, true)) event("recognition", id, "error", "Speech interrupted or permission changed. Tap to continue.")
+    else event("recognition", id, kind, text)
   }
   private fun endSpeech(id: String, kind: String, text: String = "") {
     if (speaking != id) return
     speaking = null
     try { tts?.stop() } catch (_: Exception) {}
     releaseFocus(id)
-    event("synthesis", id, kind, text)
+    if (kind == "done" && !authorized(id, false)) event("synthesis", id, "error", "Phone locked or backgrounded. Tap to continue.")
+    else event("synthesis", id, kind, text)
   }
   private fun cancelAll(reason: String) {
     pendingSpeech.forEach { remember(it) }
@@ -190,9 +196,9 @@ class WingletVoiceModule : Module() {
       val available = Build.VERSION.SDK_INT >= 31 && try { SpeechRecognizer.isOnDeviceRecognitionAvailable(context) } catch (_: Exception) { false }
       withTts { engine ->
         val voice = if (engine != null && Build.VERSION.SDK_INT >= 26) offlineVoice(engine, language) else null
-        promise.resolve(mapOf("listen" to available, "speak" to (voice != null), "language" to language.toLanguageTag(),
+        promise.resolve(mapOf("listen" to available, "speak" to (voice != null), "language" to (voice?.locale?.toLanguageTag() ?: language.toLanguageTag()),
           "voice" to (voice?.name?.take(160) ?: ""), "engine" to (engine?.defaultEngine?.take(160) ?: ""),
-          "listenReason" to if (available) "Android on-device recognition; an installed language pack is required." else "Requires Android 12 or later and an available on-device recognizer.",
+          "listenReason" to if (available) "Android on-device recognition (" + language.toLanguageTag() + "); an installed language pack is required." else "Requires Android 12 or later and an available on-device recognizer.",
           "speakReason" to if (voice != null) "Installed voice; network connection is not required." else "No installed offline voice for this language. Choose Server."))
       }
     }.runOnQueue(Queues.MAIN)
@@ -208,15 +214,21 @@ class WingletVoiceModule : Module() {
         val recognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
         recognition = id to recognizer
         recognizer.setRecognitionListener(object : RecognitionListener {
-          private fun current() = recognition?.first == id
+          private fun current() = !destroyed && !background && recognition?.first == id
+          private fun allowed(): Boolean {
+            if (!current()) return false
+            if (authorized(id, true)) return true
+            endRecognition(id, "error", "Speech interrupted or permission changed. Tap to continue.")
+            return false
+          }
           private fun text(bundle: Bundle?) = bundle?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty().take(8000)
-          override fun onReadyForSpeech(params: Bundle?) { if (current()) event("recognition", id, "ready") }
+          override fun onReadyForSpeech(params: Bundle?) { if (allowed()) event("recognition", id, "ready") }
           override fun onBeginningOfSpeech() {}
           override fun onRmsChanged(rmsdB: Float) { if (current()) event("recognition", id, "level", level = ((rmsdB + 2) / 12.0).coerceIn(0.0, 1.0)) }
           override fun onBufferReceived(buffer: ByteArray?) {}
           override fun onEndOfSpeech() {}
-          override fun onPartialResults(results: Bundle?) { if (current()) event("recognition", id, "partial", text(results)) }
-          override fun onResults(results: Bundle?) { if (current()) endRecognition(id, "final", text(results)) }
+          override fun onPartialResults(results: Bundle?) { if (allowed()) event("recognition", id, "partial", text(results)) }
+          override fun onResults(results: Bundle?) { if (allowed()) endRecognition(id, "final", text(results)) }
           override fun onError(code: Int) {
             if (!current()) return
             when (code) {

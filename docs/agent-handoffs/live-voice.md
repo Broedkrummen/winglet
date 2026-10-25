@@ -30,8 +30,10 @@ Provider choices are explicit and persisted on this device:
 - Server STT and TTS use the current bot/profile's Hermes configuration. The app never receives keys.
 - Browser-managed recognition/synthesis are offered only when their APIs exist. Browser recognition
   may use the browser vendor's online service; it is not promised to run offline.
-- Native builds use server providers. Native on-device SpeechRecognizer/TextToSpeech are **not**
-  included and their choices are disabled with an explanation.
+- Android builds offer on-device recognition on API31+ when the system's local recognizer exists,
+  and synthesis through an installed voice that requires no network. The native follow-up is
+  documented in [native-speech.md](native-speech.md); language packs remain a runtime requirement.
+  Unsupported native builds keep these choices disabled. Server choices remain available.
 - Replies use the chat's existing model. The panel displays its selection where the agent API exists.
 
 This is turn-based hands-free speech. There is no simultaneous listen/speak, acoustic barge-in,
@@ -91,7 +93,7 @@ Old servers hide the new entry; existing voice notes and text delivery retain th
   live-only sends, foreground/lock/connection changes and explicit resume policy.
 - `capture.ts`: browser MediaRecorder + Web Audio RMS; native Expo recorder + dB amplitude metering.
   Both use the adapted adaptive VAD and release their resources on cancellation.
-- `deviceSpeech.ts`: browser recognition/synthesis capability checks, partials and hard cancellation.
+- `deviceSpeech.ts` / `nativeSpeech.ts`: separately gated browser and Android device speech, partials, request identity and hard cancellation.
 - `playback.ts`: browser HTMLAudio ended/error events and native Expo status events. A natural pause
   before ended is not mistaken for focus loss. Abort detaches listeners and releases the source.
 - `client.ts`: botPath routing, session contract, signed URL and bounded backpressure.
@@ -142,7 +144,7 @@ Hermes integration pin: `47676981f55de91231fdeef2f0eec47e7c209e78`.
 | VoiceScreen.kt focused controls | Winglet themed sheet, status orb, captions and large controls | 320/390/820/1440 captures, keyboard Space/Escape, Type instead |
 | VoiceLive.kt / SpeechStream.kt | Explicitly unavailable | No dashboard JSON-RPC, WebRTC vendor protocol or streaming PCM facade |
 | VoiceKeepAlive.kt | Foreground-only lifecycle | No microphone service or lockscreen continuation |
-| AndroidVoice.kt / device dictation abstractions | Native server speech; browser API options | Native on-device ASR/TTS intentionally disabled, not implemented |
+| AndroidVoice.kt / device dictation abstractions | Native server speech, browser APIs, Android on-device ASR/offline TTS | Local Expo module uses system APIs; native compile passed, device runtime checks pending |
 
 The full upstream MIT notice and exact reused files/modifications are in
 [herald-live-voice.md](../../third_party/notices/herald-live-voice.md).
@@ -190,11 +192,12 @@ Representative screenshots (synthetic content only):
 
 ## MOBILE VALIDATION PENDING
 
-**Implemented:** native Expo capture/playback adapters, VAD, input-route checks, foreground cleanup,
-explicit server providers, microphone permission errors. **Not implemented:** native device ASR/TTS,
-full duplex, acoustic barge-in, foreground microphone service. **Native build:** not run in this agent
-worktree; there was no prepared native project/SDK here. Another agent is setting up a private SDK;
-the orchestrator owns the final combined native build. **Phone/emulator tests:** deliberately not run.
+**Implemented:** native Expo capture/playback, VAD, input-route checks, foreground cleanup,
+explicit server/browser providers, and Android on-device ASR/offline TTS in the native follow-up.
+**Not implemented:** iOS device speech, full duplex, acoustic barge-in or a microphone service.
+**Native build:** the local Android voice module compiled with the prepared SDK; the final combined
+APK remains owned by the orchestrator. **Phone/emulator tests:** deliberately not run here.
+See [native-speech.md](native-speech.md) for exact native checks and remaining hardware cases.
 
 Use the final merged `codex/major-features` commit containing PR #50 and record its exact SHA plus
 APK build SHA. Do not validate a stale feature APK and call it integration coverage.

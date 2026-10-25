@@ -5,9 +5,10 @@ import { test } from 'node:test';
 import ts from 'typescript';
 
 function deferred<T = any>() { let resolve!: (v: T) => void; let reject!: (e: Error) => void; const promise = new Promise<T>((r, j) => { resolve = r; reject = j; }); return { promise, resolve, reject }; }
-function harness() {
+function harness(overrides: { voiceListenWith?: string; voiceSpeakWith?: string } = {}) {
   const hooks: any[] = []; let cursor = 0; const effects: (() => void)[] = []; const cleanup: (() => void)[] = [];
   const captures: any[] = []; const transcriptions: any[] = []; const playbacks: any[] = []; const sends: any[] = []; const stops: any[] = [];
+  const dictations: any[] = []; const syntheses: any[] = [];
   const events: Record<string, any> = {};
   let callsOpen = 0; let disposed = 0;
   const server = { id: 'bot', url: 'http://fixture', token: 'fixture', deviceId: 'fixture', bot: { name: 'Hermes' } };
@@ -17,7 +18,7 @@ function harness() {
   const useApp = Object.assign((fn: any) => fn(store), { getState: () => store });
   const lock = { locked: false };
   const useLock = Object.assign((fn: any) => fn(lock), { getState: () => lock });
-  const prefs = { voiceListenWith: 'server', voiceSpeakWith: 'server' };
+  const prefs = { voiceListenWith: 'server', voiceSpeakWith: 'server', ...overrides };
   class FakeClient {
     async open() { callsOpen++; return { id: 's' + callsOpen, token: 't', expiresAt: Date.now() + 100000, chatId: 'general' }; }
     transcribe(...args: any[]) { const gate = deferred(); transcriptions.push({ args, gate }); return gate.promise; }
@@ -40,7 +41,10 @@ function harness() {
     '../../lib/api': { ApiError: class extends Error {} },
     './client': { VoiceClient: FakeClient, backpressure: (fn: any) => fn() },
     './capture': { useCapture: () => ({ finish() {}, record(signal: AbortSignal, _level: any, started: any) { started(); const gate = deferred(); captures.push({ signal, gate }); return gate.promise; } }) },
-    './deviceSpeech': {},
+    './deviceSpeech': {
+      dictate(signal: AbortSignal, partial: any, finish: any, started: any) { const gate=deferred<string>(); dictations.push({signal,partial,started,gate}); finish(()=>{}); started(); return gate.promise; },
+      sayOnDevice(_text: string, signal: AbortSignal) { const gate=deferred<void>(); syntheses.push({signal,gate}); return gate.promise; },
+    },
     './playback': { playSpeech: (_url: string, signal: AbortSignal) => { const gate = deferred(); playbacks.push({ signal, gate }); return gate.promise; } },
   };
   const cache: Record<string, any> = {};
@@ -58,7 +62,7 @@ function harness() {
   const flush = async () => { await new Promise((r) => setImmediate(r)); return render(); };
   const audio = () => ({ uri: 'file://synthetic', mime: 'audio/mp4', hasSpeech: true, durationMs: 2000, dispose: () => { disposed++; } });
   render();
-  return { render, flush, captures, transcriptions, playbacks, sends, stops, rt, store, events, lock, audio,
+  return { render, flush, captures, transcriptions, playbacks, dictations, syntheses, sends, stops, rt, store, events, lock, audio,
     unmount: () => cleanup.forEach((fn) => fn?.()), get disposed() { return disposed; }, get opened() { return callsOpen; } };
 }
 
@@ -114,4 +118,33 @@ test('late microphone preparation after closing is disposed, never transcribed',
   const h = harness(); const v = await h.flush(); v.start(); await h.flush();
   h.unmount(); h.captures[0].gate.resolve(h.audio()); await new Promise((r) => setImmediate(r));
   assert.equal(h.transcriptions.length, 0); assert.equal(h.disposed, 1);
+});
+
+
+test('native dictation callbacks after background or app lock cannot send captured text or mark a microphone active', async () => {
+  for (const reason of ['background','lock']) {
+    const h=harness({voiceListenWith:'device'}); let v=await h.flush();v.start();await h.flush();
+    assert.equal(h.dictations.length,1);assert.equal(h.captures.length,0);
+    if(reason==='background')h.events.app('background');else{h.lock.locked=true;h.render();}
+    const old=h.dictations[0];assert.equal(old.signal.aborted,true);
+    old.started();old.partial('Private late partial');old.gate.resolve('Private late final');
+    v=await h.flush();
+    assert.equal(h.sends.length,0);assert.equal(v.micActive,false);assert.equal(v.state.partial,'');
+    h.unmount();
+  }
+});
+
+test('late native synthesis completion after lock cannot start another listening turn', async () => {
+  const h=harness({voiceListenWith:'device',voiceSpeakWith:'device'});let v=await h.flush();v.start();await h.flush();
+  h.dictations[0].gate.resolve('A question');await h.flush();
+  const clientId=h.sends[0].args[3].clientId;
+  h.rt.messages.general=[
+    {id:'user',role:'user',text:'A question',status:'final',meta:{client_id:clientId},position:1,created_at:Date.now()/1000},
+    {id:'reply',role:'bot',text:'The answer',status:'final',meta:{},position:2,created_at:Date.now()/1000},
+  ];
+  h.sends[0].gate.resolve();await h.flush();assert.equal(h.syntheses.length,1);
+  h.lock.locked=true;h.render();assert.equal(h.syntheses[0].signal.aborted,true);
+  h.syntheses[0].gate.resolve();v=await h.flush();
+  assert.equal(h.dictations.length,1);assert.equal(v.micActive,false);assert.equal(v.state.phase,'idle');
+  h.unmount();
 });

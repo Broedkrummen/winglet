@@ -66,7 +66,8 @@ The app fetches authoritative grants before deciding, immediately before reading
 The native module independently rechecks OS permissions, activity foreground, device lock and expiry before
 and after reads. App lock, background, explicit connection closure, disconnect, revoke, new app instance,
 unpair and role changes cancel pending access. Android provider queries receive cancellation signals;
-location cancellation removes its listener or cancels the platform signal. A late result is discarded.
+location cancellation removes its listener or cancels the platform signal. A late result is discarded. A native cancellation watcher also signals a blocking contacts/calendar provider query
+immediately when the 15 s timeout cancels its coroutine, rather than waiting for that query to return.
 The real pinned Hermes interrupt mechanism and parent-agent interrupt state cancel the waiting future on Stop.
 
 Pending requests/results live only in memory. The plugin stores metadata audit rows, not arguments/results.
@@ -148,7 +149,7 @@ verbatim. Required complete MIT text and provenance are in `third_party/notices/
 | Production Expo web export | Passed, `dist-phone-web` (later used for an ignored synthetic UI fixture). |
 | Production Expo Android/Hermes-bytecode export | Passed, `dist-phone-android`; bundling only. |
 | Expo local-module autolink + Android prebuild | Passed; generated projects ignored. |
-| Native Gradle compile | First attempt deliberately stopped under machine RAM pressure before compilation. Retrying with one worker/1024 MB heap and Kotlin in-process; final result below. |
+| Native Gradle compile | **PASSED** normal `:winglet-phone-tools:compileDebugKotlin`, Gradle exit 0, BUILD SUCCESSFUL in 10m 48s; 59 tasks (31 executed/28 up-to-date). Expo Core and Worklets dependencies compiled normally. |
 | Real/emulated Android permission/data/lifecycle checks | NOT RUN — MOBILE VALIDATION PENDING, by instruction. |
 
 Hermes integration tested against exact pin `47676981f55de91231fdeef2f0eec47e7c209e78`, using its actual
@@ -239,4 +240,16 @@ A further lifecycle-instance regression adds app/server coverage: buffered pre-b
 execute after resume. The startup app-lock gate adds another actual-runtime case; final policy/runtime **12 passed** before integration.
 The merged backend checks include five namespace privacy regressions.
 NDK 27.1.12297006 was successfully installed after preserving the failed 211-byte partial metadata.
-Native build final result will be recorded here before final handoff.
+Native Kotlin compile **PASSED**, including the explicit 100-row candidate counter and timeout-to-provider
+cancellation watcher (`0958736` / `cae67cc`). The real Android SDK/Expo dependencies produced 27 class files;
+`WingletPhoneToolsModule.class` is 47,576 bytes under the ignored module `android/build/tmp/kotlin-classes/debug/`.
+This is module compilation, not APK assembly or runtime permission/provider proof. There were upstream
+Expo/Gradle deprecation warnings; no phone module compiler error. Earlier RAM/disk guard stops are superseded
+by this successful bounded attempt. Free disk at finish: 1941 MiB; do not immediately run a full APK build
+without ensuring sufficient free space. Installed SDK and warm private Gradle caches are preserved.
+Official command-line ZIP was hash-verified and removed after extraction, recovering 155,655,386 bytes.
+
+Approved context integration `2b0a6f30b0d5579b05110ed7effa5ddeb211f4a6` is now included. The final merge
+retains both context route policies/capabilities/shutdown and the phone equivalents. Native source did not
+change during that integration merge. Current head CI is checked separately; the green run above proves
+`30fe014` only and must not be represented as current-head evidence.

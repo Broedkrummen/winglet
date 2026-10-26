@@ -36,7 +36,7 @@ from urllib.parse import quote, unquote, urlsplit
 
 from aiohttp import WSMsgType, web
 
-from . import checkpoints as checkpoints_api, keys, live_voice, recovery, uploads, webpush
+from . import checkpoints as checkpoints_api, encrypted_push, keys, live_voice, recovery, uploads, webpush
 from .projects import ProjectConflict, ProjectError, Projects
 from .event_replay import EventStream, MAX_PAYLOAD
 from .store import ROLES, Store, new_id
@@ -119,6 +119,7 @@ class Forbidden(PermissionError):
 #   signed        any verified device, with a signed request
 #   owner_signed  an owner's verified device, with a signed request: every control action
 ROUTE_POLICY = {
+    "h_encrypted_push_get": "device", "h_encrypted_push_put": "signed", "h_encrypted_push_delete": "signed",
     "h_phone_tools": "device", "h_phone_tools_put": "signed", "h_phone_tools_revoke": "signed",
     "h_phone_tools_log": "device",
     "h_context_insights": "owner", "h_context_limits": "owner",
@@ -375,6 +376,9 @@ class Hub:
         r.add_get("/api/push/vapid", self.h_vapid)
         r.add_post("/api/push/webpush", self.h_webpush_subscribe)
         r.add_delete("/api/push/webpush", self.h_webpush_unsubscribe)
+        r.add_get("/api/push/encrypted", self.h_encrypted_push_get)
+        r.add_post("/api/push/encrypted", self.h_encrypted_push_put)
+        r.add_delete("/api/push/encrypted", self.h_encrypted_push_delete)
         r.add_get("/api/push/ntfy", self.h_ntfy)
         r.add_post("/api/push/test", self.h_push_test)
         r.add_get("/api/media/{media_id}/{name}", self.h_media)
@@ -786,7 +790,7 @@ class Hub:
                          and self.branching.available())
         return {"phone_tools": self.phone_tools is not None, "routine_history": self.routine_history is not None, "routine_run_detail": self.routine_history is not None, **(self.context_insights.capabilities() if self.context_insights else {k:False for k in ("session_context","context_compression","provider_limits","usage_insights")}), "rooms": self.rooms is not None and self.rooms.available(),
                 "room_mentions": self.rooms is not None and self.rooms.available(), "rooms_member_write": False,
-                "webpush": True, "ntfy": True, "approvals": True, "questions": True, "uploads": True, "voice": True,
+                "encrypted_push": True, "webpush": True, "ntfy": True, "approvals": True, "questions": True, "uploads": True, "voice": True,
                 "replies": True, "export": True, "mute": True, "status_updates": True, "roles": True,
                 "signed_actions": True, "ws_auth": True, "pickers": True, "agent": self.hermes is not None,
                 "control": self.hermes is not None, "goals": self.chat_goal is not None, "search": True, "files": True,
@@ -3495,22 +3499,30 @@ class Hub:
             wanted[device_key] = (_push_for(self.store.get_device(device_key), chat, note)
                                   and _wants_push(self.store.get_push_prefs(device_key), note)
                                   and not (note.get("kind") == "message" and device_key in foreground))
-        subs = [sub for sub in subs if wanted[sub["device_id"]] and sub["kind"] in ("webpush", "ntfy")]
-        pem = self.vapid_private_key() if any(sub["kind"] == "webpush" for sub in subs) else ""
+        subs = [sub for sub in subs if wanted[sub["device_id"]] and sub["kind"] in ("webpush", "ntfy", encrypted_push.KIND)
+                and (sub["kind"] == encrypted_push.KIND or self.store.get_kv(encrypted_push.policy_key(sub["device_id"])) != "1")]
+        pem = self.vapid_private_key() if any(sub["kind"] in ("webpush", encrypted_push.KIND) for sub in subs) else ""
 
         async def deliver(sub: Dict[str, Any]) -> None:
             try:
-                if sub["kind"] == "webpush":
+                current = self.store.get_device(sub["device_id"])
+                if current is None or (sub["kind"] == encrypted_push.KIND and
+                    (encrypted_push.enrolled(self.store, sub["device_id"]) or {}).get("id") != sub["id"]):
+                    return
+                if sub["kind"] == encrypted_push.KIND:
+                    envelope = encrypted_push.seal(sub["data"]["key"], sub["data"]["kid"], self.server_id(), sub["device_id"], note)
+                    status = await webpush.send(client, sub["data"]["subscription"], envelope, pem, PUSH_SUBJECT, urgency=urgency)
+                elif sub["kind"] == "webpush":
                     status = await webpush.send(client, sub["data"], note, pem, PUSH_SUBJECT, urgency=urgency, topic=tag)
                 else:
                     status = await self._send_ntfy(client, sub["data"], note)
             except Exception as exc:
-                logger.warning("[winglet] push delivery failed: %s", exc)
+                logger.warning("[winglet] push delivery failed: %s", type(exc).__name__)
                 result["failed"] += 1
                 self._delivered[sub["id"]] = {"at": time.time(), "ok": False}
                 return
             self._delivered[sub["id"]] = {"at": time.time(), "ok": status < 300}
-            if status in (404, 410) and sub["kind"] == "webpush":
+            if status in (404, 410) and sub["kind"] in ("webpush", encrypted_push.KIND):
                 self.store.remove_push_sub(endpoint=sub["endpoint"])
                 result["expired"] += 1
             elif status >= 300:
@@ -3578,9 +3590,41 @@ class Hub:
         removed = self.store.remove_push_sub(endpoint=str(body.get("endpoint") or ""), device_id=device["id"])
         return _json({"ok": True, "removed": removed})
 
+    async def h_encrypted_push_get(self, request: web.Request) -> web.Response:
+        device = self._require(request)
+        return _json(encrypted_push.status(self.store, device["id"], self._delivered))
+
+    async def h_encrypted_push_put(self, request: web.Request) -> web.Response:
+        original = self._require(request)
+        signing_key = self.store.device_sign_key(original["id"])
+        refused = self._secrets_refused(original)
+        if refused is not None:
+            return refused
+        body = await self._body(request)
+        device = self._device(request)
+        if device is None or not device.get("verified") or self.store.device_sign_key(device["id"]) != signing_key:
+            return _error(403, "Verify this pairing again before configuring encrypted push.")
+        try:
+            data = self.keys.unseal_json(str(body.get("sealed") or ""), "push-key", device["id"])
+            encrypted_push.enroll(self.store, device["id"], data, self.ntfy_server)
+        except (keys.SealError, ValueError, TypeError, KeyError):
+            return _error(400, "Could not register encrypted push. Use a fresh key and this server's configured HTTPS ntfy distributor.")
+        self.audit("push.enroll", device, "Encrypted notification key and delivery endpoint registered")
+        return _json(encrypted_push.status(self.store, device["id"], self._delivered))
+
+    async def h_encrypted_push_delete(self, request: web.Request) -> web.Response:
+        device = self._device(request)
+        if device is None or not device.get("verified"):
+            return _error(403, "Verify this pairing again before changing encrypted push.")
+        encrypted_push.revoke(self.store, device["id"])
+        self.audit("push.revoke", device, "Encrypted notification delivery disabled; plaintext fallback remains blocked")
+        return _json({"ok": True})
+
     async def h_ntfy(self, request: web.Request) -> web.Response:
         """Enable ntfy delivery for this device and return the private topic to subscribe to."""
         device = self._require(request)
+        if self.store.get_kv(encrypted_push.policy_key(device["id"])) == "1":
+            return _error(409, "Encrypted push is required for this pairing. Repair it in the current Winglet app.")
         legacy_shared = self.store.get_kv("ntfy_topic")  # v0.1 gave every phone the same topic
         mine = [sub for sub in self.store.list_push_subs("ntfy")
                 if sub["device_id"] == device["id"] and sub["data"].get("topic") != legacy_shared]

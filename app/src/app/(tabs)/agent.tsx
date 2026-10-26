@@ -85,6 +85,12 @@ export default function AgentTab() {
         </ListGroup>
 
         <VerifyNotice server={server} />
+        {rt?.info?.features?.config_catalog && isOwner(rt) ? (
+          <><SectionHeader title="Advanced" /><ListGroup>
+            <ListRow icon={<Cpu size={18} color={t.colors.onAccentSoft} />} title="Agent configuration"
+              subtitle="Context, memory and execution settings" onPress={() => router.push('/advanced-config')} />
+          </ListGroup></>
+        ) : null}
 
         {rt?.info?.features?.agent && isOwner(rt) ? (
           <>

@@ -1970,3 +1970,19 @@ def delete_bot(name: str) -> None:
         delete_profile(name, yes=True)
     except (ValueError, FileNotFoundError) as exc:
         raise HermesRefused(str(exc)) from exc
+
+
+def config_available() -> bool:
+    from .advanced_config import available
+    return available()
+
+
+@_scoped
+def advanced_config(body=None, *, apply=False, authorize=lambda: None):
+    from .advanced_config import ConfigRefused, operate
+    try:
+        return operate(body, apply=apply, authorize=authorize)
+    except ConfigRefused:
+        raise
+    except Exception:
+        raise ConfigRefused("Hermes could not safely read or save these settings. Check the configuration on the server.", status=503) from None

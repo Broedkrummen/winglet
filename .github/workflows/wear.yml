@@ -1,0 +1,38 @@
+name: Wear native
+on:
+  pull_request:
+    paths: ['wear/**', 'app/modules/winglet-wear/**', 'app/package*.json', 'app/app.config.*', '.github/workflows/wear.yml']
+  push:
+    branches: [main]
+    paths: ['wear/**', 'app/modules/winglet-wear/**', '.github/workflows/wear.yml']
+jobs:
+  native:
+    name: Wear app and phone module
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      WINGLET_DEV: '1'
+      CI: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Native watch APK and protocol tests
+        working-directory: wear
+        run: ./gradlew :app:assembleDebug :app:testDebugUnitTest -PwingletDev=true --no-daemon --max-workers=2
+      - run: npm ci
+        working-directory: app
+      - run: npx expo prebuild --platform android --no-install
+        working-directory: app
+      - name: Compile phone relay and merged manifest
+        working-directory: app/android
+        run: ./gradlew :winglet-wear:compileReleaseKotlin :winglet-wear:testReleaseUnitTest :app:processReleaseMainManifest --no-daemon --max-workers=2 -Dorg.gradle.jvmargs='-Xmx2048m -XX:MaxMetaspaceSize=768m' -Pkotlin.compiler.execution.strategy=in-process -PreactNativeArchitectures=arm64-v8a

@@ -923,3 +923,34 @@ test('snapshot recovery follows the verified recovered address rather than the o
   await h.tick();
   assert.equal(reads.find(([, route]) => route === '/api/sync/snapshot')[0], 'https://recovered.example.test');
 });
+
+test('exact quote delivery carries its typed anchor and selected text only', async () => {
+  const h = harness(); await h.connect(); await h.hello();
+  h.event({ type:'hello',chats:[{id:'general',kind:'chat',title:'General'}],pending:0,features:{quoted_comments:true} });
+  await h.tick();
+  const sent:any[]=[];h.setRequest(echoServer(sent));
+  const quote={v:1,message_id:'source',chat_id:'general',start:10,end:15,text:'quote',source_hash:'a'.repeat(64)};
+  await h.store.getState().sendMessage('s','general','Explain',{replyTo:{id:'source',role:'bot',text:'quote',quote}});
+  assert.equal(sent.length,1);assert.equal(sent[0].reply_to,'source');
+  assert.deepEqual(sent[0].quote,quote);
+  assert.equal(sent[0].text,'Explain');
+});
+test('an old server cannot silently turn a quoted send into a whole-reply send', async () => {
+  const h=harness();await h.connect();await h.hello();
+  const sent:any[]=[];h.setRequest(echoServer(sent));
+  const quote={v:1,message_id:'source',chat_id:'general',start:0,end:5,text:'quote',source_hash:'a'.repeat(64)};
+  await h.store.getState().sendMessage('s','general','Explain',{replyTo:{id:'source',role:'bot',text:'quote',quote}});
+  assert.equal(sent.length,0);assert.equal(h.outbox()[0].failed,true);
+  assert.match(h.messages()[0].meta.delivery_error,/does not support exact quotes/);
+  assert.equal(h.outbox()[0].reply_to.quote.text,'quote');
+});
+test('an offline quote retains its exact anchor through outbox persistence and reconnect', async () => {
+  const h=harness();await h.connect();
+  const quote={v:1,message_id:'source',chat_id:'general',start:2,end:4,text:'🌱',source_hash:'b'.repeat(64)};
+  await h.store.getState().sendMessage('s','general','Explain',{replyTo:{id:'source',role:'bot',text:'🌱',quote}});
+  assert.equal(h.cache.get('outbox:s')[0].reply_to.quote.text,'🌱');
+  const sent:any[]=[];h.setRequest(echoServer(sent));
+  h.event({type:'hello',chats:[{id:'general',kind:'chat',title:'General'}],pending:0,features:{quoted_comments:true}});
+  await h.tick();await h.tick();
+  assert.equal(sent.length,1);assert.deepEqual(sent[0].quote,quote);
+});

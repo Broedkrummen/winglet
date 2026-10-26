@@ -295,11 +295,14 @@ export const useApp = create<AppState>((set, get) => {
     }
     setLocalStatus(serverId, entry.chat_id, entry.client_id, 'pending');
     try {
+      if (entry.reply_to?.quote && get().runtime[serverId]?.info?.features?.quoted_comments !== true) {
+        throw new ApiError("This server does not support exact quotes. Update the plugin or remove the quote; it was not sent.", 409);
+      }
       const data = await api<{ message: Message }>(server, `/api/chats/${encodeURIComponent(entry.chat_id)}/messages`, {
         method: 'POST', body: JSON.stringify({
           text: entry.text, client_id: entry.client_id,
           ...(entry.attachments?.length ? { attachments: entry.attachments.map((a) => a.id).filter(Boolean) } : {}),
-          ...(entry.reply_to ? { reply_to: entry.reply_to.id } : {}),
+          ...(entry.reply_to ? { reply_to: entry.reply_to.id, ...(entry.reply_to.quote ? { quote: entry.reply_to.quote } : {}) } : {}),
         }),
       });
       upsertMessage(serverId, entry.chat_id, data.message);

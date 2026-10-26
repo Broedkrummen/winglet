@@ -241,8 +241,8 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
           <View style={s.reply}>
             <View style={s.replyBar} />
             <View style={{ flex: 1, minWidth: 0 }}>
-              <Text style={s.replyWho}>Replying to {replyTo.role === 'bot' ? server.bot.title : 'yourself'}</Text>
-              <Text style={s.replyText} numberOfLines={1}>{plainText(replyTo.text) || 'Attachment'}</Text>
+              <Text style={s.replyWho}>{replyTo.quote ? 'Asking about a quote from ' : 'Replying to '}{replyTo.role === 'bot' ? server.bot.title : 'yourself'}</Text>
+              <Text style={s.replyText} numberOfLines={replyTo.quote ? 2 : 1}>{(replyTo.quote ? replyTo.text : plainText(replyTo.text)) || 'Attachment'}</Text>
             </View>
             <Tap accessibilityLabel="Cancel reply" onPress={() => setReplyTo(server.id, chatId, undefined)} style={s.trayX}><X size={16} color={t.colors.textSecondary} /></Tap>
           </View>

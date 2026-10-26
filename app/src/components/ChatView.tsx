@@ -57,6 +57,9 @@ import { KeyboardViewport } from './KeyboardViewport';
 import { Sheet, SheetAction } from './Sheet';
 import { Badge, Button, IconButton, Tap } from './ui';
 
+import { QuoteSheet } from '../features/transcript-tools/QuoteSheet';
+import { canQuote } from '../features/transcript-tools/model';
+
 const GROUP_WINDOW_S = 7 * 60;
 /** Scrolled further up than this, the jump-to-latest button appears. */
 const AWAY_PX = 480;
@@ -76,6 +79,7 @@ type Row =
 type Actions = {
   open: (m: Message) => void;
   reply: (m: Message) => void;
+  quote?: (m: Message) => void;
   jump: (id: string) => void;
 };
 
@@ -102,6 +106,8 @@ export function ChatView({ server, chatId, showBack, embedded, landing }: { serv
   const [composerH, setComposerH] = useState(80);
   const [menu, setMenu] = useState(false);
   const [selected, setSelected] = useState<Message | null>(null);
+  const [quoteSource, setQuoteSource] = useState<string | null>(null);
+  const quoteMessage = useCallback((m: Message) => setQuoteSource(m.id), []);
   const [selectText, setSelectText] = useState<string | null>(null);
   const [goalOpen, setGoalOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
@@ -134,7 +140,7 @@ export function ChatView({ server, chatId, showBack, embedded, landing }: { serv
     const hide = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide', () => setInputFocused(false));
     return () => hide.remove();
   }, []);
-  useEffect(() => { setMenu(false); setSelected(null); setGoalOpen(false); setFilesOpen(false); setProcessesOpen(false); setBranchTarget(null); }, [server.id, chatId]);
+  useEffect(() => { setMenu(false); setSelected(null); setQuoteSource(null); setGoalOpen(false); setFilesOpen(false); setProcessesOpen(false); setBranchTarget(null); }, [server.id, chatId]);
   // The More sheet is the moment these gates matter: a reply may have settled since the last load.
   useEffect(() => { if (selected && branching.supported && branching.online) void branching.refresh(); }, [selected, branching.supported, branching.online, branching.refresh]);
 
@@ -195,7 +201,7 @@ export function ChatView({ server, chatId, showBack, embedded, landing }: { serv
       return <View style={s.root} onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
       <BlurTargetView ref={target} style={{ flex: 1 }}>
         {!composing ? <Animated.View entering={landing ? FadeIn.duration(reduced ? 0 : 180) : undefined} style={{ flex: 1 }}><MessageList key={turnKey} server={server} chatId={chatId} messages={shown} loaded={!!loaded || !!messages?.length}
-          typing={typing} top={headerH} bottom={composerH + (committed ? 60 : 0)} onOpen={setSelected} onReply={reply} focus={focus}
+          typing={typing} top={headerH} bottom={composerH + (committed ? 60 : 0)} onOpen={setSelected} onReply={reply} onQuote={runtime?.info?.features?.quoted_comments ? quoteMessage : undefined} focus={focus}
           offline={view.kind !== 'online' && view.kind !== 'connecting'} /></Animated.View> : null}
         {landing && composing ? <View pointerEvents={committed ? 'none' : 'auto'} onLayout={(e) => { if (e.nativeEvent.layout.height > 0) setDockHeight(e.nativeEvent.layout.height); }}
           style={{ position: 'absolute', left: 0, right: 0, bottom: composerH + 8, display: committed ? 'none' : 'flex' }}>
@@ -249,9 +255,15 @@ export function ChatView({ server, chatId, showBack, embedded, landing }: { serv
       <FilesSheet server={server} chatId={chatId} visible={filesOpen} onClose={() => setFilesOpen(false)}
         onJump={(id) => requestFocus(server.id, chatId, id)} />
       <MessageMenu server={server} message={selected} busy={typing} onClose={() => setSelected(null)}
-        onReply={reply} onSelectText={setSelectText} messages={shown}
+        onReply={reply} onQuote={runtime?.info?.features?.quoted_comments ? quoteMessage : undefined} onSelectText={setSelectText} messages={shown}
         branchingState={branching.state} branchingSupported={branching.supported} branchingOnline={branching.online}
         onBranch={(m, mode) => { setSelected(null); setBranchTarget({ message: m, mode }); }} />
+      <QuoteSheet key={`quote:${server.id}:${chatId}:${quoteSource ?? ''}`} server={server} chatId={chatId}
+        message={shown.find(m => m.id === quoteSource) ?? null} visible={quoteSource !== null} onClose={() => setQuoteSource(null)}
+        onBranch={quoteSource && canBranch(branching.state, quoteSource) ? () => {
+          const message = shown.find(m => m.id === quoteSource);
+          setQuoteSource(null); if (message) setBranchTarget({message, mode: 'branch'});
+        } : undefined} />
       <BranchSheet server={server} chatId={chatId} chatTitle={chat?.title || server.bot.title} messages={shown} state={branching.state}
         online={branching.online} target={branchTarget} onClose={() => setBranchTarget(null)} onRefresh={branching.refresh} />
       <Sheet visible={selectText !== null} onClose={() => setSelectText(null)} title="Select text">
@@ -306,9 +318,9 @@ function toReplyRef(m: Message): ReplyRef {
   return { id: m.id, role: m.role, text };
 }
 
-const MessageList = memo(function MessageList({ server, chatId, messages, loaded, typing, top, bottom, onOpen, onReply, focus, offline }: {
+const MessageList = memo(function MessageList({ server, chatId, messages, loaded, typing, top, bottom, onOpen, onReply, onQuote, focus, offline }: {
   server: Server; chatId: string; messages: Message[]; loaded: boolean; typing: boolean; top: number; bottom: number;
-  onOpen: (m: Message) => void; onReply: (m: Message) => void; focus: string | null; offline: boolean;
+  onOpen: (m: Message) => void; onReply: (m: Message) => void; onQuote?: (m: Message) => void; focus: string | null; offline: boolean;
 }) {
   const t = useTheme();
   const s = useStyles();
@@ -376,7 +388,7 @@ const MessageList = memo(function MessageList({ server, chatId, messages, loaded
     setFlash(id);
     setTimeout(() => setFlash((f) => (f === id ? null : f)), 1600);
   }, [server.id, chatId]);
-  const actions = useMemo<Actions>(() => ({ open: onOpen, reply: onReply, jump }), [onOpen, onReply, jump]);
+  const actions = useMemo<Actions>(() => ({ open: onOpen, reply: onReply, quote: onQuote, jump }), [onOpen, onReply, onQuote, jump]);
 
   // Older history, a page at a time as you scroll up: one request at a time, and none while the start of the
   // chat is what's loaded. That's checked against the oldest message, so after a reconnect replaces what's
@@ -586,7 +598,11 @@ const MessageRow = memo(function MessageRow({ server, message, first, last, live
   const attachments = message.meta?.attachments ?? [];
   const replyTo = message.meta?.reply_to;
   const sendable = message.status === 'final';
-  const quote = (onAccent: boolean) => replyTo ? <ReplyQuote server={server} reply={replyTo} onAccent={onAccent} onPress={() => actions.jump(replyTo.id)} /> : null;
+  const quote = (onAccent: boolean) => replyTo ? <ReplyQuote server={server} reply={replyTo} onAccent={onAccent} onPress={() => {
+    if (replyTo.quote && replyTo.quote.chat_id !== message.chat_id) {
+      router.push(`/chat/${server.id}/${replyTo.quote.chat_id}`); requestFocus(server.id, replyTo.quote.chat_id, replyTo.id);
+    } else actions.jump(replyTo.id);
+  }} /> : null;
   const routine = typeof message.meta?.routine === 'string' ? message.meta.routine : '';
   const routineId = typeof message.meta?.routine_id === 'string' ? message.meta.routine_id : '';
   const runId = typeof message.meta?.run_id === 'string' ? message.meta.run_id : undefined;
@@ -747,7 +763,7 @@ function ReplyQuote({ server, reply, onAccent, onPress }: { server: Server; repl
       style={({ pressed }) => [s.quote, onAccent ? s.quoteOnAccent : null, pressed && { opacity: 0.7 }]}>
       <View style={[s.quoteBar, onAccent && { backgroundColor: t.colors.onAccent }]} />
       <View style={{ flexShrink: 1 }}>
-        <Text style={[s.quoteWho, onAccent && { color: t.colors.onAccent }]}>{reply.role === 'bot' ? server.bot.title : 'You'}</Text>
+        <Text style={[s.quoteWho, onAccent && { color: t.colors.onAccent }]}>{reply.quote ? 'Quoted from ' : ''}{reply.role === 'bot' ? server.bot.title : 'You'}</Text>
         <Text style={[s.quoteText, onAccent && { color: t.colors.onAccent }]} numberOfLines={2}>{plainText(reply.text) || 'Attachment'}</Text>
       </View>
     </Pressable>
@@ -776,16 +792,17 @@ function HoverBar({ message, actions, serverId, inline = false }: { message: Mes
         </Tap>
       ) : null}
       <IconButton label="Reply to response" size={inline ? 40 : 32} onPress={() => actions.reply(message)}><Reply size={16} color={t.colors.textSecondary} /></IconButton>
+      {actions.quote && canQuote(message) ? <IconButton label="Ask about a quote" size={inline ? 40 : 32} onPress={() => actions.quote?.(message)}><FileText size={16} color={t.colors.textSecondary} /></IconButton> : null}
       <IconButton label="More response options" size={inline ? 40 : 32} onPress={() => actions.open(message)}><MoreHorizontal size={16} color={t.colors.textSecondary} /></IconButton>
     </View>
   );
 }
 
 /** Long-press menu for one message. */
-function MessageMenu({ server, message, busy, onClose, onReply, onSelectText, messages,
+function MessageMenu({ server, message, busy, onClose, onReply, onQuote, onSelectText, messages,
   branchingState, branchingSupported, branchingOnline, onBranch }: {
   server: Server; message: Message | null; busy: boolean; onClose: () => void; onReply: (m: Message) => void;
-  onSelectText: (text: string) => void; messages: readonly Message[]; branchingState: BranchState | null;
+  onQuote?: (m: Message) => void; onSelectText: (text: string) => void; messages: readonly Message[]; branchingState: BranchState | null;
   branchingSupported: boolean; branchingOnline: boolean; onBranch: (m: Message, mode: BranchMode) => void;
 }) {
   const t = useTheme();
@@ -813,6 +830,7 @@ function MessageMenu({ server, message, busy, onClose, onReply, onSelectText, me
     <Sheet visible={!!message} onClose={onClose}>
       {m.text ? <Text style={s.menuPreview} numberOfLines={2}>{plainText(m.text)}</Text> : null}
       <SheetAction icon={<Reply size={20} color={t.colors.text} />} label="Reply" onPress={run(() => onReply(m))} />
+      {onQuote && canQuote(m) ? <SheetAction icon={<FileText size={20} color={t.colors.text} />} label="Ask about a quote" onPress={run(() => onQuote(m))} /> : null}
       {m.text ? <SheetAction icon={<Copy size={20} color={t.colors.text} />} label="Copy text" onPress={run(async () => {
         try {
           await Clipboard.setStringAsync(m.text);

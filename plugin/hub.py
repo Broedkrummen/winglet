@@ -807,7 +807,7 @@ class Hub:
                 "process_stop": self.processes is not None and self.processes.available(),
                 **{key: self.hermes is not None and self._has(self.hermes, "config_available")
                    for key in ("config_catalog", "config_validate", "config_edit")},
-                "connection_status": True, "projects": True, "event_replay": True}
+                "connection_status": True, "projects": True, "event_replay": True, "quoted_comments": True}
 
     def about(self) -> Dict[str, Any]:
         return {"version": VERSION, "protocol": PROTOCOL, "min_app_protocol": MIN_APP_PROTOCOL,
@@ -1162,6 +1162,10 @@ class Hub:
     async def h_message_send(self, request: web.Request) -> web.Response:
         device = self._require(request)
         body = await self._body(request)
+        if body.get("quote") is not None:
+            device = self._device(request)
+            if device is None:
+                return _error(401, "This pairing was revoked. Reconnect before quoting a reply.")
         self._visible_chat(device, request.match_info["chat_id"])
         attachments = body.get("attachments") or []
         if not isinstance(attachments, list) or not all(isinstance(a, str) for a in attachments):
@@ -1170,7 +1174,7 @@ class Hub:
             message = await self.user_message(device, request.match_info["chat_id"], str(body.get("text") or ""),
                                               str(body.get("client_id") or ""), attachments=attachments,
                                               reply_to=str(body.get("reply_to") or ""),
-                                              hidden=body.get("hidden") is True)
+                                              hidden=body.get("hidden") is True, quote=body.get("quote"))
         except MessageRejected as exc:
             return _error(400, str(exc))
         if message is None:
@@ -1179,7 +1183,7 @@ class Hub:
 
     async def user_message(self, device: Dict[str, Any], chat_id: str, text: str,
                            client_id: str = "", *, attachments: Optional[List[str]] = None,
-                           reply_to: str = "", hidden: bool = False) -> Optional[Dict[str, Any]]:
+                           reply_to: str = "", hidden: bool = False, quote=None) -> Optional[Dict[str, Any]]:
         text = (text or "").strip()[:MAX_TEXT]
         attachments = list(dict.fromkeys(attachments or []))
         if (not text and not attachments) or not chat_id:
@@ -1206,12 +1210,30 @@ class Hub:
             # A command the app sent for a control (the model chip's /model): kept for the record, not shown.
             meta["hidden"] = True
         reply = None
+        if quote is not None and not reply_to:
+            raise MessageRejected("A quote must name its source reply.")
         if reply_to:
             quoted = self.store.get_message(reply_to)
-            if quoted is None or quoted["chat_id"] != chat_id:
-                raise MessageRejected("The message you replied to no longer exists.")
-            reply = {"id": quoted["id"], "role": quoted["role"], "text": quoted["text"][:REPLY_CONTEXT]}
-            meta["reply_to"] = {"id": quoted["id"], "role": quoted["role"], "text": _clip(quoted["text"], REPLY_EXCERPT)}
+            if quote is not None:
+                from .transcript_quotes import validate_anchor
+                current = self.store.get_device(device["id"])
+                source_chat = self.store.get_chat(quoted["chat_id"]) if quoted else None
+                if (not self.can_see(current, source_chat) or not self.can_see(current, chat)
+                        or (source_chat.get("bot") or None) != (chat.get("bot") or None)
+                        or (chat.get("bot") or None) != self.bot_name()):
+                    raise MessageRejected("This source reply is not available in this bot.")
+                try:
+                    anchor = validate_anchor(quoted, quote)
+                except ValueError as exc:
+                    raise MessageRejected(str(exc)) from None
+                # A quote is explicit context, never the rest of the original reply/transcript.
+                reply = {"id": quoted["id"], "role": "bot", "text": anchor["text"]}
+                meta["reply_to"] = {**reply, "quote": anchor}
+            else:
+                if quoted is None or quoted["chat_id"] != chat_id:
+                    raise MessageRejected("The message you replied to no longer exists.")
+                reply = {"id": quoted["id"], "role": quoted["role"], "text": quoted["text"][:REPLY_CONTEXT]}
+                meta["reply_to"] = {"id": quoted["id"], "role": quoted["role"], "text": _clip(quoted["text"], REPLY_EXCERPT)}
         message_id = new_id()
         files: List[Dict[str, Any]] = []
         if attachments:

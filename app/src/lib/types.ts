@@ -132,7 +132,7 @@ export type Attachment = { url: string; name: string; mime: string; kind: Attach
 export type Upload = Attachment & { id: string };
 
 /** The message being replied to, as the app shows it above yours. */
-export type ReplyRef = { id: string; role: 'user' | 'bot' | 'system'; text: string };
+export type ReplyRef = { id: string; role: 'user' | 'bot' | 'system'; text: string; quote?: import('../features/transcript-tools/model').QuoteAnchor };
 
 export type Message = {
   id: string;

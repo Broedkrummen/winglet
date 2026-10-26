@@ -119,6 +119,7 @@ class Forbidden(PermissionError):
 #   signed        any verified device, with a signed request
 #   owner_signed  an owner's verified device, with a signed request: every control action
 ROUTE_POLICY = {
+    "h_wear_links": "device", "h_wear_link_create": "signed", "h_wear_link_delete": "signed", "h_wear_relay": "public",
     "h_encrypted_push_get": "device", "h_encrypted_push_put": "signed", "h_encrypted_push_delete": "signed",
     "h_phone_tools": "device", "h_phone_tools_put": "signed", "h_phone_tools_revoke": "signed",
     "h_phone_tools_log": "device",
@@ -230,6 +231,8 @@ class Hub:
                  ntfy_server: str = "https://ntfy.sh", http_client: Any = None,
                  media_dir: Optional[Path] = None):
         self.store = store
+        from .wear import WearRelay
+        self.wear = WearRelay(self)
         self.web_root = web_root
         self.media_dir = media_dir or Path(store.path).parent / "media"
         self._bot_info = bot_info or (lambda: {"name": "Hermes", "title": "Hermes", "description": ""})
@@ -369,6 +372,10 @@ class Hub:
         r.add_post("/api/config/preview", self.h_config_preview)
         r.add_post("/api/config/apply", self.h_config_apply)
         r.add_get("/api/commands", self.h_commands)
+        r.add_get("/api/wear/links", self.h_wear_links)
+        r.add_post("/api/wear/links", self.h_wear_link_create)
+        r.add_delete("/api/wear/links/{link_id}", self.h_wear_link_delete)
+        r.add_post("/api/wear/relay", self.h_wear_relay)
         r.add_get("/api/push/prefs", self.h_push_prefs)
         r.add_put("/api/push/prefs", self.h_push_prefs_put)
         r.add_get("/api/inbox", self.h_inbox)
@@ -1022,6 +1029,18 @@ class Hub:
         return _json({"ok": True})
 
     # -- chats & messages ----------------------------------------------------------------
+
+    async def h_wear_links(self, request: web.Request) -> web.Response:
+        return await self.wear.links(request)
+
+    async def h_wear_link_create(self, request: web.Request) -> web.Response:
+        return await self.wear.create(request)
+
+    async def h_wear_link_delete(self, request: web.Request) -> web.Response:
+        return await self.wear.delete(request)
+
+    async def h_wear_relay(self, request: web.Request) -> web.Response:
+        return await self.wear.relay(request)
 
     async def h_chats(self, request: web.Request) -> web.Response:
         device = self._require(request)

@@ -1,0 +1,13 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application>
+    <service android:name=".WingletAssistService" android:exported="true" android:permission="android.permission.BIND_VOICE_INTERACTION">
+      <intent-filter><action android:name="android.service.voice.VoiceInteractionService" /></intent-filter>
+      <meta-data android:name="android.voice_interaction" android:resource="@xml/winglet_assist" />
+    </service>
+    <service android:name=".WingletAssistSessionService" android:exported="true" android:permission="android.permission.BIND_VOICE_INTERACTION" />
+    <service android:name=".WingletAssistantRecognizer" android:exported="true" android:permission="android.permission.BIND_SPEECH_RECOGNITION">
+      <intent-filter><action android:name="android.speech.RecognitionService" /></intent-filter>
+    </service>
+  </application>
+</manifest>
+

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<voice-interaction-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:sessionService="expo.modules.wingletassistant.WingletAssistSessionService"
+    android:recognitionService="expo.modules.wingletassistant.WingletAssistantRecognizer"
+    android:supportsAssist="true" android:supportsLaunchFromKeyguard="false" />
+

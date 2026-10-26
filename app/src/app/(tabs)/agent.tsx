@@ -85,6 +85,10 @@ export default function AgentTab() {
         </ListGroup>
 
         <VerifyNotice server={server} />
+        {Platform.OS === 'android' ? <><SectionHeader title="On this phone" /><ListGroup>
+          <ListRow icon={<Smartphone size={18} color={t.colors.onAccentSoft} />} title="Android assistant"
+            subtitle="An optional shortcut to your agents" onPress={() => router.push('/assistant-settings')} />
+        </ListGroup></> : null}
         {rt?.info?.features?.config_catalog && isOwner(rt) ? (
           <><SectionHeader title="Advanced" /><ListGroup>
             <ListRow icon={<Cpu size={18} color={t.colors.onAccentSoft} />} title="Agent configuration"

@@ -16,6 +16,7 @@ import org.unifiedpush.android.connector.data.PushMessage
 
 internal object PushVisibility {
   @Volatile var online:Set<String> = emptySet()
+  @Volatile var allowed:Set<String>?=null
   @Volatile var locked=true
 }
 class WingletPushService : PushService() {
@@ -25,17 +26,26 @@ class WingletPushService : PushService() {
       val keys=endpoint.pubKeySet
       if(keys==null || endpoint.url.length>2048 || !endpoint.url.startsWith("https://")){entry.put("error","unsupported_endpoint")}
       else{
-        entry.put("subscription",JSONObject().put("endpoint",endpoint.url).put("keys",JSONObject().put("p256dh",keys.pubKey).put("auth",keys.auth)))
-        entry.put("error","");entry.put("needsSync",true);PushStore.mark(entry,"registered")
+        val subscription=JSONObject().put("endpoint",endpoint.url).put("keys",JSONObject().put("p256dh",keys.pubKey).put("auth",keys.auth))
+        val old=entry.optJSONObject("subscription")
+        val changed=old?.optString("endpoint")!=endpoint.url || old?.optJSONObject("keys")?.optString("p256dh")!=keys.pubKey || old?.optJSONObject("keys")?.optString("auth")!=keys.auth
+        if(changed)entry.put("revision",entry.optInt("revision",0)+1)
+        entry.put("subscription",subscription)
+        entry.put("error","");if(changed || !entry.optBoolean("active"))entry.put("needsSync",true);PushStore.mark(entry,"registered")
       }
       runCatching{PushStore.write(this,instance,entry)}
     }
   }
   override fun onMessage(message: PushMessage,instance: String){
-    if(Build.VERSION.SDK_INT<26 || message.content.size>3600 || !message.decrypted)return
+    if(Build.VERSION.SDK_INT<26)return
     synchronized(PushStore.mutex){
+      if(PushVisibility.allowed?.contains(instance)==false)return
       val entry=runCatching{PushStore.read(this,instance)}.getOrNull() ?: return
       PushStore.mark(entry,"received")
+      if(message.content.size>3600 || !message.decrypted){
+        entry.put("error",if(message.content.size>3600)"oversized_payload" else "transport_decryption_failed")
+        runCatching{PushStore.write(this,instance,entry)};return
+      }
       try{
         val envelope=JSONObject(message.content.toString(Charsets.UTF_8))
         require(envelope.get("v")==1 && envelope.getString("kid")==entry.getString("kid"))
@@ -44,7 +54,7 @@ class WingletPushService : PushService() {
         val plain=try{PushCipher.open(key,entry.getString("server"),entry.getString("device"),entry.getString("kid"),
           PushStore.unb64(envelope.getString("nonce")),PushStore.unb64(envelope.getString("ct")))}finally{key.fill(0)}
         val payload=JSONObject(plain.toString(Charsets.UTF_8));plain.fill(0)
-        require(payload.get("issued") is Number && payload.get("expires") is Number)
+        require((payload.get("issued") is Long || payload.get("issued") is Int) && (payload.get("expires") is Long || payload.get("expires") is Int))
         val remembered=entry.optJSONObject("seen") ?: JSONObject()
         val ids=remembered.keys().asSequence().associateWith{remembered.getLong(it)}
         val guard=PushGuard({System.currentTimeMillis()/1000},ids)
@@ -56,7 +66,7 @@ class WingletPushService : PushService() {
         entry.put("seen",JSONObject(guard.snapshot()));PushStore.mark(entry,"decrypted");entry.put("error","")
         // The durable replay mark is committed before any display side effect.
         PushStore.write(this,instance,entry)
-        if(entry.getString("server") in PushVisibility.online){PushStore.mark(entry,"suppressed")}
+        if(note.optString("kind")=="message" && entry.getString("server") in PushVisibility.online){PushStore.mark(entry,"suppressed")}
         else if(show(instance,entry,note)){PushStore.mark(entry,"displayed")}
         else{entry.put("error","notifications_blocked")}
         PushStore.write(this,instance,entry)

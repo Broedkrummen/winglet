@@ -67,9 +67,15 @@ def seal(key: str, kid: str, server: str, device: str, note: dict, *, now=None, 
 
 
 def validate_enrollment(data: dict, relay_origin: str) -> dict:
-    if not isinstance(data, dict) or data.get('v') != VERSION or not isinstance(data.get('kid'), str) or not _ID.fullmatch(data['kid']):
+    if not isinstance(data, dict) or type(data.get('v')) is not int or data.get('v') != VERSION or not isinstance(data.get('kid'), str) or not _ID.fullmatch(data['kid']):
         raise ValueError('Update Winglet to use encrypted push version 1')
     unb64(data.get('key'), 32)
+    previous = data.get('previous_kid')
+    if 'previous_kid' not in data or (previous is not None and (not isinstance(previous, str) or not _ID.fullmatch(previous))):
+        raise ValueError('Refresh encrypted push status before registering')
+    revision = data.get('revision')
+    if type(revision) is not int or not 1 <= revision <= 2**31-1:
+        raise ValueError('Invalid distributor endpoint revision')
     sub = data.get('subscription')
     if not isinstance(sub, dict):
         raise ValueError('The push distributor has not provided an endpoint')
@@ -80,11 +86,12 @@ def validate_enrollment(data: dict, relay_origin: str) -> dict:
     # Only the relay explicitly configured by the gateway operator. A member cannot
     # turn enrollment into an arbitrary internal-network POST destination.
     try:
-        same_origin = (parts.hostname, parts.port or 443) == (configured.hostname, configured.port or 443)
+        same_origin = (parts.hostname, 443 if parts.port is None else parts.port) == (configured.hostname, 443 if configured.port is None else configured.port)
     except ValueError:
         same_origin = False
     if (parts.scheme != 'https' or configured.scheme != 'https' or not same_origin or not parts.hostname
-            or parts.username or parts.password or parts.fragment or not parts.path or parts.path == '/'):
+            or parts.username or parts.password or parts.fragment or not parts.path or parts.path == '/'
+            or any(c.isspace() or ord(c)<32 for c in endpoint)):
         raise ValueError('Use an ntfy distributor on this server\'s configured HTTPS relay')
     keys = sub.get('keys')
     if not isinstance(keys, dict):
@@ -95,7 +102,7 @@ def validate_enrollment(data: dict, relay_origin: str) -> dict:
     from cryptography.hazmat.primitives.asymmetric import ec
     ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), point)
     unb64(keys.get('auth'), 16)
-    return {'v': VERSION, 'kid': data['kid'], 'key': data['key'],
+    return {'v': VERSION, 'kid': data['kid'], 'key': data['key'], 'revision': revision,
             'subscription': {'endpoint': endpoint, 'keys': dict(keys)}}
 
 
@@ -111,12 +118,21 @@ def enroll(store, device: str, data: dict, relay_origin: str):
     validated = validate_enrollment(data, relay_origin)
     endpoint = validated['subscription']['endpoint']
     with store.transaction():
+        current = store.get_device(device)
+        if not current or not current.get('verified'):
+            raise ValueError('The device is no longer verified')
         # An endpoint already belonging to another device is never stolen by add_push_sub.
         if any(sub['endpoint'] == endpoint and sub['device_id'] != device for sub in store.list_push_subs(KIND)):
             raise ValueError('This push endpoint belongs to another pairing; register a fresh instance')
         existing = enrolled(store, device)
+        if (existing['data']['kid'] if existing else None) != data['previous_kid']:
+            raise ValueError('Encrypted push changed; refresh before retrying')
         if existing and existing['data']['kid'] == validated['kid'] and existing['data']['key'] != validated['key']:
             raise ValueError('Rotate the key identifier when changing its key')
+        if existing and existing['data']['kid'] == validated['kid']:
+            previous = existing['data']
+            if validated['revision'] < previous['revision'] or (validated['revision'] == previous['revision'] and validated['subscription'] != previous['subscription']):
+                raise ValueError('A newer distributor endpoint was already registered')
         # In one transaction retire all delivery routes, but retain address recovery.
         store._exec("DELETE FROM push_subs WHERE device_id = ? AND kind IN ('ntfy', 'webpush', ?)", (device, KIND))
         result = store.add_push_sub(device, KIND, endpoint, validated)

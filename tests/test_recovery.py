@@ -166,7 +166,7 @@ async def test_connection_status_tells_each_device_what_applies_to_it(tmp_path, 
         assert status["tunnel"]["state"] == "retrying" and "failed" in status["tunnel"]["error"]
         assert status["recovery"] == {"enrolled": True, "last": None}
         assert status["listen"] == "127.0.0.1:8787" and status["web_keys"] is False
-        assert status["push"] == {"ntfy": 0, "webpush": 0, "last": None, "ntfy_server": "ntfy.sh"}
+        assert status["push"] == {"encrypted": 0, "ntfy": 0, "webpush": 0, "last": None, "ntfy_server": "ntfy.sh"}
 
         await hub.set_connection("https://first.trycloudflare.com")
         await hub.publish_addresses()

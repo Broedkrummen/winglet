@@ -70,6 +70,7 @@ internal object PushStore {
     val fresh=JSONObject().put("v",1).put("server",server).put("device",device)
       .put("kid",hex(ByteArray(16).also{random.nextBytes(it)})).put("key",b64(bytes))
       .put("active",false).put("previews",current?.optBoolean("previews",false) ?: false).put("seen",JSONObject())
+    if(rotate)KeyStore.getInstance("AndroidKeyStore").apply{load(null);deleteEntry("winglet.push."+scope)}
     bytes.fill(0);write(context,scope,fresh,true)
     return scope to fresh
   }

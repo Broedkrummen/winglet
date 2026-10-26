@@ -941,9 +941,10 @@ class Hub:
             "tunnel": tunnel,
             "recovery": {"enrolled": any(sub["kind"] == "recovery" for sub in mine), "last": latest(("recovery",))}
             if quick and device["platform"] == "android" else None,
-            "push": {"ntfy": sum(sub["kind"] == "ntfy" for sub in mine),
+            "push": {"encrypted": sum(sub["kind"] == encrypted_push.KIND for sub in mine),
+                     "ntfy": sum(sub["kind"] == "ntfy" for sub in mine),
                      "webpush": sum(sub["kind"] == "webpush" for sub in mine),
-                     "last": latest(("ntfy", "webpush")), "ntfy_server": urlsplit(self.ntfy_server).hostname or ""},
+                     "last": latest(("ntfy", "webpush", encrypted_push.KIND)), "ntfy_server": urlsplit(self.ntfy_server).hostname or ""},
         }
         if owner:
             result["listen"] = self.listen
@@ -3513,7 +3514,14 @@ class Hub:
                     envelope = encrypted_push.seal(sub["data"]["key"], sub["data"]["kid"], self.server_id(), sub["device_id"], note)
                     status = await webpush.send(client, sub["data"]["subscription"], envelope, pem, PUSH_SUBJECT, urgency=urgency)
                 elif sub["kind"] == "webpush":
-                    status = await webpush.send(client, sub["data"], note, pem, PUSH_SUBJECT, urgency=urgency, topic=tag)
+                    outgoing = note
+                    if sub["data"].get("guard_v") == 1:
+                        stamp = int(time.time())
+                        outgoing = {**note, "guard_v": 1, "id": secrets.token_hex(16), "issued": stamp,
+                                    "expires": stamp + 86400, "device_id": sub["device_id"],
+                                    "title": encrypted_push._clip(note.get("title"), 180),
+                                    "body": encrypted_push._clip(note.get("body"), 600)}
+                    status = await webpush.send(client, sub["data"], outgoing, pem, PUSH_SUBJECT, urgency=urgency, topic=tag)
                 else:
                     status = await self._send_ntfy(client, sub["data"], note)
             except Exception as exc:
@@ -3580,8 +3588,17 @@ class Hub:
             valid = False
         if not valid:
             return _error(400, "invalid push subscription")
+        device = self._device(request)
+        if device is None:
+            return _error(401, "This pairing was revoked. Reconnect before registering notifications.")
+        if self.store.get_kv(encrypted_push.policy_key(device["id"])) == "1":
+            return _error(409, "Repair encrypted push in the current Android app.")
+        payload_v = body.get("payload_v")
+        if payload_v is not None and (type(payload_v) is not int or payload_v != 1):
+            return _error(400, "Unsupported notification payload version")
         self.store.add_push_sub(device["id"], "webpush", endpoint,
-                                {"endpoint": endpoint, "keys": {"p256dh": keys["p256dh"], "auth": keys["auth"]}})
+                                {"endpoint": endpoint, "keys": {"p256dh": keys["p256dh"], "auth": keys["auth"]},
+                                 **({"guard_v": 1} if payload_v == 1 else {})})
         return _json({"ok": True})
 
     async def h_webpush_unsubscribe(self, request: web.Request) -> web.Response:

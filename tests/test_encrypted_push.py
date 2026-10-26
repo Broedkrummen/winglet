@@ -10,7 +10,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from plugin import encrypted_push as push
 from plugin.hub import Hub
 from plugin.store import Store
-from test_trust import pair_phone, seal as provision_seal
+from test_trust import Phone, pair_phone, seal as provision_seal
 
 KEY=push.b64(bytes(range(32)))
 KID='a'*32
@@ -18,7 +18,7 @@ KID='a'*32
 
 def enrollment(kid=KID, key=KEY, endpoint='https://ntfy.sh/up/fixture'):
     pub=ec.generate_private_key(ec.SECP256R1()).public_key().public_bytes(serialization.Encoding.X962,serialization.PublicFormat.UncompressedPoint)
-    return {'v':1,'kid':kid,'key':key,'subscription':{'endpoint':endpoint,'keys':{'p256dh':push.b64(pub),'auth':push.b64(os.urandom(16))}}}
+    return {'v':1,'kid':kid,'key':key,'previous_kid':None,'revision':1,'subscription':{'endpoint':endpoint,'keys':{'p256dh':push.b64(pub),'auth':push.b64(os.urandom(16))}}}
 
 
 def open_envelope(envelope,server='server',device='phone',key=KEY):
@@ -56,20 +56,38 @@ def test_noncanonical_malformed_keys_are_rejected(value):
 
 def test_rotation_device_scope_idempotency_and_sticky_privacy(tmp_path):
     store=Store(tmp_path/'push.db')
-    first,_=store.add_device('One','android',verified=True);second,_=store.add_device('Two','android',verified=True)
+    first,_=store.add_device('One','android',sign_key=Phone('One').public,verified=True)
+    second,_=store.add_device('Two','android',sign_key=Phone('Two').public,verified=True)
     data=enrollment();push.enroll(store,first['id'],data,'https://ntfy.sh')
+    data['previous_kid']=KID
     push.enroll(store,first['id'],data,'https://ntfy.sh')
     assert len(store.list_push_subs(push.KIND))==1
     with pytest.raises(ValueError):push.enroll(store,second['id'],data,'https://ntfy.sh')
     with pytest.raises(ValueError):push.enroll(store,first['id'],{**data,'key':push.b64(os.urandom(32))},'https://ntfy.sh')
     rotated=enrollment('b'*32,push.b64(os.urandom(32)),'https://ntfy.sh/up/new')
+    rotated['previous_kid']=KID
     push.enroll(store,first['id'],rotated,'https://ntfy.sh')
     assert push.enrolled(store,first['id'])['data']['kid']=='b'*32
     assert 'key' not in json.dumps(push.status(store,first['id'],{}))
     push.revoke(store,first['id']);assert push.enrolled(store,first['id']) is None
     assert push.status(store,first['id'],{})['encrypted_required']
+    rotated['previous_kid']=None
     push.enroll(store,first['id'],rotated,'https://ntfy.sh');store.remove_device(first['id'])
     assert push.enrolled(store,first['id']) is None
+    store.close()
+
+
+def test_late_rotation_endpoint_sync_and_revoked_enrollment_cannot_roll_back_state(tmp_path):
+    store=Store(tmp_path/'compare.db');device,_=store.add_device('Phone','android',sign_key=Phone('One').public,verified=True)
+    first=enrollment();push.enroll(store,device['id'],first,'https://ntfy.sh')
+    newer={**first,'previous_kid':KID,'revision':2,'subscription':{**first['subscription'],'endpoint':'https://ntfy.sh/up/migrated'}}
+    push.enroll(store,device['id'],newer,'https://ntfy.sh')
+    with pytest.raises(ValueError):push.enroll(store,device['id'],{**first,'previous_kid':KID},'https://ntfy.sh')
+    rotated=enrollment('b'*32);rotated['previous_kid']=KID
+    push.enroll(store,device['id'],rotated,'https://ntfy.sh')
+    with pytest.raises(ValueError):push.enroll(store,device['id'],newer,'https://ntfy.sh')
+    push.revoke(store,device['id'])
+    with pytest.raises(ValueError):push.enroll(store,device['id'],{**rotated,'previous_kid':'b'*32},'https://ntfy.sh')
     store.close()
 
 
@@ -103,7 +121,7 @@ async def test_http_requires_current_signature_sealing_scope_and_blocks_old_plai
 
 async def test_dispatch_uses_encrypted_webpush_without_plaintext_route_fallback(tmp_path,monkeypatch):
     store=Store(tmp_path/'dispatch.db');hub=Hub(store,web_root=tmp_path/'web')
-    device,_=store.add_device('Phone','android',role='owner',verified=True)
+    device,_=store.add_device('Phone','android',role='owner',sign_key=Phone('One').public,verified=True)
     push.enroll(store,device['id'],enrollment(),'https://ntfy.sh')
     store.add_push_sub(device['id'],'ntfy','https://ntfy.sh/legacy',{'topic':'legacy'})
     captured=[]

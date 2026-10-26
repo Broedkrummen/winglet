@@ -34,7 +34,7 @@ class WingletWearModule:Module(){
       PhoneWearState.locked=locked;PhoneWearState.foreground=foreground;PhoneWearState.allowed=pairs.toSet()
     }
     OnActivityEntersBackground{PhoneWearState.foreground=false}
-    OnDestroy{PhoneWearState.foreground=false;PhoneWearState.locked=true;synchronized(WearStorage.mutex){PhoneWearState.pending.clear()}}
+    OnDestroy{PhoneWearState.foreground=false;PhoneWearState.locked=true;PhoneWearState.pending.clear()}
     AsyncFunction("capabilities"){
       mapOf("supported" to (Build.VERSION.SDK_INT>=26 && GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(context)==ConnectionResult.SUCCESS))
     }
@@ -77,9 +77,10 @@ class WingletWearModule:Module(){
     AsyncFunction("retain"){
       synchronized(WearStorage.mutex){
         val links=PhoneWearState.links(context)
+        var changed=false
         links.keys().asSequence().toList().forEach{key->val link=links.getJSONObject(key)
-          if(PhoneWearState.allowed?.contains(link.optString("serverId")+"\u0000"+link.optString("device"))==false)links.remove(key)}
-        PhoneWearState.save(context,links)
+          if(PhoneWearState.allowed?.contains(link.optString("serverId")+"\u0000"+link.optString("device"))==false){links.remove(key);changed=true}}
+        if(changed)PhoneWearState.save(context,links)
       }
     }
     AsyncFunction("reset"){guard();synchronized(WearStorage.mutex){WearStorage.reset(context,"phone");PhoneWearState.pending.clear()}}

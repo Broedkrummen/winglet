@@ -4,6 +4,7 @@ import dev.winglet.wear.WearCrypto
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.io.ByteArrayOutputStream
 
 internal object WearGateway {
   private fun http(url:String,body:JSONObject?=null):JSONObject {
@@ -14,7 +15,8 @@ internal object WearGateway {
       if(body!=null){connection.requestMethod="POST";connection.doOutput=true;connection.setRequestProperty("Content-Type","application/json")
         connection.outputStream.use{it.write(body.toString().toByteArray(Charsets.UTF_8))}}
       check(connection.responseCode in 200..299)
-      val bytes=connection.inputStream.use{it.readNBytes(36001)};require(bytes.size<=36000)
+      val bytes=connection.inputStream.use{input->val out=ByteArrayOutputStream();val chunk=ByteArray(2048)
+        while(true){val n=input.read(chunk);if(n<0)break;require(out.size()+n<=36000);out.write(chunk,0,n)};out.toByteArray()}
       return JSONObject(bytes.toString(Charsets.UTF_8))
     }finally{connection.disconnect()}
   }

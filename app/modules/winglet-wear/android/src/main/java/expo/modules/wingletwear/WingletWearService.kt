@@ -25,7 +25,7 @@ internal object PhoneWearState {
   @Volatile var foreground=false
   @Volatile var locked=true
   @Volatile var allowed:Set<String>?=null
-  val pending=LinkedHashMap<String,JSONObject>()
+  val pending=java.util.concurrent.ConcurrentHashMap<String,JSONObject>()
   fun links(context:Context)=WearStorage.read(context,"phone")
   fun save(context:Context,value:JSONObject)=WearStorage.write(context,"phone",value)
   fun prune(){val stamp=System.currentTimeMillis()/1000;pending.entries.removeAll{it.value.optLong("setupExpires")<=stamp}}

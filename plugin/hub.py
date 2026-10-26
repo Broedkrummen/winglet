@@ -166,6 +166,7 @@ ROUTE_POLICY = {
     "h_voice_session": "device", "h_voice_transcribe": "device", "h_voice_speak": "device",
     "h_voice_stop": "device", "h_voice_end": "device", "h_voice_audio": "public",
     # Branching: paired devices, scoped to a chat they can see (same rule as sending a message).
+    "h_config_catalog": "owner", "h_config_preview": "owner_signed", "h_config_apply": "owner_signed",
     "h_branch_state": "device", "h_branch_create": "device", "h_branch_regenerate": "device",
 }
 
@@ -363,6 +364,9 @@ class Hub:
         r.add_post("/api/projects/{project_id}/chats", self.h_project_chat_create)
         r.add_post("/api/projects/{project_id}/chats/{chat_id}", self.h_project_chat_move)
         r.add_delete("/api/projects/{project_id}/chats/{chat_id}", self.h_project_chat_remove)
+        r.add_get("/api/config/catalog", self.h_config_catalog)
+        r.add_post("/api/config/preview", self.h_config_preview)
+        r.add_post("/api/config/apply", self.h_config_apply)
         r.add_get("/api/commands", self.h_commands)
         r.add_get("/api/push/prefs", self.h_push_prefs)
         r.add_put("/api/push/prefs", self.h_push_prefs_put)
@@ -801,6 +805,8 @@ class Hub:
                 "processes": self.processes is not None and self.processes.available(),
                 "process_output": self.processes is not None and self.processes.available(),
                 "process_stop": self.processes is not None and self.processes.available(),
+                **{key: self.hermes is not None and self._has(self.hermes, "config_available")
+                   for key in ("config_catalog", "config_validate", "config_edit")},
                 "connection_status": True, "projects": True, "event_replay": True}
 
     def about(self) -> Dict[str, Any]:
@@ -2327,6 +2333,40 @@ class Hub:
             raise web.HTTPBadRequest(text=json.dumps({"error": str(exc)}), content_type="application/json")
         except h.HermesUnavailable:
             raise web.HTTPNotFound(text=json.dumps({"error": "This Hermes version can't do that."}), content_type="application/json")
+
+
+    def _config_authorized(self, request):
+        from .advanced_config import ConfigRefused
+        device = self._device(request)
+        if not device or device.get("role") != "owner" or not device.get("verified"):
+            raise ConfigRefused("Only a currently verified owner can manage configuration.", status=403)
+        bot = self.bot_name()
+        if bot and not any(row["name"] == bot for row in self.bots_state(fresh=True)["bots"]):
+            raise ConfigRefused("This bot is no longer available.", status=404)
+        return device
+
+    async def _config_request(self, request, *, preview=False, apply=False):
+        from .advanced_config import ConfigRefused
+        try:
+            device = self._config_authorized(request)
+            body = await self._body(request) if preview or apply else None
+            result = await self._call(self._need_hermes().advanced_config,
+                                      body, apply=apply, authorize=lambda: self._config_authorized(request))
+            self._config_authorized(request)
+            if apply:
+                self.audit("config.apply", device, "Changed settings: " + ", ".join(result["changed"]))
+            return _json(result)
+        except ConfigRefused as exc:
+            return _json({"error": str(exc), "fields": exc.fields}, status=exc.status)
+
+    async def h_config_catalog(self, request):
+        return await self._config_request(request)
+
+    async def h_config_preview(self, request):
+        return await self._config_request(request, preview=True)
+
+    async def h_config_apply(self, request):
+        return await self._config_request(request, apply=True)
 
     async def h_agent(self, request: web.Request) -> web.Response:
         """The configured model, and the one a chat is really using when Hermes knows it."""

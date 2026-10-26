@@ -28,11 +28,12 @@ class WatchActivity:Activity(){
     private var composer:EditText?=null
     private var draft=""
     private var voiceChat=""
+    private var licenses=false
     private var resumed=false
     private val poll=object:Runnable {override fun run(){
         if(!resumed)return
         if((getSystemService(KEYGUARD_SERVICE) as KeyguardManager).isDeviceLocked){WatchState.suspendPrivate();draft="";render()}
-        else if(!WatchState.busy && composer?.hasFocus()!=true && !WatchState.canRetry()){
+        else if(!licenses && !WatchState.busy && composer?.hasFocus()!=true && !WatchState.canRetry()){
             val linked=runCatching{WatchState.state(this@WatchActivity).has("link")}.getOrDefault(false)
             if(linked)WatchState.request(applicationContext,"read",if(selected.isEmpty())JSONObject() else JSONObject().put("chat_id",selected))
         }
@@ -60,6 +61,10 @@ class WatchActivity:Activity(){
         val locked=(getSystemService(KEYGUARD_SERVICE) as KeyguardManager).isDeviceLocked
         panel.removeAllViews();composer=null;text("Winglet",22f,true)
         if(locked){text("Unlock your watch to see conversations.");return}
+        if(licenses){
+            text("Third-party notices",17f,true);button("‹ Back"){licenses=false;render()}
+            text(assets.open("third-party-notices.txt").bufferedReader().use{it.readText()},12f);return
+        }
         val state=try{WatchState.state(this)}catch(_:Exception){text("The watch key is unavailable. Reset this watch link and pair again.");button("Reset local link"){WatchState.unlink(applicationContext)};return}
         val link=state.optJSONObject("link");val pending=state.optJSONObject("pending")
         if(link==null){
@@ -125,6 +130,7 @@ class WatchActivity:Activity(){
         }
         if(WatchState.notice.isNotEmpty())text(WatchState.notice,13f,true)
         if(WatchState.error.isNotEmpty())text(WatchState.error,13f)
+        button("Licenses"){licenses=true;render()}
         text("Voice uses your watch’s selected speech provider. No wake word or background recording.",11f)
     }
     @Deprecated("Platform activity result retained for this small native screen")

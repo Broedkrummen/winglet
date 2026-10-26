@@ -38,6 +38,12 @@ differently signed phone app. The QA property only permits Dev debug signing.
 No production key, signing workflow, release artifact or version bump is added.
 Release signing and distribution of the watch app remain separate decisions.
 
+The `Wear native` GitHub Actions workflow checks native watch and phone code on PRs.
+After merge, its manual `build_phone` input can build combined Dev phone/watch APKs
+with matching debug certificates. It verifies both `.dev` package IDs and retains the
+QA artifact for seven days; it does not publish a release. Watch Licenses includes the
+complete Apache dependency license text, also stored in `app/src/main/assets/`.
+
 ## Runtime privacy and limitations
 
 - Keys and association metadata use no-backup Keystore-wrapped AtomicFile storage.

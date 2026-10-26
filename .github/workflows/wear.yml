@@ -1,5 +1,11 @@
 name: Wear native
 on:
+  workflow_dispatch:
+    inputs:
+      build_phone:
+        description: Build matching Dev phone/watch APKs for collective QA (no release)
+        type: boolean
+        default: false
   pull_request:
     paths: ['wear/**', 'app/modules/winglet-wear/**', 'app/package*.json', 'app/app.config.*', '.github/workflows/wear.yml']
   push:
@@ -9,7 +15,7 @@ jobs:
   native:
     name: Wear app and phone module
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     env:
       WINGLET_DEV: '1'
       CI: '1'
@@ -39,3 +45,33 @@ jobs:
       - name: Compile phone relay and merged manifest
         working-directory: app/android
         run: ./gradlew :winglet-wear:compileReleaseKotlin :winglet-wear:testReleaseUnitTest :app:processReleaseMainManifest --no-daemon --max-workers=2 -Dorg.gradle.jvmargs='-Xmx2048m -XX:MaxMetaspaceSize=768m' -Pkotlin.compiler.execution.strategy=in-process -PreactNativeArchitectures=arm64-v8a
+      - name: Combined Dev phone APK (on demand only)
+        if: github.event_name == 'workflow_dispatch' && inputs.build_phone
+        working-directory: app/android
+        run: ./gradlew :app:assembleRelease --no-daemon --max-workers=2 -Dorg.gradle.jvmargs='-Xmx2048m -XX:MaxMetaspaceSize=768m' -Pkotlin.compiler.execution.strategy=in-process -PreactNativeArchitectures=arm64-v8a
+      - name: Match Dev watch signing to the generated phone debug key
+        if: github.event_name == 'workflow_dispatch' && inputs.build_phone
+        working-directory: wear
+        run: ./gradlew :app:assembleDebug -PwingletDev=true -PwingletQaKeystore="$GITHUB_WORKSPACE/app/android/app/debug.keystore" --no-daemon --max-workers=2
+      - name: Verify isolated Dev packages and matching certificates
+        if: github.event_name == 'workflow_dispatch' && inputs.build_phone
+        shell: bash
+        run: |
+          PHONE=app/android/app/build/outputs/apk/release/app-release.apk
+          WATCH=wear/app/build/outputs/apk/debug/app-debug.apk
+          for APK in "$PHONE" "$WATCH"; do
+            "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | grep "^package: name='io.github.vikasrp24.winglet.dev'"
+          done
+          PHONE_CERT="$("$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$PHONE" | grep 'Signer #1 certificate SHA-256 digest:')"
+          WATCH_CERT="$("$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$WATCH" | grep 'Signer #1 certificate SHA-256 digest:')"
+          test -n "$PHONE_CERT" && test "$PHONE_CERT" = "$WATCH_CERT"
+          printf '%s\n' "$PHONE_CERT"
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch' && inputs.build_phone
+        with:
+          name: winglet-remaining-features-dev
+          retention-days: 7
+          path: |
+            app/android/app/build/outputs/apk/release/app-release.apk
+            wear/app/build/outputs/apk/debug/app-debug.apk
+            wear/app/build/test-results/testDebugUnitTest/*.xml

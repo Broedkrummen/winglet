@@ -3,7 +3,7 @@ import {Text,View} from 'react-native';
 import {useFocusEffect} from 'expo-router';
 import {Screen} from '../../components/Screen';
 import {Button,Card,ListGroup,ListRow,LoadError,SectionHeader,Toggle} from '../../components/ui';
-import {api} from '../../lib/api';
+import {api,ApiError} from '../../lib/api';
 import {useApp} from '../../lib/store';
 import {makeStyles} from '../../lib/themeContext';
 import type {Chat,Server} from '../../lib/types';
@@ -35,11 +35,11 @@ export function WearSettings({nativeClient=defaultWearNative}:{nativeClient?:Wea
   },[refresh]));
   useEffect(()=>{
     const controller=new AbortController();setSelected([]);setChats([]);setRemote([]);frozen.current=null;
-    if(server)void Promise.all([api<{chats:Chat[]}>(server,'/api/chats'),watchGrants(server)]).then(([value,grants])=>{
+    if(server && supported)void Promise.all([api<{chats:Chat[]}>(server,'/api/chats'),watchGrants(server)]).then(([value,grants])=>{
       if(!controller.signal.aborted){setChats(value.chats.filter(chat=>chat.kind!=='home'));setRemote(grants.links);}
-    }).catch(e=>{if(!controller.signal.aborted)setError((e as Error).message);});
+    }).catch(e=>{if(!controller.signal.aborted)setError(e instanceof ApiError && e.status===404?'Update Winglet on this bot to enable watch access.':(e as Error).message);});
     return()=>controller.abort();
-  },[server]);
+  },[server,supported]);
   const run=async(work:(signal:AbortSignal)=>Promise<void>)=>{
     if(action.current)return;const controller=new AbortController();action.current=controller;setBusy(true);setError('');setMessage('');
     try{await work(controller.signal);if(alive.current && server)setRemote((await watchGrants(server)).links);}

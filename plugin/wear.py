@@ -68,7 +68,7 @@ class WearRelay:
 
     @staticmethod
     def public(row):
-        return {key: row[key] for key in ['id', 'association', 'name', 'can_reply', 'created_at', 'expires']} | {'chat_ids': json.loads(row['chats'])}
+        return {key: row[key] for key in ['id', 'association', 'name', 'created_at', 'expires']} | {'can_reply': bool(row['can_reply']), 'chat_ids': json.loads(row['chats'])}
 
     async def links(self, request):
         device = self.hub._require(request)

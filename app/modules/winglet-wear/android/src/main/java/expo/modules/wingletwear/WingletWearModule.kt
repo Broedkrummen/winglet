@@ -68,12 +68,13 @@ class WingletWearModule:Module(){
         val me=Tasks.await(Wearable.getNodeClient(context).localNode,4,TimeUnit.SECONDS).id
         val bytes=WearWire.encode(link,me,link.getString("peer"),"linked",link.getString("watch_nonce"),JSONObject().put("name",link.getString("name")).put("expires",link.getLong("expires")),120)
         runCatching{Tasks.await(Wearable.getMessageClient(context).sendMessage(link.getString("peer"),WearWire.MESSAGE,bytes),5,TimeUnit.SECONDS)}
+        Unit
       }
     }
     AsyncFunction("remove"){association:String ->
-      guard();synchronized(WearStorage.mutex){guard();val links=PhoneWearState.links(context);links.remove(association);PhoneWearState.save(context,links);PhoneWearState.pending.remove(association)}
+      guard();synchronized(WearStorage.mutex){guard();val links=PhoneWearState.links(context);links.remove(association);PhoneWearState.save(context,links);PhoneWearState.pending.remove(association);Unit}
     }
-    AsyncFunction("cancel"){association:String ->guard();synchronized(WearStorage.mutex){PhoneWearState.pending.remove(association)}}
+    AsyncFunction("cancel"){association:String ->guard();synchronized(WearStorage.mutex){PhoneWearState.pending.remove(association);Unit}}
     AsyncFunction("retain"){
       synchronized(WearStorage.mutex){
         val links=PhoneWearState.links(context)

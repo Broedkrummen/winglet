@@ -1,6 +1,7 @@
 package expo.modules.wingletpush
 
 import android.app.Notification
+import android.app.KeyguardManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -24,6 +25,7 @@ class WingletPushService : PushService() {
     synchronized(PushStore.mutex){
       val entry=runCatching{PushStore.read(this,instance)}.getOrNull() ?: return
       val keys=endpoint.pubKeySet
+      entry.put("registrationPending",false)
       if(keys==null || endpoint.url.length>2048 || !endpoint.url.startsWith("https://")){entry.put("error","unsupported_endpoint")}
       else{
         val subscription=JSONObject().put("endpoint",endpoint.url).put("keys",JSONObject().put("p256dh",keys.pubKey).put("auth",keys.auth))
@@ -80,7 +82,8 @@ class WingletPushService : PushService() {
     manager.createNotificationChannel(NotificationChannel(channel,"Winglet messages",NotificationManager.IMPORTANCE_DEFAULT))
     if(manager.getNotificationChannel(channel).importance==NotificationManager.IMPORTANCE_NONE)return false
     val generic="Open Winglet to review the latest update."
-    val details=entry.optBoolean("previews",false) && !PushVisibility.locked && !getSharedPreferences("winglet-push-policy",MODE_PRIVATE).getBoolean("private",true)
+    val deviceLocked=(getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager).isDeviceLocked
+    val details=entry.optBoolean("previews",false) && !deviceLocked && !PushVisibility.locked && !getSharedPreferences("winglet-push-policy",MODE_PRIVATE).getBoolean("private",true)
     val path=safePath(note.optString("url"),entry.getString("server"))
     val scheme=if(packageName.endsWith(".dev"))"winglet-dev" else "winglet"
     val intent=Intent(Intent.ACTION_VIEW,Uri.parse(scheme+":"+"/"+path)).setPackage(packageName)
@@ -90,7 +93,7 @@ class WingletPushService : PushService() {
     val notification=Notification.Builder(this,channel).setSmallIcon(android.R.drawable.ic_dialog_info)
       .setContentTitle(if(details)note.optString("title").take(120) else "Winglet")
       .setContentText(if(details)note.optString("body").take(400) else generic)
-      .setContentIntent(pending).setAutoCancel(true).setVisibility(Notification.VISIBILITY_PRIVATE).setPublicVersion(public).build()
+      .setContentIntent(pending).setAutoCancel(true).setVisibility(if(details)Notification.VISIBILITY_SECRET else Notification.VISIBILITY_PRIVATE).setPublicVersion(public).build()
     val tag=PushStore.hex(java.security.MessageDigest.getInstance("SHA-256").digest(note.optString("tag").toByteArray()))
     manager.notify(instance+":"+tag,1,notification)
     return true
@@ -106,6 +109,6 @@ class WingletPushService : PushService() {
   override fun onTempUnavailable(instance: String)=markError(instance,"distributor_unavailable")
   override fun onUnregistered(instance: String)=markError(instance,"unregistered")
   private fun markError(instance: String,error: String){synchronized(PushStore.mutex){runCatching{
-    val entry=PushStore.read(this,instance) ?: return;entry.put("error",error);PushStore.write(this,instance,entry)
+    val entry=PushStore.read(this,instance) ?: return;entry.put("error",error).put("registrationPending",false);PushStore.write(this,instance,entry)
   }}}
 }

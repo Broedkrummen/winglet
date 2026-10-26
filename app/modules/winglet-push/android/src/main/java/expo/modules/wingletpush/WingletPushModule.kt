@@ -2,6 +2,7 @@ package expo.modules.wingletpush
 
 import android.Manifest
 import android.app.KeyguardManager
+import android.app.Notification
 import android.app.NotificationManager
 import android.content.Context
 import android.os.Build
@@ -30,7 +31,7 @@ class WingletPushModule : Module() {
   private fun status(scope: String): Map<String,Any?> {
     val entry=try{PushStore.read(context,scope)}catch(_:Exception){return mapOf("keyLost" to true,"registered" to false,"active" to false,"error" to "key_lost")}
       ?: return mapOf("registered" to false,"active" to false)
-    return mapOf("registered" to entry.has("subscription"),"active" to entry.optBoolean("active"),"kid" to entry.getString("kid"),
+    return mapOf("registered" to (entry.has("subscription") && !entry.optBoolean("registrationPending")),"active" to entry.optBoolean("active"),"kid" to entry.getString("kid"),
       "needsSync" to entry.optBoolean("needsSync"),"previews" to entry.optBoolean("previews"),"error" to entry.optString("error"),
       "received" to entry.optLong("received"),"decrypted" to entry.optLong("decrypted"),"displayed" to entry.optLong("displayed"),
       "suppressed" to entry.optLong("suppressed"))
@@ -49,6 +50,12 @@ class WingletPushModule : Module() {
       PushVisibility.online=if(foreground)online.toSet() else emptySet()
       // No user content or credentials, and persisted for cold-start privacy.
       context.getSharedPreferences("winglet-push-policy",Context.MODE_PRIVATE).edit().putBoolean("private",privatePreviews).apply()
+      if(isLocked || privatePreviews){
+        val manager=context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        // Do not leave a previously opted-in detailed notification visible after app lock changes.
+        manager.activeNotifications.filter{it.tag?.matches(Regex("^[a-f0-9]{64}:[a-f0-9]{64}$"))==true && it.notification.visibility==Notification.VISIBILITY_SECRET}
+          .forEach{manager.cancel(it.tag,it.id)}
+      }
     }
     OnActivityEntersBackground{visible=false;PushVisibility.online=emptySet()}
     OnActivityDestroys{visible=false;locked=true;PushVisibility.online=emptySet();PushVisibility.locked=true}
@@ -69,7 +76,9 @@ class WingletPushModule : Module() {
       guard(server,device)
       if(distributor !in UnifiedPush.getDistributors(context))throw CodedException("Install or choose an available UnifiedPush distributor, such as ntfy.")
       synchronized(PushStore.mutex){
-        val (scope,_)=PushStore.prepare(context,server,device,rotate)
+        val (scope,entry)=PushStore.prepare(context,server,device,rotate)
+        entry.put("registrationPending",true).put("error","")
+        PushStore.write(context,scope,entry)
         UnifiedPush.saveDistributor(context,distributor)
         UnifiedPush.register(context,instance=scope,messageForDistributor="Winglet",vapid=vapid)
         status(scope)
@@ -79,6 +88,7 @@ class WingletPushModule : Module() {
       guard(server,device)
       synchronized(PushStore.mutex){
         val entry=PushStore.read(context,PushStore.scope(server,device)) ?: throw CodedException("Set up encrypted push first.")
+        if(entry.optBoolean("registrationPending"))throw CodedException("Waiting for the push distributor. Retry shortly.")
         val sub=entry.optJSONObject("subscription") ?: throw CodedException("Waiting for the push distributor. Keep ntfy running and retry.")
         val keys=sub.getJSONObject("keys")
         mapOf("v" to 1,"kid" to entry.getString("kid"),"key" to entry.getString("key"),"revision" to entry.getInt("revision"),"subscription" to

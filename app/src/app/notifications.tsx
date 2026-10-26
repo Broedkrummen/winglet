@@ -1,3 +1,5 @@
+import { EncryptedPushSettings } from '../features/encrypted-push/Settings';
+import { pushNative } from '../features/encrypted-push/native';
 import * as Clipboard from 'expo-clipboard';
 import { useEffect, useState } from 'react';
 import { Platform, Text, View } from 'react-native';
@@ -20,7 +22,7 @@ export default function NotificationsScreen() {
   const servers = allServers.filter((server) => !server.parent);
   return (
     <Screen title="Notifications" subtitle="Get a nudge when a bot needs an approval, asks a question, or finishes something. Tapping a notification opens exactly that item.">
-      {Platform.OS === 'web' ? <WebPushSettings servers={servers} /> : servers.map((srv) => <NtfySettings key={srv.id} server={srv} />)}
+      {Platform.OS === 'web' ? <WebPushSettings servers={servers} /> : servers.map((srv) => pushNative ? <EncryptedPushSettings key={srv.id} server={srv} /> : <NtfySettings key={srv.id} server={srv} />)}
       {(Platform.OS === 'web' ? [webPushServer(servers)].filter((x): x is Server => !!x) : servers).map((srv) => (
         <QuietSettings key={srv.id} server={srv} named={servers.length > 1} />
       ))}
@@ -166,7 +168,7 @@ function NtfySettings({ server }: { server: Server }) {
         <View style={s.botRow}>
           <AgentFace server={server} size={36} still />
           <Text style={[s.note, { flex: 1 }]}>
-            Android notifications come through the free ntfy app, so Winglet needs no Google services or relay. They only say that {server.bot.title} needs you; details stay on your server.
+            This build uses generic ntfy notifications. The relay can see bot names and timing; message details stay on your server. Install the current Android build to set up encrypted delivery in Winglet.
           </Text>
         </View>
         {topic ? (

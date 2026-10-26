@@ -413,7 +413,7 @@ export type ConnectionStatus = {
   address_changes: number | null;
   tunnel: { state: 'starting' | 'ready' | 'retrying'; since: number; error: string | null; retry_at: number | null } | null;
   recovery: { enrolled: boolean; last: Delivery | null } | null;
-  push: { ntfy: number; webpush: number; last: Delivery | null; ntfy_server: string };
+  push: { encrypted?: number; ntfy: number; webpush: number; last: Delivery | null; ntfy_server: string };
   /** Owners only. */
   listen?: string;
   web_keys?: boolean;

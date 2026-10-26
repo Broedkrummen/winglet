@@ -57,7 +57,7 @@ export function WearSettings({nativeClient=defaultWearNative}:{nativeClient?:Wea
   return <Screen title="Wear OS" subtitle="A small, private companion for your paired Android phone.">
     <Card style={s.card}><Text style={s.heading}>Your agents, on your wrist</Text>
       <Text style={s.note}>Read recent messages and send short replies in conversations you choose. Your phone relays each request; the watch never receives your full pairing credentials. Approvals and tools open on the phone.</Text>
-      <Text style={s.note}>Install the Winglet watch app with the same package and signing certificate as this phone, then tap Link on the watch. Both devices need Google Play services.</Text>
+      <Text style={s.note}>Install the matching Winglet app on your paired Wear OS watch, then tap Link on the watch. Both devices need Google Play services.</Text>
       {!wearNative || !supported?<Text style={s.note}>Watch setup needs the Android build with Google Play services. Your other Winglet features still work.</Text>:null}
     </Card>
     {supported?<>

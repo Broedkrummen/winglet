@@ -10,6 +10,25 @@ class WearWireTest {
     private fun sender()=JSONObject().put("association","ab".repeat(16)).put("secret",key).put("peer","phone")
     private fun receiver()=sender().put("peer","watch")
     private fun rejected(work:()->Unit){try{work();fail("Expected authentication failure")}catch(e:Exception){}}
+    @Test fun coldReceiptStateSupportsLostAcknowledgementsWithoutChangingReplyIdentity(){
+        val id="cd".repeat(16);val body=JSONObject().put("op","send").put("data",JSONObject().put("text","Hello"))
+        val first=WearReceipts(JSONObject(),100)
+        assertEquals("new",first.claim(id,body).mode)
+        val cold=WearReceipts(JSONObject(first.value.toString()),110)
+        assertEquals("retry",cold.claim(id,body).mode)
+        assertEquals("conflict",cold.claim(id,JSONObject().put("op","send").put("data",JSONObject().put("text","Changed"))).mode)
+        cold.accept(id,JSONObject().put("status","accepted").put("message_id","server-message"))
+        val afterLostAck=WearReceipts(JSONObject(cold.value.toString()),120).claim(id,body)
+        assertEquals("cached",afterLostAck.mode);assertEquals("server-message",afterLostAck.result?.getString("message_id"))
+        assertFalse(cold.value.toString().contains("Hello"))
+        assertEquals("new",WearReceipts(JSONObject(cold.value.toString()),281).claim(id,body).mode)
+    }
+    @Test fun receiptCapacityFailsClosedUntilOldEntriesExpire(){
+        val book=WearReceipts(JSONObject(),100)
+        repeat(128){assertEquals("new",book.claim(it.toString(16).padStart(32,'0'),JSONObject()).mode)}
+        assertEquals("full",book.claim("ff".repeat(16),JSONObject()).mode)
+        assertEquals("new",WearReceipts(book.value,281).claim("ff".repeat(16),JSONObject()).mode)
+    }
     @Test fun aadBindsPeerPurposeAndRequest(){
         val bytes=WearWire.encode(sender(),"watch","phone","request","cd".repeat(16),JSONObject().put("op","read"))
         assertEquals("read",WearWire.decode(receiver(),"watch","phone","request",bytes).second.getString("op"))

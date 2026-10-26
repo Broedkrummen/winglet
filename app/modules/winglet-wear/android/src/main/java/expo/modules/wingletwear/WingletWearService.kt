@@ -17,6 +17,7 @@ import dev.winglet.wear.WearCrypto
 import dev.winglet.wear.WearPolicy
 import dev.winglet.wear.WearStorage
 import dev.winglet.wear.WearWire
+import dev.winglet.wear.WearReceipts
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 import java.security.SecureRandom
@@ -47,17 +48,15 @@ class WingletWearService:WearableListenerService(){
         if(PhoneWearState.allowed?.contains(link.getString("serverId")+"\u0000"+link.getString("device"))==false)return
         val (id,body)=WearWire.decode(link,event.sourceNodeId,me,"request",event.data)
         val op=body.optString("op");val data=body.optJSONObject("data") ?: JSONObject()
-        val digest=WearCrypto.hash(body.toString().toByteArray(Charsets.UTF_8))
-        val cache=link.optJSONObject("requests") ?: JSONObject()
         val now=System.currentTimeMillis()/1000
-        cache.keys().asSequence().toList().forEach{if(cache.getJSONObject(it).optLong("at")<now-180)cache.remove(it)}
-        val previous=cache.optJSONObject(id)
+        val receipts=WearReceipts(link.optJSONObject("requests") ?: JSONObject(),now)
+        val claim=receipts.claim(id,body)
         var result:JSONObject
-        if(previous!=null && previous.optString("hash")!=digest)result=JSONObject().put("error","request_conflict")
-        else if(previous?.optJSONObject("result")!=null)result=previous.getJSONObject("result")
+        if(claim.mode=="conflict")result=JSONObject().put("error","request_conflict")
+        else if(claim.mode=="cached")result=requireNotNull(claim.result)
         else{
-          if(previous==null && cache.length()>=128)return
-          cache.put(id,JSONObject().put("at",now).put("hash",digest));link.put("requests",cache)
+          if(claim.mode=="full")return
+          link.put("requests",receipts.value)
           links.put(association,link);PhoneWearState.save(this,links)
           val deviceLocked=(getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager).isDeviceLocked
           val available=link.optBoolean("background") || (PhoneWearState.foreground && !PhoneWearState.locked && !deviceLocked)
@@ -65,7 +64,7 @@ class WingletWearService:WearableListenerService(){
             runCatching{WearGateway.request(link,"unlink",JSONObject())}
             links.remove(association);PhoneWearState.save(this,links);JSONObject().put("status","unlinked")
           }else if(!available)JSONObject().put("error","open_phone")
-          else if(previous!=null && op!="send")JSONObject().put("error","request_replayed")
+          else if(claim.mode=="retry" && op!="send")JSONObject().put("error","request_replayed")
           else if(op in listOf("read","send"))runCatching{WearGateway.request(link,op,data)}.getOrElse{JSONObject().put("error","phone_unavailable")}
           else if(op=="open"){
             val chat=data.optString("chat_id");val selected=link.getJSONArray("chat_ids")
@@ -75,7 +74,7 @@ class WingletWearService:WearableListenerService(){
           }else JSONObject().put("error","operation_not_allowed")
           // Read bodies never become a persistent transcript. Only small reply acknowledgements are cached.
           if(op=="send" && result.optString("status")=="accepted"){
-            cache.getJSONObject(id).put("result",result);PhoneWearState.save(this,links)
+            receipts.accept(id,result);PhoneWearState.save(this,links)
           }
         }
         send(event.sourceNodeId,WearWire.MESSAGE,WearWire.encode(link,me,event.sourceNodeId,"reply",id,result))

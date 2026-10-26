@@ -72,6 +72,7 @@ async def test_link_is_signed_sealed_scoped_and_idempotent(env):
     status,_=await link(env,association='a'*32,can_reply=False);assert status==409
     response=await client.get('/api/wear/links',headers=phone.auth)
     listed=await response.json();assert listed['links'][0]['association']=='a'*32
+    assert listed['links'][0]['can_reply'] is True
     assert grant['token'] not in json.dumps(listed) and 'token_hash' not in json.dumps(listed)
     assert grant['token'] not in str(dict(store._one('SELECT * FROM winglet_wear_links')))
 
@@ -140,3 +141,34 @@ async def test_read_only_watch_never_gains_reply_authority(env):
     assert not (await relay(env,grant))['can_reply']
     value=await relay(env,grant,'send',{'chat_id':'general','request_id':'a'*32,'text':'No'})
     assert value['error']=='reply_not_allowed'
+
+
+async def test_cold_server_reopens_grants_and_exact_reply_without_duplicate_delivery(env,tmp_path):
+    hub,store,_,phone,_,received=env;_,grant=await link(env,association='e'*32)
+    body={'chat_id':'general','request_id':'f'*32,'text':'Accepted before an acknowledgement was lost'}
+    first=await relay(env,grant,'send',body)
+    db=store._one('PRAGMA database_list')['file']
+    reopened=Store(db)
+    try:
+        cold=Hub(reopened,web_root=tmp_path/'cold-web');cold.on_user_message=hub.on_user_message
+        assert cold.wear.authorize(grant['token'],phone.id)[0]['id']==grant['id']
+        second=await cold.wear.send(grant['token'],phone.id,body)
+        assert first==second and len(received)==1
+        assert cold.wear.token(grant['id'],phone.id,'e'*32)==grant['token']
+        with pytest.raises(ValueError,match='request_conflict'):
+            await cold.wear.send(grant['token'],phone.id,{**body,'text':'Changed after reconnect'})
+        reopened.remove_device(phone.id)
+        with pytest.raises(PermissionError):cold.wear.authorize(grant['token'],phone.id)
+    finally:reopened.close()
+
+
+async def test_concurrent_retries_deliver_one_message_and_response_context_is_authenticated(env):
+    *_,received=env;_,grant=await link(env)
+    body={'chat_id':'general','request_id':'c'*32,'text':'One message even with concurrent retries'}
+    results=await asyncio.gather(*(relay(env,grant,'send',body) for _ in range(4)))
+    assert all(value==results[0] for value in results) and len(received)==1
+    hub,_,client,phone,_,_=env
+    wire,key,nonce=packet(env,grant)
+    envelope=await(await client.post('/api/wear/relay',json=wire)).json()
+    for context in [aad(hub,'different-device',nonce,'response'),aad(hub,phone.id,'0'*32,'response'),aad(hub,phone.id,nonce,'link')]:
+        with pytest.raises(Exception):AESGCM(key).decrypt(unb64(envelope['nonce']),unb64(envelope['ct']),context)

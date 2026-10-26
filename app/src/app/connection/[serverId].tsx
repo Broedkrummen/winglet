@@ -221,7 +221,7 @@ function Notifications({ server, status, now, testing, onTest }: {
   server: Server; status: ConnectionStatus; now: number; testing: boolean; onTest: () => void;
 }) {
   const t = useTheme();
-  const channel = status.push.ntfy ? `ntfy app (${status.push.ntfy_server})` : status.push.webpush ? 'Browser notifications' : null;
+  const channel = status.push.encrypted ? 'Encrypted Winglet notifications' : status.push.ntfy ? `ntfy app (${status.push.ntfy_server})` : status.push.webpush ? 'Browser notifications' : null;
   const last = deliverySummary(status.push.last, now);
   return (
     <>

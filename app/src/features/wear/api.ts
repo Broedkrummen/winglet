@@ -4,12 +4,12 @@ import {b64d,b64e,randomBytes,seal} from '../../lib/crypto';
 import {currentPairing} from '../encrypted-push/api';
 import type {Server} from '../../lib/types';
 import {validateWatchGrant,wearAad,type WatchScope} from './model';
-import {wearNative} from './native';
+import {wearNative,type WearNative} from './native';
 export type RemoteWatch={id:string;association:string;name:string;expires:number;chat_ids:string[];can_reply:boolean};
 export const watchGrants=(server:Server)=>api<{links:RemoteWatch[]}>(server,'/api/wear/links');
 export const revokeWatch=(server:Server,id:string)=>signedApi(server,'DELETE','/api/wear/links/'+encodeURIComponent(id));
-export async function linkWatch(server:Server,scope:WatchScope,background:boolean,signal:AbortSignal){
-  const native=wearNative;if(!native || !server.fingerprint)throw new Error('Use the current Android app with a verified server pairing.');
+export async function linkWatch(server:Server,scope:WatchScope,background:boolean,signal:AbortSignal,nativeClient:WearNative|null=wearNative){
+  const native=nativeClient;if(!native || !server.fingerprint)throw new Error('Use the current Android app with a verified server pairing.');
   currentPairing(server,signal);
   const key=await serverKey(server.url,server.fingerprint);currentPairing(server,signal);
   if(!key)throw new Error('Update Winglet on your server first.');

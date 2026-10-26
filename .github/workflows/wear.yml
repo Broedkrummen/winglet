@@ -15,7 +15,7 @@ jobs:
       CI: '1'
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
@@ -24,7 +24,10 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: app/package-lock.json
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: 'false'
       - run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
       - name: Native watch APK and protocol tests
         working-directory: wear

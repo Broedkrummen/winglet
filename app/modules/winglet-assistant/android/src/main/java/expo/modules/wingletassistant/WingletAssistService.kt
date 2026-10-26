@@ -15,6 +15,7 @@ import android.service.voice.VoiceInteractionSessionService
 import android.speech.RecognitionService
 import android.speech.SpeechRecognizer
 import android.text.InputFilter
+import android.text.InputType
 import android.view.View
 import android.view.WindowManager
 import android.widget.Button
@@ -48,15 +49,18 @@ class WingletAssistSession(private val host: Context) : VoiceInteractionSession(
   private lateinit var caption: TextView
   private val main=Handler(Looper.getMainLooper())
   private val worker=ThreadPoolExecutor(1,1,5,TimeUnit.SECONDS,ArrayBlockingQueue<Runnable>(1),ThreadPoolExecutor.DiscardOldestPolicy())
+  private fun dp(value: Int)=(value*host.resources.displayMetrics.density).toInt()
   override fun onCreateContentView(): View {
     window.window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-    val box=LinearLayout(host).apply{orientation=LinearLayout.VERTICAL;setPadding(32,24,32,32);setBackgroundColor(0xff17171d.toInt())}
+    val box=LinearLayout(host).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(24),dp(20),dp(24),dp(24));setBackgroundColor(0xff17171d.toInt())}
     box.addView(TextView(host).apply{text="Winglet";textSize=22f;setTextColor(0xffffffff.toInt())})
-    caption=TextView(host).apply{text="Your question stays here until you continue.";setTextColor(0xffd0cce0.toInt());setPadding(0,12,0,16)}
+    caption=TextView(host).apply{text="Your question stays here until you continue.";setTextColor(0xffd0cce0.toInt());setPadding(0,dp(12),0,dp(16))}
     box.addView(caption)
     question=EditText(host).apply{
       hint="Ask your agent";setTextColor(0xffffffff.toInt());setHintTextColor(0xffaaa6b8.toInt())
       minLines=2;maxLines=5;filters=arrayOf(InputFilter.LengthFilter(4000))
+      inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+      if(android.os.Build.VERSION.SDK_INT>=26)importantForAutofill=View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
     }
     box.addView(question)
     box.addView(Button(host).apply{

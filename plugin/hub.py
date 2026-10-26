@@ -1162,10 +1162,9 @@ class Hub:
     async def h_message_send(self, request: web.Request) -> web.Response:
         device = self._require(request)
         body = await self._body(request)
-        if body.get("quote") is not None:
-            device = self._device(request)
-            if device is None:
-                return _error(401, "This pairing was revoked. Reconnect before quoting a reply.")
+        device = self._device(request)
+        if device is None:
+            return _error(401, "This pairing was revoked. Reconnect before sending.")
         self._visible_chat(device, request.match_info["chat_id"])
         attachments = body.get("attachments") or []
         if not isinstance(attachments, list) or not all(isinstance(a, str) for a in attachments):

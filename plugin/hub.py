@@ -119,6 +119,7 @@ class Forbidden(PermissionError):
 #   signed        any verified device, with a signed request
 #   owner_signed  an owner's verified device, with a signed request: every control action
 ROUTE_POLICY = {
+    "h_wear_links": "device", "h_wear_link_create": "signed", "h_wear_link_delete": "signed", "h_wear_relay": "public",
     "h_encrypted_push_get": "device", "h_encrypted_push_put": "signed", "h_encrypted_push_delete": "signed",
     "h_phone_tools": "device", "h_phone_tools_put": "signed", "h_phone_tools_revoke": "signed",
     "h_phone_tools_log": "device",
@@ -230,6 +231,8 @@ class Hub:
                  ntfy_server: str = "https://ntfy.sh", http_client: Any = None,
                  media_dir: Optional[Path] = None):
         self.store = store
+        from .wear import WearRelay
+        self.wear = WearRelay(self)
         self.web_root = web_root
         self.media_dir = media_dir or Path(store.path).parent / "media"
         self._bot_info = bot_info or (lambda: {"name": "Hermes", "title": "Hermes", "description": ""})
@@ -369,6 +372,10 @@ class Hub:
         r.add_post("/api/config/preview", self.h_config_preview)
         r.add_post("/api/config/apply", self.h_config_apply)
         r.add_get("/api/commands", self.h_commands)
+        r.add_get("/api/wear/links", self.h_wear_links)
+        r.add_post("/api/wear/links", self.h_wear_link_create)
+        r.add_delete("/api/wear/links/{link_id}", self.h_wear_link_delete)
+        r.add_post("/api/wear/relay", self.h_wear_relay)
         r.add_get("/api/push/prefs", self.h_push_prefs)
         r.add_put("/api/push/prefs", self.h_push_prefs_put)
         r.add_get("/api/inbox", self.h_inbox)
@@ -790,7 +797,7 @@ class Hub:
                          and self.branching.available())
         return {"phone_tools": self.phone_tools is not None, "routine_history": self.routine_history is not None, "routine_run_detail": self.routine_history is not None, **(self.context_insights.capabilities() if self.context_insights else {k:False for k in ("session_context","context_compression","provider_limits","usage_insights")}), "rooms": self.rooms is not None and self.rooms.available(),
                 "room_mentions": self.rooms is not None and self.rooms.available(), "rooms_member_write": False,
-                "encrypted_push": True, "webpush": True, "ntfy": True, "approvals": True, "questions": True, "uploads": True, "voice": True,
+                "wear_relay": True, "wear_reply": True, "encrypted_push": True, "webpush": True, "ntfy": True, "approvals": True, "questions": True, "uploads": True, "voice": True,
                 "replies": True, "export": True, "mute": True, "status_updates": True, "roles": True,
                 "signed_actions": True, "ws_auth": True, "pickers": True, "agent": self.hermes is not None,
                 "control": self.hermes is not None, "goals": self.chat_goal is not None, "search": True, "files": True,
@@ -1022,6 +1029,18 @@ class Hub:
         return _json({"ok": True})
 
     # -- chats & messages ----------------------------------------------------------------
+
+    async def h_wear_links(self, request: web.Request) -> web.Response:
+        return await self.wear.links(request)
+
+    async def h_wear_link_create(self, request: web.Request) -> web.Response:
+        return await self.wear.create(request)
+
+    async def h_wear_link_delete(self, request: web.Request) -> web.Response:
+        return await self.wear.delete(request)
+
+    async def h_wear_relay(self, request: web.Request) -> web.Response:
+        return await self.wear.relay(request)
 
     async def h_chats(self, request: web.Request) -> web.Response:
         device = self._require(request)

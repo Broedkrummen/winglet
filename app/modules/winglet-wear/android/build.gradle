@@ -1,0 +1,16 @@
+plugins { id 'com.android.library'; id 'expo-module-gradle-plugin' }
+group = 'dev.winglet'
+version = '1.0.0'
+android {
+  namespace 'expo.modules.wingletwear'
+  defaultConfig { versionCode 1; versionName '1.0.0' }
+  sourceSets.main.java.srcDirs += ['../../../../wear/shared/src/main/kotlin','../../../../wear/shared-android/src/main/kotlin']
+  sourceSets.test.java.srcDirs += ['../../../../wear/app/src/test/kotlin']
+}
+dependencies {
+  implementation 'androidx.annotation:annotation:1.8.2'
+  implementation 'com.google.android.gms:play-services-wearable:20.0.1'
+  implementation 'com.google.crypto.tink:tink:1.23.0'
+  testImplementation 'junit:junit:4.13.2'
+  testImplementation 'org.json:json:20250517'
+}

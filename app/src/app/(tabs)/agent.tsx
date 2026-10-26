@@ -88,6 +88,8 @@ export default function AgentTab() {
         {Platform.OS === 'android' ? <><SectionHeader title="On this phone" /><ListGroup>
           <ListRow icon={<Smartphone size={18} color={t.colors.onAccentSoft} />} title="Android assistant"
             subtitle="An optional shortcut to your agents" onPress={() => router.push('/assistant-settings')} />
+          <ListRow icon={<Smartphone size={18} color={t.colors.onAccentSoft} />} title="Wear OS"
+            subtitle="Selected conversations on your watch" onPress={() => router.push('/wear-settings')} />
         </ListGroup></> : null}
         {rt?.info?.features?.config_catalog && isOwner(rt) ? (
           <><SectionHeader title="Advanced" /><ListGroup>

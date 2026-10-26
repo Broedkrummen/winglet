@@ -59,7 +59,8 @@ export async function enableWebPush(server: Server): Promise<PushState> {
   if (!sub) {
     sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: wanted as BufferSource });
   }
-  await api(server, '/api/push/webpush', { method: 'POST', body: JSON.stringify({ subscription: sub.toJSON() }) });
+  await configureWebPushScope(server);
+  await api(server, '/api/push/webpush', { method: 'POST', body: JSON.stringify({ subscription: sub.toJSON(), payload_v: 1 }) });
   return 'granted';
 }
 
@@ -73,7 +74,7 @@ export async function sendTestPush(server: Server): Promise<TestPushResult> {
 export function describeTestPush(r: TestPushResult): string {
   if (!r.accepted && !r.failed && !r.expired) return 'No devices are set up for notifications yet.';
   const parts = [];
-  if (r.accepted) parts.push(`Sent to ${r.accepted} device${r.accepted === 1 ? '' : 's'}. It should arrive in a moment.`);
+  if (r.accepted) parts.push(`The relay accepted ${r.accepted} notification${r.accepted === 1 ? '' : 's'}. Check the device for receipt and display.`);
   if (r.failed) parts.push(`${r.failed} couldn't be delivered (check the server logs).`);
   if (r.expired) parts.push(`${r.expired} registration${r.expired === 1 ? ' had' : 's had'} expired; turn notifications on again on that device.`);
   return parts.join(' ');
@@ -95,4 +96,21 @@ export async function openNtfySubscribe(ntfyServer: string, topic: string) {
     // fall through
   }
   return Linking.openURL(store);
+}
+
+/** Acknowledged worker policy is persisted before the server starts versioned delivery. */
+export async function configureWebPushScope(server?:Server,retainOnly=false){
+  if(Platform.OS!=='web' || !('serviceWorker' in navigator) || !globalThis.isSecureContext)return;
+  const registration=await navigator.serviceWorker.ready;
+  if(!registration.active)throw new Error('Restart Winglet to finish notification setup.');
+  await new Promise<void>((resolve,reject)=>{
+    const channel=new MessageChannel();
+    const timer=setTimeout(()=>{channel.port1.close();reject(new Error('Update or reload Winglet before re-registering notifications.'));},5000);
+    channel.port1.onmessage=event=>{
+      clearTimeout(timer);channel.port1.close();
+      if(event.data?.ok)resolve();else reject(new Error('Notification storage is unavailable. Allow site storage and retry.'));
+    };
+    registration.active!.postMessage({type:retainOnly?'winglet.push.retain':'winglet.push.configure',
+      scope:server?{server:server.id,device:server.deviceId}:null},[channel.port2]);
+  });
 }

@@ -1,3 +1,4 @@
+importScripts('/push-guard.js');
 /* Winglet service worker: keeps the app shell for offline use, shows push notifications, handles taps. */
 const SHELL = 'winglet-shell-v1';
 const HASHED = /^\/(_expo\/static|assets)\//;
@@ -51,46 +52,58 @@ self.addEventListener('fetch', (event) => {
   }
 });
 
-self.addEventListener('push', (event) => {
-  let note = {};
-  try {
-    note = event.data ? event.data.json() : {};
-  } catch (e) {
-    note = { title: 'Winglet', body: event.data ? event.data.text() : '' };
-  }
-  const options = {
-    body: note.body || '',
-    tag: note.tag,
-    renotify: !!note.tag,
-    icon: '/icons/icon-192.png',
-    badge: '/icons/badge-96.png',
-    data: note,
-    requireInteraction: note.kind === 'approval' || note.kind === 'question',
-    actions: (note.actions || []).map((a) => ({ action: a.action, title: a.title })),
-  };
-  event.waitUntil(self.registration.showNotification(note.title || 'Winglet', options));
+// Atomic read/update keeps replay records durable across worker termination.
+function pushState(update){
+  return new Promise((resolve,reject)=>{
+    const opening=indexedDB.open('winglet-push-v1',1);
+    opening.onupgradeneeded=()=>opening.result.createObjectStore('state');
+    opening.onerror=()=>reject(new Error('push storage unavailable'));
+    opening.onsuccess=()=>{
+      const db=opening.result,tx=db.transaction('state','readwrite'),store=tx.objectStore('state');
+      let result;
+      const request=store.get('guard');
+      request.onsuccess=()=>{
+        try{result=update(request.result||{required:false,scope:null,seen:{}});store.put(result.state,'guard');}
+        catch{tx.abort();}
+      };
+      tx.oncomplete=()=>{db.close();resolve(result);};
+      tx.onerror=tx.onabort=()=>{db.close();reject(new Error('push storage unavailable'));};
+    };
+  });
+}
+self.addEventListener('message',event=>{
+  const message=event.data;
+  if(!['winglet.push.configure','winglet.push.retain'].includes(message?.type))return;
+  try{if(!event.source?.url || new URL(event.source.url).origin!==self.location.origin)return;}catch{return;}
+  const scope=message.scope;
+  if(scope!==null && (!scope || typeof scope.server!=='string' || typeof scope.device!=='string' ||
+    !scope.server || !scope.device || scope.server.length>160 || scope.device.length>160))return;
+  event.waitUntil(pushState(state=>{
+    const same=scope && state.scope && scope.server===state.scope.server && scope.device===state.scope.device;
+    if(message.type==='winglet.push.retain')return {state:same?state:{required:scope===null||state.required,scope:null,seen:{}}};
+    return {state:{required:true,scope,seen:same?state.seen:{}}};
+  }).then(()=>event.ports[0]?.postMessage({ok:true})).catch(()=>event.ports[0]?.postMessage({ok:false})));
+});
+self.addEventListener('push',event=>{
+  let note;
+  try{const text=event.data?.text();if(!text || text.length>4000)return;note=JSON.parse(text);}catch{return;}
+  event.waitUntil(pushState(state=>WingletPushGuard.accept(note,state,Math.floor(Date.now()/1000))).then(result=>{
+    const safe=result.note;if(!safe)return;
+    return self.registration.showNotification(safe.title||'Winglet',{
+      body:safe.body,tag:safe.tag,renotify:!!safe.tag,icon:'/icons/icon-192.png',badge:'/icons/badge-96.png',
+      data:safe,requireInteraction:safe.kind==='approval'||safe.kind==='question',
+    });
+  }).catch(()=>undefined));
 });
 
-self.addEventListener('notificationclick', (event) => {
-  const note = event.notification.data || {};
+self.addEventListener('notificationclick', event => {
+  const note=event.notification.data||{};
   event.notification.close();
-  const action = (note.actions || []).find((a) => a.action === event.action);
-  if (action && note.item_id) {
-    // One-tap approve/deny straight from the notification (signed by the server, no token needed).
-    const url = `/api/inbox/${encodeURIComponent(note.item_id)}/respond?choice=${encodeURIComponent(action.action)}&sig=${encodeURIComponent(action.sig)}`;
-    event.waitUntil(fetch(url, { method: 'POST' }).catch(() => undefined));
-    return;
-  }
-  const target = note.url || '/';
-  event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
-      for (const client of clients) {
-        if ('focus' in client) {
-          client.navigate(target).catch(() => undefined);
-          return client.focus();
-        }
-      }
-      return self.clients.openWindow(target);
-    }),
-  );
+  const target=WingletPushGuard.safeTarget(note.url||'/',self.location.origin);
+  event.waitUntil(self.clients.matchAll({type:'window',includeUncontrolled:true}).then(clients=>{
+    for(const client of clients){
+      if('focus' in client){client.navigate(target).catch(()=>undefined);return client.focus();}
+    }
+    return self.clients.openWindow(target);
+  }));
 });

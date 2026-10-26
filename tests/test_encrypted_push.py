@@ -135,3 +135,40 @@ async def test_dispatch_uses_encrypted_webpush_without_plaintext_route_fallback(
     assert (await hub.push_now({'kind':'test'},tag='again',device_id=device['id']))['accepted']==0
     assert len(captured)==1
     await hub.aclose();store.close()
+
+
+async def test_encrypted_delivery_keeps_mutes_and_foreground_message_deduplication(tmp_path,monkeypatch):
+    store=Store(tmp_path/'prefs.db');hub=Hub(store,web_root=tmp_path/'web')
+    device,_=store.add_device('Phone','android',role='owner',sign_key=Phone('One').public,verified=True)
+    push.enroll(store,device['id'],enrollment(),'https://ntfy.sh')
+    sent=[]
+    async def send(*args,**kwargs):sent.append(args[2]);return 201
+    monkeypatch.setattr('plugin.webpush.send',send)
+    store.set_push_prefs(device['id'],{'muted':{'*':0}})
+    assert (await hub.push_now({'kind':'message'},tag='muted'))['accepted']==0
+    store.set_push_prefs(device['id'],{})
+    class Socket:
+        closed=False
+    hub._sockets[Socket()]={'device':device,'visible':True}
+    assert (await hub.push_now({'kind':'message'},tag='foreground'))['accepted']==0
+    assert (await hub.push_now({'kind':'test'},tag='explicit-test'))['accepted']==1
+    assert len(sent)==1
+    hub._sockets.clear();await hub.aclose();store.close()
+
+
+async def test_webpush_guard_version_is_negotiated_and_scope_is_derived(tmp_path,monkeypatch):
+    store=Store(tmp_path/'web.db');hub=Hub(store,web_root=tmp_path/'web')
+    device,_=store.add_device('Web','web')
+    subscription=enrollment()['subscription'];store.add_push_sub(device['id'],'webpush',subscription['endpoint'],{**subscription,'guard_v':1})
+    captured=[]
+    async def send(client,sub,note,*args,**kwargs):captured.append(note);return 201
+    monkeypatch.setattr('plugin.webpush.send',send)
+    await hub.push_now({'kind':'test','title':'Web test','body':'private','url':'/','device_id':'forged'},tag='web')
+    note=captured.pop();assert note['guard_v']==1 and len(note['id'])==32
+    assert note['device_id']==device['id'] and note['server_id']==hub.server_id()
+    assert note['expires']-note['issued']==86400
+    store.remove_push_sub(endpoint=subscription['endpoint'])
+    store.add_push_sub(device['id'],'webpush',subscription['endpoint'],subscription)
+    await hub.push_now({'kind':'test','title':'Legacy','body':'private','url':'/'},tag='legacy')
+    assert 'guard_v' not in captured.pop()
+    await hub.aclose();store.close()

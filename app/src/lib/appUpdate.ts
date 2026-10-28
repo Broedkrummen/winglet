@@ -1,7 +1,7 @@
 import { compareVersions } from './version';
 
 /** Newest first; ten covers a run of betas between two releases. Drafts never appear unauthenticated. */
-export const RELEASES_URL = 'https://api.github.com/repos/VIKASRP24/winglet/releases?per_page=10';
+export const RELEASES_URL = 'https://api.github.com/repos/Broedkrummen/winglet/releases?per_page=10';
 /** GitHub allows 60 unauthenticated requests an hour per address; twice a day is plenty. */
 export const CHECK_EVERY_MS = 12 * 60 * 60 * 1000;
 

@@ -10,10 +10,10 @@
     "backgroundColor": "#000000",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "io.github.vikasrp24.winglet"
+      "bundleIdentifier": "io.github.broedkrummen.winglet"
     },
     "android": {
-      "package": "io.github.vikasrp24.winglet",
+      "package": "io.github.broedkrummen.winglet",
       "adaptiveIcon": {
         "backgroundColor": "#5B4BD6",
         "foregroundImage": "./assets/android-icon-foreground.png",

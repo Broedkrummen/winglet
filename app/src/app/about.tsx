@@ -77,7 +77,7 @@ export default function AboutScreen() {
       <ListGroup>
         <ListRow title="App protocol" value={String(APP_PROTOCOL)} />
         <ListRow icon={<FileText size={18} color={t.colors.textSecondary} />} title="Open-source notices" onPress={() => router.push('/open-source-notices')} />
-        <ListRow icon={<ExternalLink size={18} color={t.colors.textSecondary} />} title="Source code & help" onPress={() => Linking.openURL('https://github.com/VIKASRP24/winglet')} />
+        <ListRow icon={<ExternalLink size={18} color={t.colors.textSecondary} />} title="Source code & help" onPress={() => Linking.openURL('https://github.com/Broedkrummen/winglet')} />
       </ListGroup>
     </Screen>
   );

@@ -136,7 +136,7 @@ export default function PairScreen() {
             )}
 
             <Button size="sm" variant="ghost" title="Set up the server plugin" icon={<ExternalLink size={14} color={t.colors.accent} />}
-              style={{ alignSelf: 'center' }} onPress={() => Linking.openURL('https://github.com/VIKASRP24/winglet')} />
+              style={{ alignSelf: 'center' }} onPress={() => Linking.openURL('https://github.com/Broedkrummen/winglet')} />
           </Animated.View>
         </ScrollView>
       </KeyboardAvoidingView>

@@ -66,7 +66,7 @@ SIGN_IN_PAGE = ("<!doctype html><meta charset=utf-8><meta name=viewport content=
                 "<h2>{title}</h2><p>{body}</p>")
 PUSH_DEBOUNCE_SECONDS = 0.3
 MAX_TEXT = 16_000
-PUSH_SUBJECT = "https://github.com/VIKASRP24/winglet"
+PUSH_SUBJECT = "https://github.com/Broedkrummen/winglet"
 PAIR_FAILURES_PER_MINUTE = 10
 ALIVE_CACHE_SECONDS = 2.0
 MAX_ATTACHMENTS = 10

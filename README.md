@@ -11,8 +11,8 @@ Your agents run on *your* server, keep working while you're away,
 and tap you on the shoulder when they need you.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Latest release](https://img.shields.io/github/v/release/VIKASRP24/winglet?label=release)](https://github.com/VIKASRP24/winglet/releases/latest)
-[![CI](https://github.com/VIKASRP24/winglet/actions/workflows/ci.yml/badge.svg)](https://github.com/VIKASRP24/winglet/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/Broedkrummen/winglet?label=release)](https://github.com/Broedkrummen/winglet/releases/latest)
+[![CI](https://github.com/Broedkrummen/winglet/actions/workflows/ci.yml/badge.svg)](https://github.com/Broedkrummen/winglet/actions/workflows/ci.yml)
 ![Android APK](https://img.shields.io/badge/android-APK-3DDC84)
 ![iPhone PWA](https://img.shields.io/badge/iPhone-web%20app-lightgrey)
 
@@ -56,10 +56,13 @@ Winglet brings that to Hermes Agent, the open-source agent by Nous Research, wit
 
 ## Get started in two minutes
 
+This is the Broedkrummen fork. Android builds install separately from upstream Winglet and need their
+own initial pairing. If no signed release is published yet, see [release setup](docs/RELEASING.md).
+
 **1. On your Hermes machine**, with the Hermes messaging gateway installed:
 
 ```bash
-hermes plugins install VIKASRP24/winglet/plugin
+hermes plugins install Broedkrummen/winglet/plugin
 hermes plugins enable winglet
 hermes winglet setup          # sets up HTTPS, starts the gateway, shows a QR code
 ```
@@ -70,7 +73,7 @@ Setup gives you a free HTTPS address through Cloudflare. You don't need an accou
 
 | Android | iPhone | Desktop |
 |---|---|---|
-| Install `winglet-<version>-arm64-v8a.apk` from the [latest release](https://github.com/VIKASRP24/winglet/releases/latest), open it and tap **Scan QR code**. | Scan with the Camera app, then **Share → Add to Home Screen** and open Winglet from there. | Open the link from `hermes winglet pair` in any browser. |
+| Install `winglet-<version>-arm64-v8a.apk` from the [latest release](https://github.com/Broedkrummen/winglet/releases/latest), open it and tap **Scan QR code**. | Scan with the Camera app, then **Share → Add to Home Screen** and open Winglet from there. | Open the link from `hermes winglet pair` in any browser. |
 
 **3. Say hello.** Your bot is on the landing screen, ready for a message.
 

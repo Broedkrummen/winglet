@@ -1,5 +1,22 @@
 # Releasing Winglet
 
+## This fork's release identity
+
+This fork publishes from [Broedkrummen/winglet](https://github.com/Broedkrummen/winglet).
+Its Android package and reserved iOS bundle identifier are `io.github.broedkrummen.winglet`.
+Android development builds use `io.github.broedkrummen.winglet.dev`.
+
+The fork installs separately from upstream Winglet (`io.github.vikasrp24.winglet`). It does not
+replace, migrate or erase upstream pairings, messages or cache. Pair the fork with your server
+on first use; keep the upstream installation until you have checked what you need. Future fork
+updates must use the same fork package, a higher version code and the same release signing key.
+
+The app's updater and About help link point to this fork. Until the first signed release is published,
+the release page may contain no APKs; use a reviewed Actions build for testing. A development/debug-key
+build is not a substitute for the stable release-signing key. The existing CI gates below remain required.
+No release key or publication is created by changing these settings. Keep upstream copyright/license
+attribution in LICENSE and plugin/THIRD_PARTY_NOTICES.md intact.
+
 Pushing a tag like `v0.1.1` or `v0.2.0-beta.1` builds the Android APKs and the plugin bundle and publishes them as a
 GitHub Release. There is one APK per CPU, `winglet-<version>-arm64-v8a.apk` (nearly every phone) and
 `winglet-<version>-armeabi-v7a.apk` (older 32-bit phones), about 61 MB and 52 MB against 81 MB for a universal one. Both share

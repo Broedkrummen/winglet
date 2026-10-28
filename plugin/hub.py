@@ -1207,7 +1207,9 @@ class Hub:
     async def user_message(self, device: Dict[str, Any], chat_id: str, text: str,
                            client_id: str = "", *, attachments: Optional[List[str]] = None,
                            reply_to: str = "", hidden: bool = False, quote=None) -> Optional[Dict[str, Any]]:
-        text = (text or "").strip()[:MAX_TEXT]
+        text = (text or "").strip()
+        if len(text) > MAX_TEXT:
+            raise MessageRejected(f"Messages can contain at most {MAX_TEXT:,} characters. Shorten it or attach a file.")
         attachments = list(dict.fromkeys(attachments or []))
         if (not text and not attachments) or not chat_id:
             return None

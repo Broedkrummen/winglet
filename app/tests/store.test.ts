@@ -79,6 +79,7 @@ function harness(os = 'web') {
     './recovery': { RecoveryCoordinator: FakeCoordinator },
     '../features/phone-tools/runtime': { phoneHello: () => phoneCalls.push('hello'), phoneEvent: () => phoneCalls.push('event'), phoneDisconnect: () => phoneCalls.push('disconnect'), phoneVisibility: () => phoneCalls.push('visibility') },
     './messages': helpers,
+    './messageLimits': compile('../src/lib/messageLimits.ts', {}),
     '../features/projects/logic': projectHelpers,
     '../features/event-replay/session': replaySession,
     '../features/event-replay/merge': replayMerge,
@@ -316,6 +317,22 @@ test('failed durable acceptance keeps text, files and reply without claiming a q
   assert.equal(h.cache.get('outbox:s')[0].attachments[0].id, 'file');
   assert.equal(h.cache.get('outbox:s')[0].reply_to.id, 'reply');
   assert.equal(h.store.getState().drafts['s:general'], undefined);
+});
+
+test('oversized text and busy-mode prefixes retain the full draft without queueing', async () => {
+  const h = harness(); await h.connect(); h.disconnect();
+  const text = 'x'.repeat(16000) + '\nOnly summarize; do not execute.';
+  h.store.getState().setDraft('s', 'general', text);
+  assert.equal(await h.sendDraft('s', 'general', text), false);
+  assert.equal(h.store.getState().drafts['s:general'], text);
+  assert.equal(h.outbox().length, 0);
+  assert.equal(h.store.getState().toasts.at(-1).title, 'Message too long');
+  const exact = '😀'.repeat(16000);
+  h.store.getState().setDraft('s', 'general', exact);
+  assert.equal(await h.sendDraft('s', 'general', exact, '/steer'), false);
+  assert.equal(h.store.getState().drafts['s:general'], exact);
+  assert.equal(await h.sendDraft('s', 'general', exact), true);
+  assert.equal(h.outbox()[0].text, exact);
 });
 
 test('storage acceptance preserves newer typing, attachments and reply context', async () => {

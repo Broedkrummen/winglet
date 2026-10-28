@@ -18,6 +18,7 @@ import { sound } from '../lib/sounds';
 import { draftKey, useApp } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
 import { plainText } from '../lib/text';
+import { messageLimitError } from '../lib/messageLimits';
 import type { DraftFile, Server } from '../lib/types';
 import { useVoiceNote } from '../lib/voiceNote';
 import { Glass } from './Glass';
@@ -152,6 +153,8 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
   const typedCommand = text.startsWith('/') && !text.includes(' ');
   const matches = typedCommand ? matchCommands(commands, text) : [];
   const showBusyModes = busy && !!text.trim() && !text.startsWith('/');
+  const sendPrefix = showBusyModes && busyMode !== 'interrupt' ? `/${busyMode}` : '';
+  const limitError = messageLimitError(sendPrefix ? `${sendPrefix} ${text.trim()}` : text);
 
   const send = async (value?: string) => {
     if (sending.current || (value === undefined && !ready)) return;
@@ -174,7 +177,7 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
         return;
       }
       haptic.light();
-      const prefix = showBusyModes && busyMode !== 'interrupt' ? `/${busyMode}` : '';
+      const prefix = sendPrefix;
       const body = prepareChat ? useApp.getState().drafts[draftKey(server.id, destination)] ?? text : text;
       if (!await sendDraft(server.id, destination, body, prefix)) return;
       setHeight(MIN_INPUT);
@@ -271,6 +274,7 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
             }}
           />
         </View>
+        {limitError ? <Text accessibilityRole="alert" style={{ ...t.type.footnote, color: t.colors.danger, paddingHorizontal: 16, paddingVertical: 8 }}>{limitError}</Text> : null}
         <View style={s.tools}>
           {uploads ? (
             <Tap feedback="selection" accessibilityLabel="Attach photos or files" onPress={() => setAttachOpen(true)} style={s.attach} scaleTo={0.9}>

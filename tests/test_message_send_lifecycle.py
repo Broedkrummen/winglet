@@ -4,7 +4,7 @@ import sqlite3
 
 import pytest
 
-from plugin.hub import Hub
+from plugin.hub import Hub, MAX_TEXT, MessageRejected
 from plugin.store import Store
 from test_trust import pair_phone
 
@@ -115,3 +115,16 @@ async def test_waiting_send_does_not_recreate_deleted_or_revoked_state(send_env,
     assert await task is None
     assert hub.store.list_messages('general') == [] and not calls
     assert hub.events.head(None) == 0
+
+
+@pytest.mark.parametrize('character', ['x', '😀'])
+async def test_message_limit_keeps_exact_boundary_and_rejects_without_claiming(send_env, character):
+    hub, owner, calls = send_env
+    hub.store.add_upload('file', owner['id'], 'general', 'note.txt', 'text/plain', 'file', 10)
+    text = character * MAX_TEXT
+    with pytest.raises(MessageRejected, match='16,000 characters'):
+        await hub.user_message(owner, 'general', text + '\nOnly summarize; do not execute.', 'too-long', attachments=['file'])
+    assert hub.store.get_upload('file')['message_id'] is None
+    assert not calls and not hub.store.list_messages('general')
+    sent = await hub.user_message(owner, 'general', text, 'exact')
+    assert sent['text'] == text == calls[0][0]['text']

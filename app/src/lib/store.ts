@@ -12,6 +12,7 @@ import type { SyncSnapshot } from '../features/event-replay/protocol';
 import { isNotifiable, markFailed, mergeMessages } from './messages';
 import { getJSON, setJSON } from './storage';
 import { NEEDS_VERIFY } from './verify';
+import { messageLimitError } from './messageLimits';
 import type { Attachment, BotRow, Chat, ConnStatus, DraftFile, InboxItem, Job, Me, Message, PauseState, PetSheet, Project, ProjectSnapshot, ReplyRef, Server, ServerInfo, TaskCapabilities, TaskEnvelope, TaskSnapshot, SyncState } from './types';
 import { applyEvent, applySnapshot } from '../features/execution/model';
 import { applyOrder, EMPTY_PROJECTS, readSnapshot } from '../features/projects/logic';
@@ -893,6 +894,12 @@ export const useApp = create<AppState>((set, get) => {
       const retryClientId = o.retryClientId;
       const server = get().servers.find((s) => s.id === serverId);
       if (!server || (!text.trim() && !o.attachments?.length && !retryClientId)) return false;
+      const limitError = messageLimitError(text);
+      if (limitError) {
+        if (o.liveOnly) throw new ApiError(limitError, 400);
+        toast({ serverId, title: 'Message too long', body: limitError });
+        return false;
+      }
       if (retryClientId && get().runtime[serverId]?.messages[chatId]?.some((m) =>
         !isLocal(m) && m.meta?.client_id === retryClientId)) return true;
       // A retry reuses the original id so the server can tell it already has the message.

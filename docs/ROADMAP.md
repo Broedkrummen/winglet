@@ -24,9 +24,9 @@ Implementation is collected in [PR #2](https://github.com/Broedkrummen/winglet/p
 | 5 | [#6](https://github.com/Broedkrummen/winglet/issues/6) | Touch targets, focus, keyboard access and browser verification |
 | 6 | [#7](https://github.com/Broedkrummen/winglet/issues/7) | Fork-specific release/update identity and signing policy |
 | 7 | [#8](https://github.com/Broedkrummen/winglet/issues/8) | This active issue-based roadmap and approval process |
-| 8 | Next issue | Locale-independent schedule tests |
+| 8 | [#9](https://github.com/Broedkrummen/winglet/issues/9) | Locale-independent schedule tests |
 
-The first six items are implemented on the PR branch; this document is item seven. Item eight follows.
+All eight items are implemented on the PR branch and await final review/merge.
 Issue comments record tests, evidence and limits. Open issues remain open until the reviewed PR merges;
 an implementation on a branch is not a published release.
 

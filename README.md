@@ -230,11 +230,31 @@ iOS 16.4+ when added to the Home Screen over HTTPS.
 
 ## What's next
 
+Ideas for later discussion; each needs its own scope approval.
+
 - [ ] Live screen: watch the agent's computer and take over when it needs you
 - [ ] Real-time voice
 - [ ] Widgets and backups
 
-The full plan is in [docs/APP_PLAN.md](docs/APP_PLAN.md).
+The active plan and approval process are in [docs/ROADMAP.md](docs/ROADMAP.md).
+The older [v0.1.3→v0.7 plan](docs/APP_PLAN.md) is retained as history.
+
+## Simple view
+
+Choose **Settings → View → Simple** for a bot-first messenger layout. Each row represents a bot;
+Settings lets you choose its last conversation, main conversation or conversation list when opening it.
+Full view remains available, with the same chats and drafts. Both light and dark themes are supported.
+
+<details>
+<summary>Preview Simple view (synthetic demo content)</summary>
+
+![Simple view on desktop, light theme, synthetic demo](docs/screenshots/simple-desktop-light.png)
+
+<img src="docs/screenshots/simple-mobile-dark.png" width="260" alt="Simple view on a phone in dark theme, synthetic demo content" />
+
+</details>
+
+See [verification evidence and device limitations](docs/agent-handoffs/simple-view.md).
 
 ## Development
 

@@ -45,6 +45,18 @@ def request(**changes):
     return {'revision': ac.operate()['revision'], 'changes': changes}
 
 
+def test_memory_review_controls_use_supported_native_schema(cfg):
+    cfg.DEFAULT_CONFIG = {**cfg.DEFAULT_CONFIG, 'memory': {'write_approval': False, 'nudge_interval': 10},
+                          'auxiliary': {'background_review': {'enabled': True}}}
+    keys = {'memory.write_approval', 'memory.nudge_interval', 'auxiliary.background_review.enabled'}
+    fields = {row['key']: row for row in ac.operate()['fields']}
+    assert keys <= fields.keys()
+    assert all(fields[key]['section'] == 'Memory' and fields[key]['writable'] for key in keys)
+    changes = {'memory.write_approval': True, 'memory.nudge_interval': 12, 'auxiliary.background_review.enabled': False}
+    ac.operate({'revision': ac.operate()['revision'], 'changes': changes}, apply=True)
+    assert all(ac.get(cfg.load_config(), key) == value for key, value in changes.items())
+
+
 def test_catalog_never_exposes_arbitrary_or_secret_fields(cfg):
     data = ac.operate()
     assert 'DO_NOT_EXPOSE' not in json.dumps(data)

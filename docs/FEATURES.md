@@ -56,6 +56,8 @@ The [README](../README.md#what-it-does) has the overview. This page lists everyt
   Star models for quick access in the chat picker, or choose from the last eight successful choices.
   Stars do not change the active model; saved choices only appear for providers offered by that server.
 - **Persona, memory and usage.** Edit who it is, see and fix what it remembers, and track tokens and cost.
+  Memory also shows profile/provider status and pending changes, with native approval/rejection and
+  review settings. Saved notes apply to new sessions; forgetting a note does not erase chat history.
 - **A pet.** Give your agent an animated face from the [petdex](https://petdex.dev) gallery. It waves when
   a reply lands, runs while it works and waits when it needs you, on every phone paired with the bot.
   Its pet and color follow it through Home, chats, the bot switcher and the Inbox; small list avatars stay still.
@@ -75,6 +77,8 @@ The [README](../README.md#what-it-does) has the overview. This page lists everyt
 - **Goals.** Give a chat an outcome and Hermes keeps working on it, turn after turn, until its judge says
   it's done. Add requirements, pause it, and follow its progress in the chat.
 - **Skills, tools and MCP servers.** Turn skills on and off, read them, and install Hermes's official ones.
+  Add custom skills by pasting instructions or using a repository/identifier; add custom MCP URL/command
+  connections and plugin/Python tools through explicit review. See [custom abilities](CUSTOM_ABILITIES.md).
   Pick the tools it can use and how risky commands get approved. Connect other apps from Hermes's list of
   approved MCP servers and sign in to them from the phone.
 

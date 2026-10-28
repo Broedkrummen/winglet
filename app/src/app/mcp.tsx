@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Linking, Text, View } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { JobSheet } from '../components/JobSheet';
+import { CustomMcp } from '../features/abilities/CustomMcp';
 import { CheckCircle2, CircleAlert, ExternalLink, Plug, RefreshCw, Search, Trash2 } from '../components/icons';
 import { Screen } from '../components/Screen';
 import { withSelectedServer } from '../components/ServerScreen';
@@ -76,6 +77,7 @@ function McpScreen() {
 
   return (
     <Screen title="MCP servers" onRefresh={load}>
+      <CustomMcp server={server} onDone={load} />
       {error && info ? <Text style={s.error}>{error}</Text> : null}
       {!info ? (error ? <LoadError message={error} onRetry={load} /> : (
         <View style={{ gap: 12, marginTop: 20 }}>{[0, 1].map((i) => <Skeleton key={i} height={64} radius={16} />)}</View>

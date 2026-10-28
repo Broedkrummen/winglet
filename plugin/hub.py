@@ -146,6 +146,7 @@ ROUTE_POLICY = {
     "h_models": "owner", "h_providers": "owner", "h_identity": "owner", "h_memory": "owner", "h_usage": "owner",
     "h_model_default": "owner_signed", "h_provider_key": "owner_signed", "h_provider_key_delete": "owner_signed",
     "h_identity_put": "owner_signed", "h_memory_edit": "owner_signed",
+    "h_memory_status": "owner", "h_memory_review": "owner_signed",
     "h_bots": "owner", "h_bot_create": "owner_signed", "h_bot_rename": "owner_signed", "h_bot_delete": "owner_signed",
     "h_pet": "device", "h_pet_sheet": "public", "h_pet_thumb": "public", "h_pets": "owner", "h_pet_catalog": "owner",
     "h_pet_display": "owner_signed", "h_pet_adopt": "owner_signed", "h_pet_remove": "owner_signed",
@@ -158,6 +159,7 @@ ROUTE_POLICY = {
     "h_skills": "owner", "h_skill_catalog": "owner", "h_skill_content": "owner", "h_toolsets": "owner",
     "h_mcp": "owner", "h_mcp_catalog": "owner", "h_mcp_sign_in_status": "owner", "h_mcp_callback": "public",
     "h_skill_toggle": "owner_signed", "h_skill_install": "owner_signed", "h_skill_uninstall": "owner_signed",
+    "h_ability_preview": "owner_signed", "h_ability_add": "owner_signed", "h_mcp_custom": "owner_signed",
     "h_toolset_toggle": "owner_signed", "h_approvals": "owner_signed", "h_member_tools": "owner_signed",
     "h_mcp_install": "owner_signed", "h_mcp_toggle": "owner_signed", "h_mcp_remove": "owner_signed",
     "h_mcp_test": "owner_signed", "h_mcp_reload": "owner_signed", "h_mcp_sign_in": "owner_signed",
@@ -415,6 +417,8 @@ class Hub:
         r.add_get("/api/identity", self.h_identity)
         r.add_put("/api/identity", self.h_identity_put)
         r.add_get("/api/memory", self.h_memory)
+        r.add_get("/api/memory/status", self.h_memory_status)
+        r.add_post("/api/memory/review", self.h_memory_review)
         r.add_post("/api/memory", self.h_memory_edit)
         r.add_get("/api/usage", self.h_usage)
         r.add_get("/api/bots", self.h_bots)
@@ -449,6 +453,9 @@ class Hub:
         r.add_get("/api/skills", self.h_skills)
         r.add_get("/api/skills/catalog", self.h_skill_catalog)
         r.add_post("/api/skills/install", self.h_skill_install)
+        r.add_post("/api/abilities/preview", self.h_ability_preview)
+        r.add_post("/api/abilities/add", self.h_ability_add)
+        r.add_post("/api/mcp/custom", self.h_mcp_custom)
         r.add_get("/api/skills/{name}/content", self.h_skill_content)
         r.add_put("/api/skills/{name}", self.h_skill_toggle)
         r.add_delete("/api/skills/{name}", self.h_skill_uninstall)
@@ -2524,6 +2531,21 @@ class Hub:
         self._require(request)
         return _json(await self._call(self._need_hermes().memory))
 
+    async def h_memory_status(self, request):
+        self._require(request)
+        fn = getattr(self._need_hermes(), "memory_status", None)
+        if fn is None:
+            return _error(404, "Update Hermes and Winglet on the server for memory status and review.")
+        return _json(await self._call(fn))
+
+    async def h_memory_review(self, request):
+        device = self._require(request)
+        body = await self._body(request)
+        result = await self._call(self._need_hermes().review_memory,
+                                  str(body.get("id") or ""), str(body.get("decision") or ""))
+        self.audit("memory.review", device, "reviewed a pending memory change")
+        return _json(result)
+
     async def h_memory_edit(self, request: web.Request) -> web.Response:
         device = self._require(request)
         body = await self._body(request)
@@ -3222,6 +3244,66 @@ class Hub:
         self._spawn(self._follow_action(job["id"], lambda: h.start_skill_install(identifier), h.finish_skill_action,
                                         f"{name} is installed.", f"{name} didn't install. Its output is below."))
         return _json({"job": job}, status=202)
+
+    async def h_ability_preview(self, request):
+        device = self._require(request)
+        body = await self._body(request)
+        fn = getattr(self._need_hermes(), "prepare_custom_ability", None)
+        if fn is None:
+            return _error(404, "Update Winglet on the server for custom additions.")
+        return _json(await self._call(fn, str(body.get("kind") or ""), body, device["id"]))
+
+    async def h_ability_add(self, request):
+        device = self._require(request)
+        body = await self._body(request)
+        if body.get("consent") is not True:
+            return _error(400, "Review the addition and confirm installation first.")
+        job = await self._begin_job(request, device, "ability_install", {"message": "Installing reviewed addition…"}, body=body)
+        if isinstance(job, web.Response):
+            return job
+        self.audit("ability.install", device, "confirmed a custom addition")
+        self._spawn(self._install_custom_ability(job["id"], device["id"], body))
+        return _json({"job": job}, status=202)
+
+    async def _install_custom_ability(self, job_id, device_id, body):
+        h = self._need_hermes()
+        try:
+            device = self.store.get_device(device_id)
+            if not device or device.get("role") != "owner":
+                raise ValueError("Owner access was removed before installation.")
+            result = await self._call(h.apply_custom_ability, str(body.get("token") or ""), device_id,
+                                      body.get("dependencies") is True, body.get("enable") is True)
+            if result.get("action"):
+                async def started():
+                    return result["action"]
+                await self._follow_action(job_id, started, h.finish_skill_action,
+                                          "Skill installed. Available to new sessions.", "The skill did not install. Check the scan output.")
+            else:
+                await self._finish_job(job_id, "succeeded", result.get("message") or "Installed.")
+        except h.HermesRefused as exc:
+            await self._finish_job(job_id, "failed", _clip(str(exc), 500))
+        except Exception:
+            logger.warning("[winglet] custom addition failed", exc_info=True)
+            await self._finish_job(job_id, "failed", "Could not install. Review again; check Hermes compatibility, scan results and existing plugin names.")
+
+    async def h_mcp_custom(self, request):
+        device = self._require(request)
+        refused = self._secrets_refused(device)
+        if refused is not None:
+            return refused
+        body = await self._body(request)
+        if set(body) - {"sealed"}:
+            return _error(400, "Custom MCP configuration must be sealed to this server.")
+        try:
+            data = self.keys.unseal_json(str(body.get("sealed") or ""), "mcp-custom", device["id"])
+        except (keys.SealError, ValueError):
+            return _error(400, "Could not open the MCP configuration. Reconnect and try again.")
+        if len(json.dumps(data)) > 32_000:
+            return _error(400, "MCP configuration is too large.")
+        result = await self._call(self._need_hermes().add_custom_mcp, data)
+        self.mcp_changed = True
+        self.audit("mcp.add", device, "added a custom server")
+        return _json(result)
 
     async def h_skill_uninstall(self, request: web.Request) -> web.Response:
         device = self._require(request)

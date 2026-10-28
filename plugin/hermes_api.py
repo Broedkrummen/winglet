@@ -13,6 +13,7 @@ import functools
 import hashlib
 import json
 import logging
+import threading
 from typing import List, Optional
 
 logger = logging.getLogger(__name__)
@@ -522,6 +523,60 @@ def edit_memory(action: str, target: str, entry: str = "", content: str = "") ->
     if not result.get("success", False):
         raise HermesRefused(str(result.get("error") or "Hermes didn't accept that change."))
     return memory()
+
+
+@_scoped
+def memory_pending() -> dict:
+    try:
+        from tools import write_approval
+        from tools.memory_tool import apply_memory_pending
+    except ImportError:
+        return {"available": False, "entries": []}
+    fields = ("id", "action", "summary", "origin", "created_at", "payload")
+    return {"available": True, "entries": [{k: row.get(k) for k in fields}
+            for row in write_approval.list_pending("memory")]}
+
+
+_memory_review_lock = threading.RLock()
+
+
+@_scoped
+def review_memory(pending_id: str, decision: str) -> dict:
+    import re
+    if not re.fullmatch(r"[0-9a-f]{8}", pending_id) or decision not in ("approve", "reject"):
+        raise HermesRefused("Invalid memory review request.")
+    try:
+        from tools import write_approval
+        from tools.memory_tool import apply_memory_pending
+    except ImportError as exc:
+        raise HermesUnavailable("memory review unavailable") from exc
+    with _memory_review_lock:
+        record = write_approval.get_pending("memory", pending_id)
+        if not record:
+            raise HermesRefused("This proposal was already handled. Refresh the list.")
+        if decision == "approve":
+            result = apply_memory_pending(record.get("payload") or {}, _memory_store())
+            if not result.get("success"):
+                raise HermesRefused(str(result.get("error") or "Hermes refused this proposal."))
+        if not write_approval.discard_pending("memory", pending_id):
+            raise HermesRefused("The proposal could not be cleared. Refresh before trying again.")
+    return {"ok": True}
+
+
+async def memory_status() -> dict:
+    providers = {"available": False, "active": "", "providers": []}
+    try:
+        fn = getattr(_router("ops"), "get_memory_status", None)
+        if fn is not None:
+            data = await _route(fn)
+            fields = ("name", "available", "configured", "status")
+            providers = {"available": True, "active": data.get("active") or "",
+                         "providers": [{k: p.get(k) for k in fields} for p in data.get("providers") or []]}
+    except HermesUnavailable:
+        pass
+    import asyncio
+    pending = await asyncio.to_thread(memory_pending)
+    return {"profile": _BOT.get() or "default", "provider": providers, "pending": pending}
 
 
 @_scoped
@@ -1265,6 +1320,176 @@ async def start_skill_install(identifier: str) -> str:
         raise HermesRefused("Only Hermes's official skills can be installed from the app.")
     started = await _route(_router("skills").install_skill_hub, _models().SkillInstallRequest(identifier=identifier))
     return str(started["name"])
+
+
+_ability_previews = {}
+_ability_preview_lock = threading.RLock()
+
+
+async def prepare_custom_ability(kind: str, data: dict, device_id: str) -> dict:
+    import asyncio
+    import secrets
+    import time
+    if kind in ("skill_create", "skill_install"):
+        methods = ("create_skill",) if kind == "skill_create" else ("preview_skill_hub", "scan_skill_hub", "install_skill_hub")
+        model = "SkillCreate" if kind == "skill_create" else "SkillInstallRequest"
+        if not all(callable(getattr(_router("skills"), method, None)) for method in methods) or not hasattr(_models(), model):
+            raise HermesUnavailable("custom skills unavailable")
+    if kind == "skill_create":
+        name, content = str(data.get("name") or ""), str(data.get("content") or "")
+        import re
+        if not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", name) or not content.strip() or len(content.encode()) > 100_000:
+            raise HermesRefused("Provide a simple skill name and SKILL.md content up to 100 KB.")
+        # Construct the native model before offering an install confirmation.
+        _models().SkillCreate(name=name, content=content, category=str(data.get("category") or "") or None)
+        preview = {"name": name, "instructions": content}
+        saved = {"name": name, "content": content, "category": str(data.get("category") or "")}
+    elif kind == "skill_install":
+        identifier = str(data.get("identifier") or "").strip()
+        if not identifier or len(identifier) > 2048 or identifier.startswith("-"):
+            raise HermesRefused("Provide a skill identifier or repository URL.")
+        preview = await _route(_router("skills").preview_skill_hub, identifier)
+        scan = await _route(_router("skills").scan_skill_hub, identifier)
+        preview = {"source": identifier, "skill": preview, "scan": scan}
+        saved = {"identifier": identifier}
+    elif kind in ("tool_repository", "tool_python"):
+        preview, saved = await asyncio.to_thread(_prepare_custom_tool, kind, data)
+    else:
+        raise HermesRefused("Unknown addition type.")
+    with _ability_preview_lock:
+        now = time.monotonic()
+        for key in list(_ability_previews):
+            if _ability_previews[key]["expires"] < now:
+                del _ability_previews[key]
+        if len(_ability_previews) >= 32:
+            raise HermesRefused("Too many open previews. Try again after an earlier preview expires.")
+        token = secrets.token_urlsafe(24)
+        _ability_previews[token] = {"kind": kind, "data": saved, "bot": _BOT.get(), "device": device_id, "expires": now + 900}
+    return {"token": token, "kind": kind, "preview": preview, "profile": _BOT.get() or "default"}
+
+
+@_scoped
+def _prepare_custom_tool(kind, data):
+    import tempfile
+    from pathlib import Path
+    from .ability_inputs import tool_module
+    try:
+        from hermes_cli import plugins_cmd as pc
+    except ImportError as exc:
+        raise HermesUnavailable("custom plugins unavailable") from exc
+    needed = ("_plugins_dir", "_find_plugin_entry", "_sanitize_plugin_name", "_scan_plugin_tree",
+              "dashboard_install_plugin", "dashboard_set_agent_plugin_enabled")
+    if not all(callable(getattr(pc, key, None)) for key in needed):
+        raise HermesUnavailable("custom plugins unavailable")
+    if kind == "tool_python":
+        name, content = str(data.get("name") or ""), str(data.get("content") or "")
+        try:
+            manifest = tool_module(name, content)
+        except ValueError as exc:
+            raise HermesRefused(str(exc)) from exc
+        if (pc._plugins_dir() / name).exists() or pc._find_plugin_entry(name):
+            raise HermesRefused("That plugin name is already installed. Choose another name.")
+        return {"manifest": manifest, "code": content, "dependencies": []}, {"name": name, "content": content}
+    identifier = str(data.get("identifier") or "").strip()
+    # Private/authenticated repository URLs must not leak into previews or action logs.
+    from urllib.parse import urlsplit
+    import re
+    if not (re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", identifier) or
+            identifier.startswith("https://") and urlsplit(identifier).hostname and not urlsplit(identifier).username
+            and not urlsplit(identifier).query and not urlsplit(identifier).fragment):
+        raise HermesRefused("Use owner/repository or a public HTTPS repository URL without credentials.")
+    try:
+        url, subdir = pc._resolve_git_url(identifier)
+        with tempfile.TemporaryDirectory(prefix="winglet-plugin-review-") as tmp:
+            path = Path(tmp) / "source"
+            revision = pc._clone_plugin_repo(path, url, None, subdir)
+            root = pc._resolve_subdir_within(path, subdir) if subdir else path
+            manifest = pc._read_manifest_for_install(root)
+            name = str(manifest.get("name") or "")
+            target = pc._sanitize_plugin_name(name, pc._plugins_dir())
+            if target.exists() or pc._find_plugin_entry(name):
+                raise HermesRefused("That plugin is already installed. This flow never overwrites it.")
+            dependencies = pc._python_dependency_summary(root, [])
+            preview = {"source": identifier, "revision": revision, "name": name,
+                       "description": str(manifest.get("description") or ""),
+                       "tools": manifest.get("provides_tools") or [], "dependencies": dependencies,
+                       "node_dependencies": (root / "package.json").is_file()}
+        return preview, {"identifier": identifier, "ref": revision, "node_dependencies": preview["node_dependencies"]}
+    except HermesRefused:
+        raise
+    except Exception as exc:
+        logger.debug("[winglet] plugin preview failed", exc_info=True)
+        raise HermesRefused("Could not preview this repository. Check its URL, plugin manifest and server compatibility.") from exc
+
+
+async def apply_custom_ability(token: str, device_id: str, dependencies: bool, enable: bool) -> dict:
+    import asyncio
+    import time
+    with _ability_preview_lock:
+        item = _ability_previews.get(token)
+        if not item or item["bot"] != _BOT.get() or item["device"] != device_id or item["expires"] < time.monotonic():
+            raise HermesRefused("This preview expired or belongs to another bot/device. Review again.")
+        del _ability_previews[token]
+    kind, data = item["kind"], item["data"]
+    if kind == "skill_create":
+        await _route(_router("skills").create_skill, _models().SkillCreate(**data))
+        return {"ok": True, "message": "Skill created. Available to new sessions."}
+    if kind == "skill_install":
+        started = await _route(_router("skills").install_skill_hub, _models().SkillInstallRequest(**data))
+        return {"action": str(started["name"])}
+    return await asyncio.to_thread(_apply_custom_tool, kind, data, dependencies, enable)
+
+
+@_scoped
+def _apply_custom_tool(kind, data, dependencies, enable):
+    from hermes_cli import plugins_cmd as pc
+    if kind == "tool_repository":
+        result = pc.dashboard_install_plugin(data["identifier"], force=False, enable=enable,
+                                              ref=data["ref"], assume_deps_consent=dependencies)
+        if not result.get("ok"):
+            raise HermesRefused(str(result.get("error") or "Hermes refused the plugin install."))
+    else:
+        from .ability_inputs import tool_module
+        import tempfile
+        import yaml
+        from pathlib import Path
+        manifest = tool_module(data["name"], data["content"])
+        plugins = pc._plugins_dir()
+        target = pc._sanitize_plugin_name(data["name"], plugins)
+        if target.exists() or pc._find_plugin_entry(data["name"]):
+            raise HermesRefused("That plugin name is already installed.")
+        with tempfile.TemporaryDirectory(prefix="winglet-tool-") as tmp:
+            root = Path(tmp) / "module"
+            root.mkdir()
+            (root / "__init__.py").write_text(data["content"], encoding="utf-8")
+            (root / "plugin.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+            pc._scan_plugin_tree(root, "Winglet Python upload", force=False)
+            from pm.client import sync_venv
+            from pm.plugin_inputs import StagedUpdate
+            metadata = pc._read_install_metadata()
+            # The native publisher checks absence under its install lock, including concurrent installs.
+            sync_venv(explicit=True, plugins=StagedUpdate({"staged": str(root.resolve()), "target": str(target.absolute()),
+                      "old_metadata": metadata, "new_metadata": metadata, "target_digest": None}))
+        result = pc.dashboard_set_agent_plugin_enabled(data["name"], enabled=enable)
+        if not result.get("ok"):
+            raise HermesRefused(str(result.get("error") or "Tool installed but enable was refused. Check Hermes plugins."))
+    return {"ok": True, "message": "Plugin installed." +
+            (" Installed disabled; enable it in Hermes when ready." if not enable else
+             " Restart Hermes to activate it." if result.get("restart_required") else " Enabled.")}
+
+
+async def add_custom_mcp(data: dict) -> dict:
+    # No caller-supplied profile may escape the selected bot's scope.
+    allowed = ("name", "url", "command", "args", "env", "auth", "bearer_token")
+    try:
+        fn = _router("mcp").add_mcp_server
+        body = _models().MCPServerCreate(**{k: data[k] for k in allowed if k in data})
+    except AttributeError as exc:
+        raise HermesUnavailable("custom MCP unavailable") from exc
+    except ValueError as exc:
+        raise HermesRefused("Invalid MCP configuration. Check name, URL/command, arguments and environment.") from exc
+    await _route(fn, body)
+    return {"ok": True, "needs_reload": True}
 
 
 async def start_skill_uninstall(name: str) -> str:

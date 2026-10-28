@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { Plug, ShieldAlert, TriangleAlert } from '../components/icons';
+import { CustomAbility } from '../features/abilities/CustomAbility';
 import { Screen } from '../components/Screen';
 import { withSelectedServer } from '../components/ServerScreen';
 import { Sheet } from '../components/Sheet';
@@ -61,6 +62,7 @@ function ToolsScreen() {
   return (
     <Screen title="Tools"
       onRefresh={load}>
+      <CustomAbility server={server} type="tool" onDone={load} />
       {error && info ? <Text style={s.error}>{error}</Text> : null}
       {!info ? (error ? <LoadError message={error} onRetry={load} /> : (
         <View style={{ gap: 12, marginTop: 20 }}>{[0, 1, 2].map((i) => <Skeleton key={i} height={72} radius={16} />)}</View>

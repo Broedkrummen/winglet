@@ -259,7 +259,7 @@ export type PauseState = { reason: string | null; engaged_at: string | null } | 
 /** A restart, update or install, which may outlive the server process that started it. */
 export type Job = {
   id: string;
-  kind: 'restart' | 'hermes_update' | 'winglet_update' | 'skill_install' | 'skill_uninstall' | 'mcp_install' | 'pet_install';
+  kind: 'restart' | 'hermes_update' | 'winglet_update' | 'skill_install' | 'skill_uninstall' | 'mcp_install' | 'pet_install' | 'ability_install';
   state: 'running' | 'succeeded' | 'failed' | 'unknown';
   device_id: string;
   detail: {

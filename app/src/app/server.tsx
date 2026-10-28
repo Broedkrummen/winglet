@@ -24,6 +24,7 @@ type Confirm = 'restart' | 'hermes' | 'winglet';
 const JOB_LABEL: Record<Job['kind'], string> = {
   restart: 'Restart', hermes_update: 'Hermes update', winglet_update: 'Winglet update',
   skill_install: 'Skill install', skill_uninstall: 'Skill removal', mcp_install: 'MCP server install',
+  ability_install: 'Custom addition',
   pet_install: 'Pet install',
 };
 

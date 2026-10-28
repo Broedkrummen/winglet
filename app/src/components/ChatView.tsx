@@ -142,7 +142,10 @@ export function ChatView({ server, chatId, showBack, embedded, landing }: { serv
     setRevealed((current) => current[key] ? current : { ...current, [key]: true });
     setSendCount((n) => n + 1);
   };
-  const composing = !simple && !!landing && (!revealed[turnKey] || !!landing.action);
+  const composing = !!landing && (!!landing.action || (!simple && !revealed[turnKey]));
+  useEffect(() => {
+    if (simple && landing && !landing.action) setRevealed((current) => current[turnKey] ? current : { ...current, [turnKey]: true });
+  }, [simple, turnKey, !!landing, !!landing?.action]);
 
   useEffect(() => {
     if (Platform.OS === 'web') return;

@@ -7,6 +7,7 @@ import { chatKey } from '../src/lib/chatOrganization.ts';
 
 const fallback: any = new Proxy(function () {}, { get: (_t, key) => key === 'then' ? undefined : key === Symbol.toPrimitive ? () => 0 : fallback, apply: () => fallback });
 function harness() {
+  let view = 'full';
   let cursor = 0;
   const hooks: any[] = [];
   const jsx = (type: any, props: any) => ({ type, props });
@@ -22,6 +23,7 @@ function harness() {
     'react-native-safe-area-context': { useSafeAreaInsets: () => ({ top: 0, bottom: 0 }) },
     '../lib/themeContext': { makeStyles: () => () => fallback, useTheme: () => fallback },
     '../lib/motion': { useReducedMotion: () => true },
+    '../lib/prefs': { usePrefs: (select: any) => select({ prefs: { view } }) },
     '../lib/chatOrganization': { chatKey },
     '../lib/store': { useApp: Object.assign((select: any) => select(st), { getState: () => st }), useServerState: () => runtime, isTyping: () => false, homeChat: () => 'general' },
     '../lib/connection': { connectionView: () => ({ kind: 'online' }) },
@@ -41,7 +43,7 @@ function harness() {
       landing: { title: 'Atlas', dock: (props: any) => jsx('Dock', props), action,
         prepareChat: chatId === 'local:new-chat' ? async () => 'fresh' : undefined } }).props.children(keyboard);
   };
-  return { render, runtime };
+  return { render, runtime, setView: (next: string) => { view = next; } };
 }
 function find(tree: any, match: (node: any) => boolean): any {
   if (!tree || typeof tree !== 'object') return;
@@ -61,6 +63,18 @@ test('first send reveals all previous history in the same chat view and keeps or
   assert.equal(type(tree, 'MessageList').props.allowHistory, undefined);
   assert.equal(type(tree, 'Composer').props.chatId, 'general');
   assert.equal(type(tree, 'Dock'), undefined, 'conversation has no carousel subtree to draw over messages');
+});
+
+test('Simple immediately shows the conversation without the dock or decorative pet', () => {
+  const h = harness(); h.setView('simple');
+  const tree = h.render();
+  assert.deepEqual(type(tree, 'MessageList').props.messages.map((message: any) => message.id), ['old']);
+  assert.equal(type(tree, 'Dock'), undefined);
+  assert.equal(type(tree, 'ChatPet'), undefined);
+  assert.equal(type(tree, 'Composer').props.chatId, 'general');
+  const action = h.render('general', false, 'Add button');
+  assert.equal(type(action, 'Composer'), undefined);
+  assert.equal(type(action, 'MessageList'), undefined);
 });
 
 test('focusing the composer commits the selected pet and hides the dock; blur restores the unused landing', () => {

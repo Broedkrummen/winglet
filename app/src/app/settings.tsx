@@ -10,7 +10,7 @@ import { Footnote, ListGroup, ListRow, SectionHeader, Segmented, Tap, Toggle } f
 import { lockAvailable, unlock } from '../lib/appLock';
 import { useAppUpdate } from '../lib/appUpdateCheck';
 import { connectionView } from '../lib/connection';
-import { useApp, useServerState } from '../lib/store';
+import { isOwner, useApp, useServerState } from '../lib/store';
 import { usePrefs } from '../lib/prefs';
 import { ACCENTS, WIDE_BREAKPOINT } from '../lib/theme';
 import { makeStyles, useTheme } from '../lib/themeContext';
@@ -93,6 +93,15 @@ export default function SettingsScreen() {
       </ListGroup>
     </> : null}
 
+    {rt?.info?.features?.abilities && isOwner(rt) ? <>
+      <SectionHeader title="Agent abilities" />
+      <ListGroup>
+        <ListRow title="Skills" subtitle="Manage and add custom skills" onPress={() => router.push('/skills')} />
+        <ListRow title="MCP" subtitle="Connect apps and custom servers" onPress={() => router.push('/mcp')} />
+        <ListRow title="Tools" subtitle="Manage toolsets and add custom tools" onPress={() => router.push('/tools')} />
+        <ListRow title="Memory" subtitle="Notes, providers and pending changes" onPress={() => router.push('/memory')} />
+      </ListGroup>
+    </> : null}
     <SectionHeader title="Bots" />
     <ListGroup>
       <ListRow title="Your bots" value={String(servers.length)} icon={<Smartphone />} onPress={() => router.push('/bots')} />

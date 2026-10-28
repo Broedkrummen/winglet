@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { JobSheet } from '../components/JobSheet';
+import { CustomAbility } from '../features/abilities/CustomAbility';
 import { Download, Search, Trash2 } from '../components/icons';
 import { Markdown } from '../components/Markdown';
 import { Screen } from '../components/Screen';
@@ -76,6 +77,7 @@ function SkillsScreen() {
   return (
     <Screen title="Skills"
       onRefresh={load}>
+      <CustomAbility server={server} type="skill" onDone={load} />
       <View style={{ marginTop: 18, gap: 12 }}>
         <Segmented label="Show" value={tab} onChange={setTab} options={[
           { value: 'installed', label: skills ? `Installed (${skills.length})` : 'Installed' },

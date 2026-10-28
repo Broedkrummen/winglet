@@ -13,7 +13,7 @@ Implemented code is not proof of validation on every physical device or supporte
 ## Approved work, in order
 
 The owner approved this ordered backlog in Codex: “Do them from the top, 1-by-1, go !”.
-Implementation is collected in [PR #2](https://github.com/Broedkrummen/winglet/pull/2), pending owner review/merge.
+The original backlog was merged by the owner in [PR #2](https://github.com/Broedkrummen/winglet/pull/2).
 
 | Order | Issue | Scope |
 |---|---|---|
@@ -26,9 +26,21 @@ Implementation is collected in [PR #2](https://github.com/Broedkrummen/winglet/p
 | 7 | [#8](https://github.com/Broedkrummen/winglet/issues/8) | This active issue-based roadmap and approval process |
 | 8 | [#9](https://github.com/Broedkrummen/winglet/issues/9) | Locale-independent schedule tests |
 
-All eight items are implemented on the PR branch and await final review/merge.
-Issue comments record tests, evidence and limits. Open issues remain open until the reviewed PR merges;
-an implementation on a branch is not a published release.
+All eight original items are merged. Issue comments record tests, evidence and limits; a merge is not
+a published release.
+
+## Approved follow-up
+
+[PR #12](https://github.com/Broedkrummen/winglet/pull/12) implements the owner's additional requests,
+pending owner review and merge:
+
+- [#10](https://github.com/Broedkrummen/winglet/issues/10): custom skill creation/source installs,
+  custom MCP connections and plugin/Python tools, with Settings entry points and explicit consent.
+- [#11](https://github.com/Broedkrummen/winglet/issues/11): Hermes memory source/profile status,
+  pending-write review, background-review configuration and clear save/forget semantics.
+
+See [usage and limits](CUSTOM_ABILITIES.md) and [verification evidence](agent-handoffs/custom-abilities-memory.md).
+Open follow-up issues remain open until the reviewed PR merges.
 
 ## Simple view
 

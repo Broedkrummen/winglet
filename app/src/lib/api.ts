@@ -168,7 +168,7 @@ function needsVerify(server: Server, status: number, data?: any): ApiError {
 }
 
 /** An owner action: signed with this phone's key, so a leaked token alone can't do it. */
-export async function signedApi<T>(server: Server, method: 'POST' | 'PATCH' | 'PUT' | 'DELETE', path: string, data?: unknown): Promise<T> {
+export async function signedApi<T>(server: Server, method: 'POST' | 'PATCH' | 'PUT' | 'DELETE', path: string, data?: unknown, timeoutMs?: number): Promise<T> {
   const secret = await getItem(keyOf(server));
   if (!secret) throw needsVerify(server, 403);
   const body = data === undefined ? '' : JSON.stringify(data);
@@ -177,6 +177,7 @@ export async function signedApi<T>(server: Server, method: 'POST' | 'PATCH' | 'P
     return await request<T>(`${server.url}${full}`, {
       method, ...(body ? { body } : {}), token: server.token,
       headers: signedHeaders(secret, server.deviceId, method, full, body),
+      timeoutMs,
     });
   } catch (e) {
     if (e instanceof ApiError && e.data?.needs === 'verify') throw needsVerify(server, e.status, e.data);

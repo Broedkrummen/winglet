@@ -8,6 +8,7 @@ import { Sheet } from '../components/Sheet';
 import { Button, ConfirmButton, Field, Footnote, ListGroup, ListRow, LoadError, SectionHeader, Skeleton } from '../components/ui';
 import { api, signedApi } from '../lib/api';
 import { haptic } from '../lib/haptics';
+import { MemoryStatus } from '../features/memory/MemoryStatus';
 import { spring, useReducedMotion } from '../lib/motion';
 import { useApp } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
@@ -29,6 +30,8 @@ function MemoryScreen() {
   const [data, setData] = useState<Store | null>(null);
   const [edit, setEdit] = useState<{ target: Target; entry?: string } | null>(null);
   const [error, setError] = useState('');
+  const [revision, setRevision] = useState(0);
+  const [saved, setSaved] = useState(false);
 
   const load = () => {
     if (!server) return;
@@ -38,14 +41,16 @@ function MemoryScreen() {
 
   return (
     <Screen title="Memory"
-      onRefresh={load}>
+      onRefresh={() => { setRevision(n => n + 1); return load(); }}>
+      {server ? <MemoryStatus server={server} revision={revision} onReviewed={() => {void load(); setSaved(true);}} /> : null}
+      {saved ? <Footnote>Saved to Hermes. Existing sessions may keep their earlier memory snapshot; new sessions receive the saved notes.</Footnote> : null}
       {error && data ? <Text style={s.error}>{error}</Text> : null}
       {!data ? (error ? <LoadError message={error} onRetry={load} />
         : <View style={{ gap: 10, marginTop: 12 }}>{[0, 1, 2].map((i) => <Skeleton key={i} height={64} radius={t.radius.lg} />)}</View>)
         : (['user', 'memory'] as Target[]).map((target, i) => (
           <Section key={target} index={i} target={target} store={data[target]} onEdit={(entry) => setEdit({ target, entry })} />
         ))}
-      <EditSheet edit={edit} onClose={() => setEdit(null)} onSaved={(next) => { setData(next); setEdit(null); }} />
+      <EditSheet edit={edit} onClose={() => setEdit(null)} onSaved={(next) => { setData(next); setEdit(null); setSaved(true); setRevision(n => n + 1); }} />
     </Screen>
   );
 }
@@ -96,7 +101,7 @@ function EditSheet({ edit, onClose, onSaved }: { edit: { target: Target; entry?:
   const e = edit ?? last;
 
   const run = async (body: object) => {
-    if (!server) return;
+    if (!server || busy) return;
     setBusy(true);
     setError('');
     try {
@@ -113,11 +118,14 @@ function EditSheet({ edit, onClose, onSaved }: { edit: { target: Target; entry?:
   return (
     <Sheet visible={!!edit} onClose={onClose} title={e.entry ? 'Edit memory' : `Add to ${TITLES[e.target].title.toLowerCase()}`} scrollable>
       <View style={{ gap: 14, paddingHorizontal: 4 }}>
-        <Field value={text} onChangeText={setText} multiline style={{ minHeight: 100, textAlignVertical: 'top' }} autoFocus={!e.entry}
+        <Field label="Memory content" value={text} editable={!busy} onChangeText={setText} multiline style={{ minHeight: 100, textAlignVertical: 'top' }} autoFocus={!e.entry}
           placeholder={e.target === 'user' ? 'Prefers short answers in the morning' : 'The home server runs Ubuntu 24.04'} />
-        <Button title="Save" loading={busy} disabled={!text.trim() || text.trim() === e.entry}
+        <Button title="Save" loading={busy} disabled={busy || !text.trim() || text.trim() === e.entry}
           onPress={() => run(e.entry ? { action: 'replace', target: e.target, entry: e.entry, content: text } : { action: 'add', target: e.target, content: text })} />
-        {e.entry ? <ConfirmButton title="Forget this" onConfirm={() => run({ action: 'remove', target: e.target, entry: e.entry })} /> : null}
+        {e.entry ? <>
+          <Footnote>Forget removes this built-in note. It does not erase past chats or an external memory provider’s records.</Footnote>
+          <ConfirmButton title="Forget this" loading={busy} onConfirm={() => run({ action: 'remove', target: e.target, entry: e.entry })} />
+        </> : null}
         {error ? <Text style={[s.note, { color: t.colors.danger, textAlign: 'center' }]}>{error}</Text> : null}
       </View>
     </Sheet>

@@ -119,6 +119,10 @@ class Forbidden(PermissionError):
 #   signed        any verified device, with a signed request
 #   owner_signed  an owner's verified device, with a signed request: every control action
 ROUTE_POLICY = {
+    "h_user_sync_groups": "owner", "h_user_sync_records": "owner", "h_user_sync_read": "owner",
+    "h_user_sync_create": "owner_signed", "h_user_sync_invite": "owner_signed",
+    "h_user_sync_join": "owner_signed", "h_user_sync_revoke": "owner_signed", "h_user_sync_write": "owner_signed",
+    "h_user_sync_submit": "owner_signed",
     "h_wear_links": "device", "h_wear_link_create": "signed", "h_wear_link_delete": "signed", "h_wear_relay": "public",
     "h_encrypted_push_get": "device", "h_encrypted_push_put": "signed", "h_encrypted_push_delete": "signed",
     "h_phone_tools": "device", "h_phone_tools_put": "signed", "h_phone_tools_revoke": "signed",
@@ -233,6 +237,8 @@ class Hub:
                  ntfy_server: str = "https://ntfy.sh", http_client: Any = None,
                  media_dir: Optional[Path] = None):
         self.store = store
+        from .user_sync import UserSync
+        self.user_sync = UserSync(store)
         from .wear import WearRelay
         self.wear = WearRelay(self)
         self.web_root = web_root
@@ -486,6 +492,8 @@ class Hub:
             register_routine_history(app, self)
         from . import context_insights_routes
         context_insights_routes.register_routes(app)
+        from . import user_sync_routes
+        user_sync_routes.register_routes(app)
         r.add_get("/{tail:.*}", self.h_static)
         app.on_startup.append(self._start_janitor)
         app.on_shutdown.append(self._close_sockets)

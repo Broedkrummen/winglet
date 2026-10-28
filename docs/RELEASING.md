@@ -5,6 +5,8 @@
 This fork publishes from [Broedkrummen/winglet](https://github.com/Broedkrummen/winglet).
 Its Android package and reserved iOS bundle identifier are `io.github.broedkrummen.winglet`.
 Android development builds use `io.github.broedkrummen.winglet.dev`.
+The Wear OS companion uses the same production/development package IDs: Google's Data Layer also
+requires matching phone/watch signing certificates. See [the watch build guide](../wear/README.md).
 
 The fork installs separately from upstream Winglet (`io.github.vikasrp24.winglet`). It does not
 replace, migrate or erase upstream pairings, messages or cache. Pair the fork with your server

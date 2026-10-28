@@ -20,6 +20,11 @@ test('this fork checks its own releases and installs beside upstream', () => {
   const config = JSON.parse(readFileSync(new URL('../app.json', import.meta.url), 'utf8')).expo;
   assert.equal(config.android.package, 'io.github.broedkrummen.winglet');
   assert.equal(config.ios.bundleIdentifier, config.android.package);
+  const watch = readFileSync(new URL('../../wear/app/build.gradle', import.meta.url), 'utf8');
+  assert.ok(watch.includes(`applicationId '${config.android.package}' + (dev ? '.dev' : '')`),
+    'phone and watch need the same application ID for the Data Layer');
+  const workflow = readFileSync(new URL('../../.github/workflows/wear.yml', import.meta.url), 'utf8');
+  assert.ok(workflow.includes(`package: name='${config.android.package}.dev'`));
   const module: any = { exports: {} };
   vm.runInNewContext(readFileSync(new URL('../app.config.js', import.meta.url), 'utf8'), { module, process: { env: { WINGLET_DEV: '1' } } });
   assert.equal(module.exports({ config }).android.package, 'io.github.broedkrummen.winglet.dev');

@@ -32,7 +32,7 @@ cd wear
 For a local paired Dev test, pass
 `-PwingletQaKeystore=/absolute/path/to/phone/app/android/app/debug.keystore`.
 The phone and watch **must share application ID and signing certificate**:
-`io.github.vikasrp24.winglet.dev` for Dev, `io.github.vikasrp24.winglet` for
+`io.github.broedkrummen.winglet.dev` for Dev, `io.github.broedkrummen.winglet` for
 production. An independently generated debug key cannot communicate with a
 differently signed phone app. The QA property only permits Dev debug signing.
 No production key, signing workflow, release artifact or version bump is added.

@@ -60,7 +60,7 @@ jobs:
           PHONE=app/android/app/build/outputs/apk/release/app-release.apk
           WATCH=wear/app/build/outputs/apk/debug/app-debug.apk
           for APK in "$PHONE" "$WATCH"; do
-            "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | grep "^package: name='io.github.vikasrp24.winglet.dev'"
+            "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | grep "^package: name='io.github.broedkrummen.winglet.dev'"
           done
           PHONE_CERT="$("$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$PHONE" | grep 'Signer #1 certificate SHA-256 digest:')"
           WATCH_CERT="$("$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$WATCH" | grep 'Signer #1 certificate SHA-256 digest:')"

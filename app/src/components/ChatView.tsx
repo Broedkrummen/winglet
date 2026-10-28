@@ -15,6 +15,7 @@ import { actionHint, canBranch, canEdit, canRegenerate, laterCount, type BranchM
 import { useBranching } from '../features/branching/useBranching';
 import { routineHref } from '../features/routine-history/model';
 import { mediaUrl } from '../lib/api';
+import { startNewChat } from '../lib/actions';
 import { projectOf } from '../features/projects/logic';
 import { connectionView } from '../lib/connection';
 import { chatKey } from '../lib/chatOrganization';
@@ -35,6 +36,7 @@ import { AgentFace, useAvatarColor } from './AgentFace';
 import { InboxButton, NavigationToggle } from './AppNavigation';
 import { UserAvatar } from './BotAvatar';
 import { Composer, focusComposer } from './Composer';
+import { ModelButton } from './ModelSheet';
 import { ChatMenu } from './ChatMenu';
 import { ChatPet } from './ChatPet';
 import type { DockPetFrame } from './ChatPet';
@@ -93,6 +95,8 @@ type Landing = { dock: (props: { focused: boolean; onPetLayout: (frame: DockPetF
 export function ChatView({ server, chatId, showBack, embedded, landing }: { server: Server; chatId: string; showBack?: boolean; embedded?: boolean; landing?: Landing }) {
   const t = useTheme();
   const s = useStyles();
+  const simple = usePrefs((st) => st.prefs.view === 'simple');
+  const [simpleOptions, setSimpleOptions] = useState(false);
   const insets = useSafeAreaInsets();
   const reduced = useReducedMotion();
   // Not the messages of every chat: only this one's, below. Another chat streaming doesn't re-render this one.
@@ -138,7 +142,10 @@ export function ChatView({ server, chatId, showBack, embedded, landing }: { serv
     setRevealed((current) => current[key] ? current : { ...current, [key]: true });
     setSendCount((n) => n + 1);
   };
-  const composing = !!landing && (!revealed[turnKey] || !!landing.action);
+  const composing = !!landing && (!!landing.action || (!simple && !revealed[turnKey]));
+  useEffect(() => {
+    if (simple && landing && !landing.action) setRevealed((current) => current[turnKey] ? current : { ...current, [turnKey]: true });
+  }, [simple, turnKey, !!landing, !!landing?.action]);
 
   useEffect(() => {
     if (Platform.OS === 'web') return;
@@ -194,6 +201,11 @@ export function ChatView({ server, chatId, showBack, embedded, landing }: { serv
 
   const view = connectionView(network, runtime, server.bot.title);
   const main = chatId === homeChat(runtime);
+  useEffect(() => {
+    if (!chat || chat.kind !== 'chat') return;
+    const prefs = usePrefs.getState().prefs;
+    if (prefs.lastChatByBot[server.id] !== chatId) usePrefs.getState().update({ lastChatByBot: { ...prefs.lastChatByBot, [server.id]: chatId } });
+  }, [server.id, chatId, chat?.kind]);
   const title = composing ? landing!.title : main ? server.bot.title : chat?.kind === 'home' ? 'Updates' : chat?.title ?? 'Chat';
   const project = runtime?.projects ? projectOf(runtime.projects, chatId) : undefined;
   const status = view.kind === 'online' ? (typing ? 'Working…' : 'Online') : view.kind === 'connecting' ? 'Connecting…'
@@ -219,6 +231,20 @@ export function ChatView({ server, chatId, showBack, embedded, landing }: { serv
       <View style={s.headerWrap} onLayout={(e) => setHeaderH(e.nativeEvent.layout.height)} pointerEvents="box-none">
         {composing ? null : <Glass target={target} borderless style={StyleSheet.absoluteFill} />}
         <View style={[s.header, { paddingTop: topPad + 8 }]}>
+          {simple ? <>
+            <View style={{ width: 96, flexDirection: 'row' }}><NavigationToggle /></View>
+            <View style={{ flex: 1, minWidth: 0, alignItems: 'center' }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, maxWidth: '100%' }}>
+                <AgentFace server={server} size={26} still />
+                <Text style={s.headerTitle} accessibilityRole="header" numberOfLines={1}>{server.bot.title}</Text>
+              </View>
+              {status !== 'Online' ? <Text style={s.headerSub} accessibilityLiveRegion="polite">{status}</Text> : null}
+            </View>
+            <View style={{ width: 96, flexDirection: 'row', justifyContent: 'flex-end' }}>
+              <IconButton size={48} label="Conversation options" onPress={() => setSimpleOptions(true)}><MoreHorizontal size={22} color={t.colors.text} /></IconButton>
+              <InboxButton />
+            </View>
+          </> : <>
           <NavigationToggle />
           {composing && landing?.onTitlePress ? (
             <View style={s.headerFill}>
@@ -249,19 +275,20 @@ export function ChatView({ server, chatId, showBack, embedded, landing }: { serv
           {composing ? landing?.actions : null}
           {!landing?.prepareChat && !landing?.action && !composing ? <IconButton label="Chat options" onPress={() => setMenu(true)}><MoreHorizontal size={22} color={t.colors.text} /></IconButton> : null}
           <InboxButton />
+          </>}
         </View>
         {composing ? null : <View style={s.hairline} />}
         <ConnectionBanner server={server} compact />
         <SyncStatus serverId={server.id} />
         <PausedBanner server={server} />
-        {!composing ? <BranchStrip server={server} chatId={chatId} state={branching.state} /> : null}
-        {!composing && goal ? <GoalStrip goal={goal} onPress={() => setGoalOpen(true)} /> : null}
+        {!simple && !composing ? <BranchStrip server={server} chatId={chatId} state={branching.state} /> : null}
+        {!simple && !composing && goal ? <GoalStrip goal={goal} onPress={() => setGoalOpen(true)} /> : null}
       </View>
       {landing?.action ? <View style={{ position: 'absolute', bottom: 0, left: 16, right: 16, paddingTop: 12, paddingBottom: Math.max(insets.bottom, 12) }}
         onLayout={(e) => setComposerH(e.nativeEvent.layout.height)}>{landing.action}</View> : <Composer server={server} chatId={chatId} busy={typing} bottomInset={keyboardVisible ? 0 : embedded ? 12 : insets.bottom} target={target}
         onHeight={setComposerH} placeholder={`Message ${server.bot.title}`}
         prepareChat={landing?.prepareChat} onFocusChange={setInputFocused} onBeforeSend={beginTurn} />}
-      {!landing?.action && width > 0 ? <ChatPet key={server.id} server={server} active={committed} width={width} composerHeight={composerH}
+      {!simple && !landing?.action && width > 0 ? <ChatPet key={server.id} server={server} active={committed} width={width} composerHeight={composerH}
         dockHeight={dockHeight} dockOffset={dockOffset} frame={petFrame} sent={sendCount} perched={!landing} /> : null}
       <ChatMenu server={server} chatId={chatId} title={title} visible={menu} onClose={() => setMenu(false)}
         onGoal={goalsSupported && chat?.kind !== 'home' ? () => setGoalOpen(true) : undefined} hasGoal={!!goal && goal.status !== 'done'}
@@ -270,6 +297,15 @@ export function ChatView({ server, chatId, showBack, embedded, landing }: { serv
         onContext={runtime?.info?.features?.session_context && isOwner(runtime) ? () => setContextOpen(true) : undefined}
         onProcesses={runtime?.info?.features?.processes && isOwner(runtime) ? () => setProcessesOpen(true) : undefined}
         onDeleted={() => router.replace('/chats')} onArchived={() => router.replace('/chats')} />
+      <Sheet visible={simpleOptions} onClose={() => setSimpleOptions(false)} title="Conversation options" scrollable>
+        <Text style={{ ...t.type.footnote, color: t.colors.textSecondary, paddingHorizontal: 16, paddingBottom: 12 }}>{chat?.title ?? 'Main conversation'}</Text>
+        <ModelButton server={server} chatId={chatId} variant="header" prepareChat={landing?.prepareChat} />
+        <SheetAction icon={<MoreHorizontal />} label="Chat settings and tools" onPress={() => { setSimpleOptions(false); setMenu(true); }} />
+        {goalsSupported && chat?.kind !== 'home' ? <SheetAction icon={<Check />} label={goal ? 'Goal' : 'Set a goal'} onPress={() => { setSimpleOptions(false); setGoalOpen(true); }} /> : null}
+        <SheetAction icon={<FileText />} label="Conversations and search" onPress={() => { setSimpleOptions(false); useApp.getState().select(server.id, chatId); router.navigate('/chats'); }} />
+        <SheetAction icon={<Pencil />} label="New conversation" onPress={() => { setSimpleOptions(false); void startNewChat(server.id); }} />
+        <SheetAction icon={<MoreHorizontal />} label="Full view" onPress={() => { setSimpleOptions(false); usePrefs.getState().update({ view: 'full' }); }} />
+      </Sheet>
       <GoalSheet server={server} chatId={chatId} goal={goal} visible={goalOpen} onClose={() => setGoalOpen(false)} onChanged={refreshGoal} />
       <ContextSheet key={`context:${server.id}:${chatId}`} server={server} chatId={chatId} visible={contextOpen} onClose={() => setContextOpen(false)} />
       <ProcessesSheet key={`processes:${server.id}:${chatId}`} server={server} chatId={chatId}
@@ -348,7 +384,7 @@ const MessageList = memo(function MessageList({ server, chatId, messages, loaded
   const s = useStyles();
   const loadMessages = useApp((st) => st.loadMessages);
   const inbox = useApp((st) => st.runtime[server.id]?.inbox);
-  const layout = usePrefs((st) => st.prefs.layout);
+  const layout = usePrefs((st) => st.prefs.view === 'simple' ? 'bubbles' : st.prefs.layout);
   const list = useRef<FlatList<Row>>(null);
   // Scrolled away from the latest: the newest message then, so only later ones count as new.
   const [away, setAway] = useState<string | null>(null);
@@ -610,6 +646,7 @@ const MessageRow = memo(function MessageRow({ server, message, first, last, live
 }) {
   const t = useTheme();
   const s = useStyles();
+  const simple = usePrefs((st) => st.prefs.view === 'simple');
   const resolve = useCallback((url: string) => mediaUrl(server, url), [server]);
   const entering = fresh ? FadeInDown.duration(260).easing(easeOut) : undefined;
   const [hover, setHover] = useState(false);
@@ -697,14 +734,15 @@ const MessageRow = memo(function MessageRow({ server, message, first, last, live
   } else if (isBot) {
     content = (
       <View style={[s.botRow, first ? { marginTop: 12 } : { marginTop: 4 }]}>
-        {first ? (
+        {first && !simple ? (
           <View style={s.botHead}>
             <AgentFace server={server} size={26} still />
             <Text style={s.botName}>{server.bot.title}</Text>
             <Text style={s.time}>{timeOf(message.created_at)}</Text>
           </View>
         ) : null}
-        <View style={s.botBody}>{quote(false)}{text(false)}{files}{responseActions}</View>
+        <View style={[s.botBody, simple && s.simpleReply]}>{quote(false)}{text(false)}{files}{!simple ? responseActions : null}</View>
+        {simple ? responseActions : null}
         {footer}
       </View>
     );
@@ -714,12 +752,13 @@ const MessageRow = memo(function MessageRow({ server, message, first, last, live
         {!message.text ? quote(false) : null}
         {files}
         {message.text ? (
-          <View style={[s.bubble, last && s.bubbleTail, files ? { marginTop: 4 } : null]}>
-            {quote(false)}
-            {text(false)}
+          <View style={[s.bubble, last && s.bubbleTail, files ? { marginTop: 4 } : null,
+            simple && { backgroundColor: t.scheme === 'light' ? t.colors.ink : t.colors.surfaceHigh }]}>
+            {quote(simple && t.scheme === 'light')}
+            {text(simple && t.scheme === 'light')}
           </View>
         ) : null}
-        {last && sendable ? <Text style={[s.time, { marginTop: 4, marginRight: 6 }]}>{timeOf(message.created_at)}</Text> : null}
+        {last && sendable && !simple ? <Text style={[s.time, { marginTop: 4, marginRight: 6 }]}>{timeOf(message.created_at)}</Text> : null}
         {footer}
       </View>
     );
@@ -824,16 +863,16 @@ function HoverBar({ message, actions, serverId, inline = false }: { message: Mes
   return (
     <View style={inline ? s.responseActions : s.hoverBar}>
       {message.text ? (
-        <IconButton label={copied ? 'Copied response' : 'Copy response'} size={32} onPress={async () => {
+        <IconButton label={copied ? 'Copied response' : 'Copy response'} size={48} onPress={async () => {
           try { await Clipboard.setStringAsync(message.text); setCopied(true); haptic.selection(); }
           catch { useApp.getState().toast({ serverId, title: 'Couldn’t copy', body: 'Try again or use Select text from the message options.' }); }
         }}>
           {copied ? <Check size={16} color={t.colors.success} /> : <Copy size={16} color={t.colors.textTertiary} />}
         </IconButton>
       ) : null}
-      <IconButton label="Reply to response" size={32} onPress={() => actions.reply(message)}><Reply size={16} color={t.colors.textTertiary} /></IconButton>
-      {actions.quote && canQuote(message) ? <IconButton label="Ask about a quote" size={32} onPress={() => actions.quote?.(message)}><FileText size={16} color={t.colors.textTertiary} /></IconButton> : null}
-      <IconButton label="More response options" size={32} onPress={() => actions.open(message)}><MoreHorizontal size={16} color={t.colors.textTertiary} /></IconButton>
+      <IconButton label="Reply to response" size={48} onPress={() => actions.reply(message)}><Reply size={16} color={t.colors.textTertiary} /></IconButton>
+      {actions.quote && canQuote(message) ? <IconButton label="Ask about a quote" size={48} onPress={() => actions.quote?.(message)}><FileText size={16} color={t.colors.textTertiary} /></IconButton> : null}
+      <IconButton label="More response options" size={48} onPress={() => actions.open(message)}><MoreHorizontal size={16} color={t.colors.textTertiary} /></IconButton>
     </View>
   );
 }
@@ -1045,6 +1084,7 @@ const useStyles = makeStyles((t) => ({
   botHead: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
   botName: { ...t.type.caption, fontSize: 13.5, fontFamily: t.fonts.semibold, color: t.colors.text },
   botBody: { paddingLeft: 34, paddingRight: 8 },
+  simpleReply: { paddingHorizontal: 14, paddingVertical: 10, backgroundColor: t.colors.surfaceSunken, borderRadius: 16, alignSelf: 'flex-start', maxWidth: '100%' },
   userRow: { paddingHorizontal: 14, alignItems: 'flex-end' },
   bubble: { maxWidth: '84%', borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10, backgroundColor: t.colors.bubble },
   bubbleTail: { borderBottomRightRadius: 6 },

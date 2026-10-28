@@ -18,6 +18,7 @@ import { sound } from '../lib/sounds';
 import { draftKey, useApp } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
 import { plainText } from '../lib/text';
+import { messageLimitError } from '../lib/messageLimits';
 import type { DraftFile, Server } from '../lib/types';
 import { useVoiceNote } from '../lib/voiceNote';
 import { Glass } from './Glass';
@@ -69,8 +70,10 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
   const online = useApp((st) => st.runtime[server.id]?.status === 'online');
   const features = useApp((st) => st.runtime[server.id]?.info?.features);
   const busyMode = usePrefs((st) => st.prefs.busyMode);
+  const simple = usePrefs((st) => st.prefs.view === 'simple');
   const updatePrefs = usePrefs((st) => st.update);
   const [height, setHeight] = useState(MIN_INPUT);
+  const [inputFocused, setInputFocused] = useState(false);
   const [voiceChat, setVoiceChat] = useState<string | null>(null);
   const [attachOpen, setAttachOpen] = useState(false);
   const [keepOriginal, setKeepOriginal] = useState(false);
@@ -152,6 +155,8 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
   const typedCommand = text.startsWith('/') && !text.includes(' ');
   const matches = typedCommand ? matchCommands(commands, text) : [];
   const showBusyModes = busy && !!text.trim() && !text.startsWith('/');
+  const sendPrefix = showBusyModes && busyMode !== 'interrupt' ? `/${busyMode}` : '';
+  const limitError = messageLimitError(sendPrefix ? `${sendPrefix} ${text.trim()}` : text);
 
   const send = async (value?: string) => {
     if (sending.current || (value === undefined && !ready)) return;
@@ -168,15 +173,15 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
       onBeforeSend?.(destination);
       if (value !== undefined) {
         haptic.light();
-        void useApp.getState().sendMessage(server.id, destination, value);
+        if (!await useApp.getState().sendMessage(server.id, destination, value, { waitForDelivery: false })) return;
         sound.sent();
         onSent?.();
         return;
       }
       haptic.light();
-      const prefix = showBusyModes && busyMode !== 'interrupt' ? `/${busyMode}` : '';
+      const prefix = sendPrefix;
       const body = prepareChat ? useApp.getState().drafts[draftKey(server.id, destination)] ?? text : text;
-      void sendDraft(server.id, destination, body, prefix);
+      if (!await sendDraft(server.id, destination, body, prefix)) return;
       setHeight(MIN_INPUT);
       sound.sent();
       onSent?.();
@@ -226,7 +231,7 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
         </Glass>
       ) : null}
       {!prepareChat ? <TaskProgress key={`task:${key}`} server={server} chatId={chatId} busy={busy} /> : null}
-      {showBusyModes ? (
+      {showBusyModes && !simple ? (
         <Animated.View entering={FadeIn.duration(160)} exiting={FadeOut.duration(120)} style={s.modes} accessibilityLabel="While it works">
           <Text style={s.modesLabel}>While it works:</Text>
           {(['steer', 'queue', 'interrupt'] as const).map((m) => (
@@ -234,6 +239,7 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
           ))}
         </Animated.View>
       ) : null}
+      {showBusyModes && simple ? <Text style={s.offlineNote} accessibilityLiveRegion="polite">{busyMode === 'steer' ? 'Guiding current work' : busyMode === 'queue' ? 'Sending after current work' : 'Interrupting current work'}</Text> : null}
       {!online ? <Text style={s.offlineNote}>Offline. Messages you send are queued and go out when {server.bot.title} is back.</Text> : null}
       <View onLayout={(e) => setBoxY(e.nativeEvent.layout.y)}>
       <Glass target={target} style={s.box} intensity={50}>
@@ -251,19 +257,22 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
         {files.some((f) => f.autoSend) ? (
           <View style={s.voiceSending}><ActivityIndicator size="small" color={t.colors.accent} /><Text style={s.replyText}>Sending voice note…</Text></View>
         ) : null}
-        <View style={s.row}>
+        <View style={simple ? { flexDirection: 'row', alignItems: 'flex-end' } : undefined}>
+        <View style={[s.row, simple && { flex: 1, minWidth: 0, paddingHorizontal: 4, paddingTop: 0, alignItems: 'flex-end' }]}>
+          {simple && uploads ? <Tap accessibilityLabel="Attach photos or files" onPress={() => setAttachOpen(true)} style={[s.attach, { marginBottom: 4 }]}><Plus size={22} color={t.colors.textSecondary} /></Tap> : null}
           <TextInput
             ref={input}
             value={text}
-            onFocus={() => onFocusChange?.(true)}
-            onBlur={() => onFocusChange?.(false)}
+            onFocus={() => { setInputFocused(true); onFocusChange?.(true); }}
+            onBlur={() => { setInputFocused(false); onFocusChange?.(false); }}
             onChangeText={setText}
             placeholder={placeholder}
             placeholderTextColor={t.colors.textTertiary}
             multiline
             accessibilityLabel={placeholder}
             onContentSizeChange={(e) => setHeight(Math.min(150, Math.max(MIN_INPUT, e.nativeEvent.contentSize.height)))}
-            style={[s.input, Platform.OS === 'web' ? { height } : null]}
+            style={[s.input, Platform.OS === 'web' ? { height } : null,
+              Platform.OS === 'web' && inputFocused && { outlineColor: t.colors.accent, outlineWidth: 2, outlineStyle: 'solid', outlineOffset: -2, borderRadius: 8 }]}
             onKeyPress={(e: any) => {
               if (Platform.OS !== 'web') return;
               if (e.nativeEvent.key === 'Enter' && !e.nativeEvent.shiftKey) { e.preventDefault?.(); send(); }
@@ -271,14 +280,14 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
             }}
           />
         </View>
-        <View style={s.tools}>
-          {uploads ? (
+        {!simple && limitError ? <Text accessibilityRole="alert" style={{ ...t.type.footnote, color: t.colors.danger, paddingHorizontal: 16, paddingVertical: 8 }}>{limitError}</Text> : null}
+        <View style={[s.tools, simple && { paddingBottom: 4, paddingLeft: 0, paddingRight: 4 }]}>
+          {!simple && uploads ? (
             <Tap feedback="selection" accessibilityLabel="Attach photos or files" onPress={() => setAttachOpen(true)} style={s.attach} scaleTo={0.9}>
               <Plus size={22} color={t.colors.textSecondary} />
             </Tap>
-          ) : <View style={{ width: 8 }} />}
-          <ModelButton server={server} chatId={chatId} variant="composer" prepareChat={prepareChat} />
-          <View style={{ flex: 1 }} />
+          ) : !simple ? <View style={{ width: 8 }} /> : null}
+          {!simple ? <><ModelButton server={server} chatId={chatId} variant="composer" prepareChat={prepareChat} /><View style={{ flex: 1 }} /></> : null}
           {!busy && online && !text.trim() && !files.length && !replyTo && features?.voice_handsfree ? (
             <Tap accessibilityLabel="Open hands-free voice" onPress={async () => {
               const destination = prepareChat ? await prepareChat() : chatId;
@@ -296,6 +305,8 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
             </Tap>
           )}
         </View>
+        </View>
+        {simple && limitError ? <Text accessibilityRole="alert" style={{ ...t.type.footnote, color: t.colors.danger, paddingHorizontal: 16, paddingVertical: 8 }}>{limitError}</Text> : null}
       </Glass>
       </View>
       {perch ? <View pointerEvents="box-none" style={[s.perch, { top: boxY - PERCH_RISE }]}>{perch}</View> : null}
@@ -359,6 +370,7 @@ function VoiceButton({ server, chatId, onSent, prepareChat, onBeforeSend }: { se
   const voice = useVoiceNote(server.id, () => chatId, onSent, prepareChat, onBeforeSend);
   const recording = voice.recording;
   const [cancelling, setCancelling] = useState(false);
+  const [focused, setFocused] = useState(false);
   const pulse = useSharedValue(1);
 
   useEffect(() => {
@@ -388,8 +400,16 @@ function VoiceButton({ server, chatId, onSent, prepareChat, onBeforeSend }: { se
         </Animated.View>
       ) : null}
       <GestureDetector gesture={gesture}>
-        <View accessible accessibilityRole="button" accessibilityLabel="Hold to record a voice note"
-          style={[s.sendBtn, { backgroundColor: recording ? t.colors.danger : t.colors.surfaceSunken }, recording && { transform: [{ scale: 1.15 }] }]}>
+        <View accessible accessibilityRole="button" accessibilityLabel={recording ? 'Send voice note' : 'Hold to record a voice note'}
+          accessibilityActions={[{ name: 'activate', label: recording ? 'Send voice note' : 'Start recording' }]}
+          onAccessibilityAction={() => { if (recording) void voice.finish(false); else void voice.start(); }}
+          {...(Platform.OS === 'web' ? { tabIndex: 0,
+            onFocus: () => setFocused(true), onBlur: () => { setFocused(false); void voice.finish(true); },
+            onKeyDown: (event: any) => { if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); if (!event.repeat) void voice.start(); } },
+            onKeyUp: (event: any) => { if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); void voice.finish(false); } },
+          } : {})}
+          style={[s.sendBtn, { backgroundColor: recording ? t.colors.danger : t.colors.surfaceSunken }, recording && { transform: [{ scale: 1.15 }] },
+            Platform.OS === 'web' && focused && { outlineStyle: 'solid', outlineWidth: 2, outlineOffset: 2, outlineColor: t.colors.accent }]}>
           <Mic size={20} color={recording ? t.colors.onDanger : t.colors.text} />
         </View>
       </GestureDetector>
@@ -405,12 +425,11 @@ const useStyles = makeStyles((t) => ({
     shadowColor: t.colors.shadow, shadowOpacity: t.scheme === 'light' ? 0.06 : 0, shadowRadius: 12, shadowOffset: { width: 0, height: 2 } },
   row: { flexDirection: 'row', paddingHorizontal: 14, paddingTop: 5 },
   tools: { flexDirection: 'row', alignItems: 'center', gap: 2, paddingHorizontal: 8, paddingBottom: 8 },
-  attach: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  attach: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
   input: {
     flex: 1, ...t.type.body, color: t.colors.text, paddingTop: 9, paddingBottom: 9, paddingHorizontal: 6, maxHeight: 150,
-    ...(Platform.OS === 'web' ? ({ outlineStyle: 'none' } as object) : {}),
   },
-  sendBtn: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  sendBtn: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   offlineNote: { ...t.type.caption, color: t.colors.warning, marginBottom: 6, marginLeft: 12, maxWidth: 820, alignSelf: 'center', width: '100%' },
   commands: { borderRadius: t.radius.lg, marginBottom: 8, paddingVertical: 4, maxWidth: 820, width: '100%', alignSelf: 'center' },
   command: { justifyContent: 'center', gap: 1, paddingHorizontal: 16, paddingVertical: 7, minHeight: 52 },
@@ -425,15 +444,15 @@ const useStyles = makeStyles((t) => ({
   replyText: { ...t.type.caption, color: t.colors.textSecondary },
   voiceSending: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, paddingTop: 10 },
   tray: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 10, paddingTop: 10 },
-  trayItem: { width: 72, height: 72 },
+  trayItem: { width: 72, height: 120 },
   thumb: { width: 72, height: 72, borderRadius: 14, backgroundColor: t.colors.surfaceSunken, overflow: 'hidden' },
   thumbFile: { alignItems: 'center', justifyContent: 'center', padding: 6, gap: 4 },
   thumbName: { fontFamily: t.fonts.medium, fontSize: 10, color: t.colors.textSecondary, textAlign: 'center' },
-  progress: { position: 'absolute', left: 8, right: 8, bottom: 8, height: 4, borderRadius: 2, backgroundColor: t.colors.overlay, overflow: 'hidden' },
+  progress: { position: 'absolute', left: 8, right: 8, bottom: 56, height: 4, borderRadius: 2, backgroundColor: t.colors.overlay, overflow: 'hidden' },
   progressFill: { height: 4, backgroundColor: t.colors.accent },
-  failed: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: t.colors.overlay },
-  remove: { position: 'absolute', top: -6, right: -6, width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: t.colors.textSecondary, borderWidth: 2, borderColor: t.colors.surface },
-  trayX: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
+  failed: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 48, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: t.colors.overlay },
+  remove: { position: 'absolute', bottom: 0, right: 0, left: 0, height: 48, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: t.colors.textSecondary },
+  trayX: { width: 48, height: 48, alignItems: 'center', justifyContent: 'center' },
   recording: {
     position: 'absolute', left: 6, top: 6, bottom: 6, right: 52, flexDirection: 'row', alignItems: 'center', gap: 10,
     paddingHorizontal: 12, borderRadius: t.radius.pill, backgroundColor: t.colors.surfaceRaised, zIndex: 2,

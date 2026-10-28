@@ -4,7 +4,7 @@ android {
     namespace 'dev.winglet.watch'
     compileSdk 36
     defaultConfig {
-        applicationId 'io.github.vikasrp24.winglet' + (dev ? '.dev' : '')
+        applicationId 'io.github.broedkrummen.winglet' + (dev ? '.dev' : '')
         minSdk 30
         targetSdk 36
         versionCode 600

@@ -51,6 +51,21 @@ export default function SettingsScreen() {
 
     <SectionHeader title="App" />
     <ListGroup>
+      <View style={s.sidebar}>
+        <Text style={s.label}>View</Text>
+        <Segmented label="View" value={prefs.view} onChange={(view) => update({ view })}
+          options={[{ value: 'full', label: 'Full' }, { value: 'simple', label: 'Simple' }]} />
+      </View>
+      <View style={s.sidebar}>
+        <Text style={s.label}>When opening a bot in Simple view</Text>
+        <Segmented label="When opening a bot" value={prefs.botOpening} onChange={(botOpening) => update({ botOpening })}
+          options={[{ value: 'last', label: 'Last chat' }, { value: 'main', label: 'Main chat' }, { value: 'list', label: 'Chat list' }]} />
+      </View>
+      <View style={s.sidebar}>
+        <Text style={s.label}>Messages sent while a bot works</Text>
+        <Segmented label="Messages sent while a bot works" value={prefs.busyMode} onChange={(busyMode) => update({ busyMode })}
+          options={[{ value: 'steer', label: 'Guide' }, { value: 'queue', label: 'Queue' }, { value: 'interrupt', label: 'Interrupt' }]} />
+      </View>
       <ListRow title="Appearance" value={`${themeLabel} · ${ACCENTS[prefs.accent].label}`} icon={<Palette />} onPress={() => router.push('/appearance')} />
       <ListRow title="Notifications" icon={<Bell />} onPress={() => router.push('/notifications')} />
       {Platform.OS === 'android' ? <ListRow title="App lock" icon={<Fingerprint />}

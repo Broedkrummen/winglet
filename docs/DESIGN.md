@@ -1,5 +1,14 @@
 # Winglet design guide
 
+## Optional Simple view
+
+Full view retains the rules below. Simple view is an approved presentation variant, described in
+[its surface brief](surfaces/simple-view.md): a bot-first sidebar/drawer, centered compact bot header,
+neutral assistant bubbles and contrasting own bubbles, no decorative perched pet, and technical
+choices inside Conversation options. Use existing semantic colors and type, including light/dark
+themes. Preserve readable rich content and visible approval, Stop, offline and failed-send recovery.
+Settings controls the view and what opens when a bot is selected; preferences remain device-local.
+
 How every screen in the app should look and read. When a screen disagrees with this file, the screen is wrong.
 
 ## Character

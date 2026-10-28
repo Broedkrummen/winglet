@@ -2,8 +2,12 @@ import { create } from 'zustand';
 import { getJSON, setJSON } from './storage';
 import type { AccentName, DarkTone } from './theme';
 import type { SavedModel } from './modelOptions';
+import type { BotOpening } from './simpleView';
 
 export type Prefs = {
+  view: 'full' | 'simple';
+  botOpening: BotOpening;
+  lastChatByBot: Record<string, string>;
   voiceListenWith: 'server' | 'device';
   voiceSpeakWith: 'server' | 'device';
   theme: 'system' | 'light' | 'dark';
@@ -37,6 +41,7 @@ export type Prefs = {
 };
 
 export const DEFAULT_PREFS: Prefs = {
+  view: 'full', botOpening: 'last', lastChatByBot: {},
   voiceListenWith: 'server', voiceSpeakWith: 'server',
   theme: 'system', accent: 'iris', darkTone: 'charcoal', layout: 'bubbles', motion: 'system', transparency: 'system', haptics: true, sounds: true, busyMode: 'steer', appLock: false, updateCheck: true, mainBot: '', sidebar: 'auto', pinnedChats: [], archivedChats: [], favoriteModels: [], recentModels: [],
 };

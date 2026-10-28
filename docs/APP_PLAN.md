@@ -1,9 +1,13 @@
-# Winglet app plan: v0.1.3 → v0.7
+# Historical Winglet app plan: v0.1.3 → v0.7
+
+> Historical reference. This plan predates the current implementation and is not the active roadmap.
+> See [the issue-based roadmap](ROADMAP.md) for current work and approval status, [FEATURES.md](FEATURES.md)
+> for existing capabilities, and [DESIGN.md](DESIGN.md) for current design guidance.
 
 **Goal: everything you normally do with Hermes, from your phone, without opening the server, and
 without making the server easier to misuse.**
 
-This is the working plan for the next releases. It covers the look and feel, the features, the
+This was the working plan for those releases. It covers the look and feel, the features, the
 server-side work each feature needs, and the security model that server control depends on. Every
 item has a priority, every milestone is split into small PRs, and every PR has acceptance criteria.
 

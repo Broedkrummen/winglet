@@ -7,6 +7,7 @@ import { stopTask } from '../lib/actions';
 import { currentTaskActivity } from '../lib/messages';
 import { isOwner, useApp } from '../lib/store';
 import { plainText } from '../lib/text';
+import { usePrefs } from '../lib/prefs';
 import { makeStyles, useTheme } from '../lib/themeContext';
 import type { Server } from '../lib/types';
 import { TaskDetail, TaskStopButton, useTaskClock } from '../features/execution/TaskDetail';
@@ -23,6 +24,7 @@ const LINGER_MS = 60_000;
 export function TaskProgress({ server, chatId, busy }: { server: Server; chatId: string; busy: boolean }) {
   const t = useTheme();
   const s = useStyles();
+  const simple = usePrefs((st) => st.prefs.view === 'simple');
   const reduced = useReducedMotion();
   const online = useApp((st) => st.network && st.runtime[server.id]?.status === 'online');
   const owner = useApp((st) => isOwner(st.runtime[server.id]));
@@ -60,7 +62,7 @@ export function TaskProgress({ server, chatId, busy }: { server: Server; chatId:
     return () => clearTimeout(timer);
   }, [busy, pending?.id, snapshot?.turn_index, snapshot?.state, snapshot?.ended_at, snapshot?.updated_at]);
 
-  if (!stripVisible(snapshot, busy, !!pending, lingerExpired)) return null;
+  if (!stripVisible(snapshot, busy, !!pending, lingerExpired) || (simple && !busy && !pending && state !== 'failed')) return null;
   const steps = currentTaskActivity(messages);
   const legacy = steps.map((step) => ({ id: step.id, text: step.text }));
   const latest = steps[steps.length - 1];
@@ -147,7 +149,7 @@ const useStyles = makeStyles((t) => ({
   title: { ...t.type.caption, fontFamily: t.fonts.semibold, color: t.colors.text },
   detail: { ...t.type.caption, color: t.colors.textSecondary, fontSize: 12 },
   stop: {
-    height: 36, width: 36, alignItems: 'center', justifyContent: 'center', borderRadius: t.radius.pill,
+    height: 48, width: 48, alignItems: 'center', justifyContent: 'center', borderRadius: t.radius.pill,
     backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border,
   },
   track: { position: 'absolute', left: 22, right: 22, bottom: 0, height: 2, borderRadius: t.radius.pill, backgroundColor: t.colors.border, overflow: 'hidden' },

@@ -203,7 +203,7 @@ def _print_connection_help(url: str) -> None:
         print("Choose a remote access route:")
         print("  Public HTTPS: a domain/reverse proxy or tunnel; no VPN needed on the phone.")
         print("  Private Tailscale: connect BOTH the Hermes server and phone to the same tailnet.")
-        print("Guide: https://github.com/VIKASRP24/winglet/blob/main/docs/REMOTE_ACCESS.md")
+        print("Guide: https://github.com/Broedkrummen/winglet/blob/main/docs/REMOTE_ACCESS.md")
     else:
         print("If this is a Tailscale URL, keep your phone connected to the same tailnet.")
     print("--public-url changes the pairing address; it does not create HTTPS or open firewall ports.")

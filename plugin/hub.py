@@ -66,7 +66,7 @@ SIGN_IN_PAGE = ("<!doctype html><meta charset=utf-8><meta name=viewport content=
                 "<h2>{title}</h2><p>{body}</p>")
 PUSH_DEBOUNCE_SECONDS = 0.3
 MAX_TEXT = 16_000
-PUSH_SUBJECT = "https://github.com/VIKASRP24/winglet"
+PUSH_SUBJECT = "https://github.com/Broedkrummen/winglet"
 PAIR_FAILURES_PER_MINUTE = 10
 ALIVE_CACHE_SECONDS = 2.0
 MAX_ATTACHMENTS = 10
@@ -1207,12 +1207,17 @@ class Hub:
     async def user_message(self, device: Dict[str, Any], chat_id: str, text: str,
                            client_id: str = "", *, attachments: Optional[List[str]] = None,
                            reply_to: str = "", hidden: bool = False, quote=None) -> Optional[Dict[str, Any]]:
-        text = (text or "").strip()[:MAX_TEXT]
+        text = (text or "").strip()
+        if len(text) > MAX_TEXT:
+            raise MessageRejected(f"Messages can contain at most {MAX_TEXT:,} characters. Shorten it or attach a file.")
         attachments = list(dict.fromkeys(attachments or []))
         if (not text and not attachments) or not chat_id:
             return None
         if len(attachments) > MAX_ATTACHMENTS:
             raise MessageRejected(f"At most {MAX_ATTACHMENTS} attachments per message.")
+        chat = self.store.get_chat(chat_id)
+        if not self.can_see(device, chat):
+            return None  # deleted (or never created, or someone else's): don't bring it back
         if client_id:
             # A retry of something we already have (the reply to the first try was lost): don't run it twice.
             existing = self.store.find_user_message(chat_id, client_id)
@@ -1220,9 +1225,6 @@ class Hub:
                 return existing
         if self.context_insights is not None and self.context_insights.busy(chat_id):
             raise MessageRejected("Hermes is updating this chat context. Wait for the result before sending.")
-        chat = self.store.get_chat(chat_id)
-        if not self.can_see(device, chat):
-            return None  # deleted (or never created, or someone else's): don't bring it back
         if device["role"] != "owner" and not self.limits_members and self.member_tools()["limited"]:
             # Limits were set, but this Hermes can't apply them any more (an update removed the step).
             raise MessageRejected("An owner limited what members can use, and this server can't apply that "
@@ -1259,17 +1261,35 @@ class Hub:
                 meta["reply_to"] = {"id": quoted["id"], "role": quoted["role"], "text": _clip(quoted["text"], REPLY_EXCERPT)}
         message_id = new_id()
         files: List[Dict[str, Any]] = []
-        if attachments:
-            rows = self.store.claim_uploads(attachments, device["id"], chat_id, message_id)
-            if rows is None:
-                raise MessageRejected("An attachment is missing, expired, or was already sent. Attach it again.")
-            meta["attachments"] = [self._upload_public(row) for row in rows]
-            files = [{"path": str(self.media_dir / row["id"] / row["name"]), "name": row["name"], "mime": row["mime"],
-                      "kind": row["kind"]} for row in rows]
+        existing = None
+
+        def write():
+            nonlocal existing, device, chat, refused, files
+            # Recheck after waiting for publication; a retry or revocation may have won the race.
+            device = self.store.get_device(device["id"])
+            chat = self.store.get_chat(chat_id)
+            if not self.can_see(device, chat):
+                return None
+            if client_id:
+                existing = self.store.find_user_message(chat_id, client_id)
+                if existing is not None:
+                    return None
+            refused = self._refused_command(device, text)
+            if attachments:
+                rows = self.store.claim_uploads(attachments, device["id"], chat_id, message_id)
+                if rows is None:
+                    raise MessageRejected("An attachment is missing, expired, or was already sent. Attach it again.")
+                meta["attachments"] = [self._upload_public(row) for row in rows]
+                files = [{"path": str(self.media_dir / row["id"] / row["name"]), "name": row["name"], "mime": row["mime"],
+                          "kind": row["kind"]} for row in rows]
+            return self.store.add_message(chat_id, "user", text, meta=meta, message_id=message_id)
+
         message = await self.publish(
-            lambda: self.store.add_message(chat_id, "user", text, meta=meta, message_id=message_id),
+            write,
             lambda row: [{"type": "message.new", "chat_id": chat_id, "message": row},
                          {"type": "chat.update", "chat": self.store.get_chat(chat_id)}])
+        if message is None:
+            return existing
         if refused:
             # Hermes never sees it: members can't change settings or approve through a slash command either.
             await self.post_message(chat_id, f"Only an owner can use {refused}.", role="system", push=False)

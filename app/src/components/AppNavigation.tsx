@@ -6,6 +6,8 @@ import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSpring } from 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useShallow } from 'zustand/react/shallow';
 import { startNewChat } from '../lib/actions';
+import { simpleBotChat, simpleSidebarWidth } from '../lib/simpleView';
+import { useModalFocus } from '../lib/useModalFocus';
 import { useLock } from '../lib/appLock';
 import { chatKey } from '../lib/chatOrganization';
 import { chatActivity, chatActivityLabel, draftPreview, matchesChatFilter, type ChatFilter } from '../lib/chatActivity';
@@ -21,6 +23,7 @@ import { ChatMenu } from './ChatMenu';
 import { ChatFilters } from './ChatFilters';
 import { ProjectSection } from '../features/projects/ProjectSection';
 import { useBotSheet } from './BotSwitcher';
+import { useAddBot } from './AddBot';
 import { KeyboardViewport } from './KeyboardViewport';
 import { Bot, CalendarClock, ChevronsUpDown, House, Inbox, MessageCircle, MessagesSquare, MoreHorizontal, PanelLeft, Pin, Settings, SquarePen, Users } from './icons';
 import { AgentFace } from './AgentFace';
@@ -41,14 +44,15 @@ export function useContentWidth() { return useWindowDimensions().width - useAppN
 /** One navigation shell for the landing chat, conversations and every settings screen. */
 export function AppNavigation({ children }: { children: ReactNode }) {
   const t = useTheme();
-  const { width } = useWindowDimensions();
+  const { width, fontScale } = useWindowDimensions();
   const mode = usePrefs((s) => s.prefs.sidebar);
+  const simple = usePrefs((s) => s.prefs.view === 'simple');
   const paired = useApp((s) => s.servers.length > 0);
   const locked = useLock((s) => s.locked);
   const pathname = usePathname();
   const [opened, setOpened] = useState(false);
   const [homeRevision, setHomeRevision] = useState(0);
-  const reserved = paired && !locked && pathname !== '/pair' ? navigationWidth(width, mode) : 0;
+  const reserved = paired && !locked && pathname !== '/pair' ? simple ? simpleSidebarWidth(width, fontScale) : navigationWidth(width, mode) : 0;
   const close = useCallback(() => setOpened(false), []);
   const open = useCallback(() => { if (useLock.getState().locked) return; Keyboard.dismiss(); setOpened(true); }, []);
   const home = useCallback(() => {
@@ -59,7 +63,7 @@ export function AppNavigation({ children }: { children: ReactNode }) {
     router.navigate('/');
   }, [close]);
   const value = useMemo(() => ({ open, close, home, homeRevision, reserved }), [open, close, home, homeRevision, reserved]);
-  useEffect(close, [pathname, mode, close]);
+  useEffect(close, [pathname, mode, simple, close]);
   useEffect(() => { if (locked) close(); }, [locked, close]);
   useEffect(() => {
     if (Platform.OS !== 'web' || !opened) return;
@@ -69,7 +73,7 @@ export function AppNavigation({ children }: { children: ReactNode }) {
   }, [opened, close]);
   return <Navigation.Provider value={value}>
     <View style={{ flex: 1, flexDirection: 'row', backgroundColor: t.colors.bg }}>
-      {reserved >= 280 ? <Sidebar onClose={() => usePrefs.getState().update({ sidebar: 'drawer' })} /> : reserved ? <NavigationRail /> : null}
+      {reserved >= 280 ? simple ? <SimpleSidebar onClose={close} /> : <Sidebar onClose={() => usePrefs.getState().update({ sidebar: 'drawer' })} /> : reserved ? <NavigationRail /> : null}
       <View style={{ flex: 1, minWidth: 0 }} pointerEvents={locked ? 'none' : 'auto'} aria-hidden={opened || locked} importantForAccessibility={opened || locked ? 'no-hide-descendants' : 'auto'}>{children}</View>
       {locked ? null : <SidebarDrawer visible={opened} onClose={close} />}
     </View>
@@ -80,7 +84,9 @@ export function NavigationToggle() {
   const t = useTheme();
   const nav = useAppNavigation();
   const pinned = nav.reserved >= 280;
-  return <IconButton label={pinned ? 'Collapse sidebar' : 'Open sidebar'} onPress={pinned ? () => usePrefs.getState().update({ sidebar: 'drawer' }) : nav.open}>
+  const simple = usePrefs((s) => s.prefs.view === 'simple');
+  if (simple && pinned) return <View style={{ width: 44 }} />;
+  return <IconButton size={48} label={pinned ? 'Collapse sidebar' : 'Open sidebar'} onPress={pinned ? () => usePrefs.getState().update({ sidebar: 'drawer' }) : nav.open}>
     {pinned ? <PanelLeft size={22} color={t.colors.text} /> : <MenuMark size={24} color={t.colors.text} />}
   </IconButton>;
 }
@@ -88,7 +94,7 @@ export function NavigationToggle() {
 export function InboxButton() {
   const t = useTheme();
   const count = useApp((s) => Object.values(s.runtime).reduce((n, rt) => n + (rt?.pending ?? 0), 0));
-  return <IconButton label={count ? `Inbox, ${count} waiting` : 'Inbox'} onPress={() => router.navigate('/inbox')}>
+  return <IconButton size={48} label={count ? `Inbox, ${count} waiting` : 'Inbox'} onPress={() => router.navigate('/inbox')}>
     <View><Inbox size={22} color={t.colors.text} /><Badge count={count} style={{ position: 'absolute', top: -9, right: -10 }} /></View>
   </IconButton>;
 }
@@ -104,11 +110,14 @@ export function NavigationHeader({ title, inbox = false, right }: { title?: stri
 }
 
 function SidebarDrawer({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+  const focusPanel = useRef<View>(null);
+  useModalFocus(visible, focusPanel, onClose);
   const t = useTheme();
   const s = useStyles();
   const reduced = useReducedMotion();
   const { width } = useWindowDimensions();
-  const drawerWidth = sidebarDrawerWidth(width);
+  const simple = usePrefs((s) => s.prefs.view === 'simple');
+  const drawerWidth = simple ? Math.min(360, width - 24) : sidebarDrawerWidth(width);
   const x = useSharedValue(-drawerWidth);
   useEffect(() => {
     // Closing releases the overlay immediately; interaction must never depend on an animation callback.
@@ -134,10 +143,10 @@ function SidebarDrawer({ visible, onClose }: { visible: boolean; onClose: () => 
       <Animated.View style={[{ position: 'absolute', inset: 0, backgroundColor: t.colors.overlay }, dim]}>
         <Pressable accessibilityRole="button" accessibilityLabel="Close sidebar" onPress={onClose} style={{ flex: 1 }} />
       </Animated.View>
-      <View style={{ width: drawerWidth, flex: 1 }}>
+      <View ref={focusPanel} style={{ width: drawerWidth, flex: 1 }}>
       <KeyboardViewport>{() => <GestureDetector gesture={pan} touchAction="pan-y">
         <Animated.View accessibilityViewIsModal style={[{ width: drawerWidth, flex: 1 }, s.drawerPanel, panel]}>
-          <View style={s.drawerClip}><Sidebar onClose={onClose} drawer /></View>
+          <View style={s.drawerClip}>{simple ? <SimpleSidebar onClose={onClose} drawer /> : <Sidebar onClose={onClose} drawer />}</View>
         </Animated.View>
       </GestureDetector>}</KeyboardViewport>
       </View>
@@ -146,6 +155,81 @@ function SidebarDrawer({ visible, onClose }: { visible: boolean; onClose: () => 
 }
 
 type RowTone = 'draft' | 'pending' | 'running';
+
+function SimpleSidebar({ onClose, drawer = false }: { onClose: () => void; drawer?: boolean }) {
+  const t = useTheme();
+  const s = useStyles();
+  const insets = useSafeAreaInsets();
+  const servers = useApp((st) => st.servers);
+  const runtime = useApp((st) => st.runtime);
+  const selection = useApp((st) => st.selection);
+  const drafts = useApp((st) => st.drafts);
+  const files = useApp((st) => st.draftFiles);
+  const replies = useApp((st) => st.replyTo);
+  const prefs = usePrefs((st) => st.prefs);
+  const [query, setQuery] = useState('');
+  const add = useAddBot();
+  const now = useActivityClock(Object.fromEntries(servers.map((bot) => [bot.id, runtime[bot.id]?.typing ?? NO_TYPING])));
+  const openBot = (bot: Server) => {
+    const rt = runtime[bot.id];
+    const chat = simpleBotChat(bot.id, homeChat(rt), rt?.chats, prefs.lastChatByBot[bot.id], prefs.botOpening, prefs.archivedChats);
+    useApp.getState().select(bot.id, chat);
+    onClose();
+    router.navigate(chat ? `/chat/${bot.id}/${chat}` : '/chats');
+  };
+  const selected = servers.find((bot) => bot.id === selection.serverId) ?? servers[0];
+  return <View style={[s.sidebar, { width: drawer ? '100%' : 280, paddingTop: insets.top + 10,
+    paddingBottom: Math.max(insets.bottom, 12), backgroundColor: t.colors.surfaceSunken }]}>
+    <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, gap: 6 }}>
+      <SearchField value={query} onChangeText={setQuery} placeholder="Search bots" style={{ flex: 1 }} />
+      <IconButton label="New conversation" onPress={() => {
+        if (selected) void startNewChat(selected.id, (id) => { useApp.getState().select(selected.id, id); onClose(); router.navigate(`/chat/${selected.id}/${id}`); });
+      }}><SquarePen size={20} color={t.colors.textSecondary} /></IconButton>
+    </View>
+    <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 12, gap: 4 }}>
+      {servers.filter((bot) => bot.bot.title.toLowerCase().includes(query.trim().toLowerCase())).map((bot) => {
+        const rt = runtime[bot.id];
+        const remembered = simpleBotChat(bot.id, homeChat(rt), rt?.chats, prefs.lastChatByBot[bot.id], 'last', prefs.archivedChats)!;
+        const last = rt?.chats[remembered];
+        const key = `${bot.id}:${remembered}`;
+        const draft = draftPreview(drafts[key], files[key], !!replies[key]);
+        const working = Object.values(rt?.typing ?? {}).some((until) => until > now);
+        const pending = rt?.pending ?? 0;
+        const state = pending ? `${pending} waiting` : working ? 'Working' : rt?.status === 'online' ? '' : 'Offline';
+        const preview = draft ?? last?.preview ?? 'Start a conversation';
+        return <Tap key={bot.id} onPress={() => openBot(bot)}
+          accessibilityLabel={`${bot.bot.title}${state ? `, ${state}` : ''}. ${preview}`}
+          accessibilityState={{ selected: selected?.id === bot.id }}
+          style={({ hovered, pressed }) => [s.chatRow, { minHeight: 64, paddingHorizontal: 10, gap: 10 },
+            selected?.id === bot.id ? { backgroundColor: t.colors.pressed } : (hovered || pressed) && { backgroundColor: t.colors.pressed }]}>
+          <AgentFace server={bot} size={36} still />
+          <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
+            <Text style={s.accountName} numberOfLines={1}>{bot.bot.title}</Text>
+            <Text style={[s.chatDetail, { color: t.colors.textSecondary }]} numberOfLines={1}>{preview || 'Start a conversation'}</Text>
+            {state ? <Text style={[s.chatDetail, { color: pending ? t.colors.warning : t.colors.textSecondary }]}>{state}</Text> : null}
+          </View>
+          <Badge count={pending} />
+        </Tap>;
+      })}
+      {!servers.some((bot) => bot.bot.title.toLowerCase().includes(query.trim().toLowerCase())) ? <Text style={[s.chatDetail, { color: t.colors.textSecondary }]}>No matching bots.</Text> : null}
+    </ScrollView>
+    <View style={{ paddingHorizontal: 12, gap: 2 }}>
+      {drawer ? <ListAction label="Close bot list" onPress={onClose} /> : null}
+      <ListAction label="Add a bot" onPress={add.open} />
+      <ListAction label="Settings" onPress={() => { onClose(); router.navigate('/settings'); }} />
+      <ListAction label="Full view" onPress={() => { onClose(); usePrefs.getState().update({ view: 'full' }); }} />
+    </View>
+    {add.sheet}
+  </View>;
+}
+
+function ListAction({ label, onPress }: { label: string; onPress: () => void }) {
+  const t = useTheme();
+  return <Tap accessibilityLabel={label} onPress={onPress} style={({ hovered, pressed }) => ({ minHeight: 44,
+    justifyContent: 'center', paddingHorizontal: 10, borderRadius: t.radius.md, backgroundColor: hovered || pressed ? t.colors.pressed : 'transparent' })}>
+    <Text style={{ ...t.type.callout, color: t.colors.textSecondary }}>{label}</Text>
+  </Tap>;
+}
 
 function Sidebar({ onClose, drawer = false }: { onClose: () => void; drawer?: boolean }) {
   const t = useTheme();

@@ -14,6 +14,22 @@ const load = (file: string, require: (m: string) => unknown = () => ({})) => {
 const version = load('version.ts');
 const { newestUpdate, pickApk, releaseNotes, checkIsFresh, CHECK_EVERY_MS } = load('appUpdate.ts', () => version);
 
+test('this fork checks its own releases and installs beside upstream', () => {
+  assert.equal(load('appUpdate.ts', () => version).RELEASES_URL,
+    'https://api.github.com/repos/Broedkrummen/winglet/releases?per_page=10');
+  const config = JSON.parse(readFileSync(new URL('../app.json', import.meta.url), 'utf8')).expo;
+  assert.equal(config.android.package, 'io.github.broedkrummen.winglet');
+  assert.equal(config.ios.bundleIdentifier, config.android.package);
+  const watch = readFileSync(new URL('../../wear/app/build.gradle', import.meta.url), 'utf8');
+  assert.ok(watch.includes(`applicationId '${config.android.package}' + (dev ? '.dev' : '')`),
+    'phone and watch need the same application ID for the Data Layer');
+  const workflow = readFileSync(new URL('../../.github/workflows/wear.yml', import.meta.url), 'utf8');
+  assert.ok(workflow.includes(`package: name='${config.android.package}.dev'`));
+  const module: any = { exports: {} };
+  vm.runInNewContext(readFileSync(new URL('../app.config.js', import.meta.url), 'utf8'), { module, process: { env: { WINGLET_DEV: '1' } } });
+  assert.equal(module.exports({ config }).android.package, 'io.github.broedkrummen.winglet.dev');
+});
+
 const apk = (name: string) => ({ name, browser_download_url: `https://dl/${name}`, size: name.length });
 const rel = (tag: string, over: any = {}) => ({
   tag_name: tag, html_url: `https://gh/${tag}`, prerelease: tag.includes('-'), body: `Winglet ${tag}.`,

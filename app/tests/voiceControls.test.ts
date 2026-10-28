@@ -15,6 +15,7 @@ function load(file: string, names: string[]) {
   const modules: Record<string, any> = {
     react: { useState: (value: any) => [value, () => undefined], useRef: (value: any) => ({ current: value }), useEffect: () => undefined, useCallback: (fn: any) => fn },
     'react/jsx-runtime': { jsx, jsxs: jsx },
+    'react-native': { Platform: { OS: 'web' }, View: 'View', Text: 'Text' },
     'react-native-gesture-handler': { Gesture: { Pan: () => chain }, GestureDetector: 'GestureDetector' },
     '../lib/voiceNote': { useVoiceNote: () => { recorderCalls++; return { recording: false, start: async () => undefined, finish: async (cancel: boolean) => { finishes.push(cancel); } }; } },
     '../lib/themeContext': { makeStyles: () => () => any, useTheme: () => any },
@@ -40,6 +41,17 @@ test('an interrupted microphone gesture cancels instead of delivering the record
   h.callbacks.onFinalize({ translationX: 0 }, true);
   h.callbacks.onFinalize({ translationX: -100 }, true);
   assert.deepEqual(h.finishes, [true, false, true]);
+});
+
+test('keyboard voice recording sends on release and cancels when focus leaves', () => {
+  const h = load('Composer.tsx', ['VoiceButton']);
+  const tree = h.exports.VoiceButton({ server: { id: 'bot' }, chatId: 'chat' });
+  const button = tree.props.children[1].props.children;
+  assert.equal(button.props.tabIndex, 0);
+  button.props.onKeyDown({ key: ' ', preventDefault() {}, repeat: false });
+  button.props.onKeyUp({ key: ' ', preventDefault() {} });
+  button.props.onBlur();
+  assert.deepEqual(h.finishes, [false, true]);
 });
 
 test('a running task keeps Stop in the task strip without exposing an unscoped voice send', () => {

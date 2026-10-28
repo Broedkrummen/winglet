@@ -15,7 +15,7 @@ messaging gateway (`hermes gateway`), the same one you'd use for Telegram or Sla
 ## 1. On your Hermes machine
 
 ```bash
-hermes plugins install VIKASRP24/winglet/plugin
+hermes plugins install Broedkrummen/winglet/plugin
 hermes plugins enable winglet
 hermes winglet setup          # prepares HTTPS, starts the gateway, then shows the QR
 ```
@@ -45,7 +45,7 @@ display:
 
 ## 2. On your phone
 
-- **Android:** download `winglet-<version>-arm64-v8a.apk` from the [latest release](https://github.com/VIKASRP24/winglet/releases/latest) (the
+- **Android:** download `winglet-<version>-arm64-v8a.apk` from the [latest release](https://github.com/Broedkrummen/winglet/releases/latest) (the
   `armeabi-v7a` one is for older 32-bit phones), open it, and allow the install. Scan the QR code from step 1.
   When a new version is out, the app offers to download it and open Android's installer if you tap **Update**.
   You can choose Later, skip that version, or turn automatic checks off in About. Android may ask you

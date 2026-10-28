@@ -9,7 +9,7 @@ function harness(over: Record<string, any> = {}) {
   let calls = 0;
   let timeout: () => void = () => {};
   let cleared = false;
-  const update = { version: '0.2.1', page: 'https://github.com/VIKASRP24/winglet/releases/tag/v0.2.1' };
+  const update = { version: '0.2.1', page: 'https://github.com/Broedkrummen/winglet/releases/tag/v0.2.1' };
   const exports: any = {};
   const modules: Record<string, unknown> = {
     'expo-constants': { expoConfig: { version: '0.2.0' } },
@@ -19,7 +19,7 @@ function harness(over: Record<string, any> = {}) {
       state = init((patch: any) => Object.assign(state, patch), () => state);
       return { getState: () => state };
     } },
-    './appUpdate': { RELEASES_URL: 'https://api.github.com/repos/VIKASRP24/winglet/releases',
+    './appUpdate': { RELEASES_URL: 'https://api.github.com/repos/Broedkrummen/winglet/releases',
       checkIsFresh: () => over.fresh ?? false, newestUpdate: () => update },
     './storage': { getJSON: over.read ?? (async () => null), setJSON: over.write ?? (async () => {}) },
   };

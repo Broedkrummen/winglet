@@ -58,9 +58,13 @@ async function start(serverId: string, chatId: string, localId: string) {
     const draft = useApp.getState().draftFiles[`${serverId}:${chatId}`]?.find((f) => f.localId === localId);
     if (draft?.autoSend) {
       haptic.light();
+      const queued = await useApp.getState().sendMessage(serverId, chatId, '', { attachments: [upload], waitForDelivery: false });
+      if (!queued) {
+        patch(serverId, chatId, localId, { autoSend: false });
+        throw new Error('Voice note not queued. Free some storage, then retry.');
+      }
       useApp.getState().updateDraftFiles(serverId, chatId, (list) => list.filter((f) => f.localId !== localId));
       originals.delete(localId);
-      await useApp.getState().sendMessage(serverId, chatId, '', { attachments: [upload] });
     }
   } catch (e) {
     handles.delete(localId);
@@ -95,10 +99,13 @@ export async function sendDraft(serverId: string, chatId: string, text: string, 
   const files = (state.draftFiles[key] ?? []).filter((f) => f.status === 'ready' && f.upload);
   const replyTo = state.replyTo[key];
   const body = prefix && text.trim() ? `${prefix} ${text.trim()}` : text.trim();
-  if (!body && !files.length) return;
-  state.setDraft(serverId, chatId, '');
-  state.setReplyTo(serverId, chatId, undefined);
-  state.updateDraftFiles(serverId, chatId, (list) => list.filter((f) => f.status !== 'ready'));
+  if (!body && !files.length) return false;
+  const queued = await state.sendMessage(serverId, chatId, body, { attachments: files.map((f) => f.upload!), replyTo, waitForDelivery: false });
+  if (!queued) return false;
+  const current = useApp.getState();
+  if (current.drafts[key] === text) current.setDraft(serverId, chatId, '');
+  if (current.replyTo[key] === replyTo) current.setReplyTo(serverId, chatId, undefined);
+  current.updateDraftFiles(serverId, chatId, (list) => list.filter((f) => !files.some((sent) => sent.localId === f.localId)));
   files.forEach((f) => originals.delete(f.localId));
-  await state.sendMessage(serverId, chatId, body, { attachments: files.map((f) => f.upload!), replyTo });
+  return true;
 }

@@ -4,6 +4,10 @@ The [README](../README.md#what-it-does) has the overview. This page lists everyt
 
 ## Talk to it
 
+- **Optional Simple view.** Settings → View → Simple puts bots, message previews and conversations first.
+  Choose Last chat, Main chat or Chat list for opening a bot. Technical controls move to Conversation options;
+  approvals, Stop and delivery recovery remain available. Switch back to Full without clearing drafts.
+
 - **A chat for every topic.** A main chat plus side chats, each its own Hermes session. Replies stream in
   with Markdown, tables and highlighted code.
 - **Start talking in place.** The landing opens quietly; sending reveals the full conversation on the same screen,

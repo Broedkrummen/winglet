@@ -720,7 +720,7 @@ class Store:
     def claim_uploads(self, upload_ids: List[str], device_id: str, chat_id: str, message_id: str) -> Optional[List[Dict[str, Any]]]:
         """Attach uploads to a message. All or nothing: each must belong to this device and chat and
         not already be attached to another message; otherwise None and nothing changes."""
-        with self._lock:
+        with self.transaction():
             rows = []
             for upload_id in upload_ids:
                 row = self.get_upload(upload_id)

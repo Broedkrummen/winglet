@@ -875,6 +875,14 @@ export const useApp = create<AppState>((set, get) => {
         !isLocal(m) && m.meta?.client_id === retryClientId)) return;
       // A retry reuses the original id so the server can tell it already has the message.
       const clientId = retryClientId ?? o.clientId ?? `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+      // Approval commands must never wait in the offline outbox or travel unsigned.
+      if (/^\/approve(?:@[^\s]+)?(?:\s|$)/i.test(text.trim())) {
+        if (!get().network || get().runtime[serverId]?.status !== 'online') throw new ApiError('Reconnect, then approve again.', 0);
+        const data = await signedApi<{ message: Message }>(server, 'POST', `/api/chats/${encodeURIComponent(chatId)}/messages`,
+          { text: text.trim(), client_id: clientId });
+        if (get().servers.some((s) => s.id === serverId)) upsertMessage(serverId, chatId, data.message);
+        return;
+      }
       // Hands-free turns belong to this live session. They never enter the durable offline outbox.
       if (o.liveOnly) {
         if (!get().network || get().runtime[serverId]?.status !== 'online') throw new ApiError('Reconnect, then speak again.', 0);
@@ -940,9 +948,11 @@ export const useApp = create<AppState>((set, get) => {
       const server = get().servers.find((s) => s.id === serverId);
       if (!server) return;
       try {
-        const data = await api<{ item: InboxItem }>(server, `/api/inbox/${itemId}/respond`, {
-          method: 'POST', body: JSON.stringify(reply),
-        });
+        const path = `/api/inbox/${itemId}/respond`;
+        const approval = get().runtime[serverId]?.inbox[itemId]?.kind === 'approval';
+        const data = approval && reply.choice !== 'deny'
+          ? await signedApi<{ item: InboxItem }>(server, 'POST', path, reply)
+          : await api<{ item: InboxItem }>(server, path, { method: 'POST', body: JSON.stringify(reply) });
         patch(serverId, (s) => ({ inbox: { ...s.inbox, [itemId]: data.item } }));
       } catch (e) {
         if (e instanceof ApiError && e.status === 409) {

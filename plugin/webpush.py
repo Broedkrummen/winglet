@@ -27,6 +27,21 @@ DEFAULT_TTL_SECONDS = 24 * 60 * 60
 _RECORD_SIZE = 4096
 
 
+def allowed_endpoint(endpoint: str) -> bool:
+    """Allow browser push services, not arbitrary HTTPS destinations."""
+    try:
+        parts = urlsplit(endpoint)
+        host = parts.hostname or ""
+        return (parts.scheme == "https" and bool(host) and not parts.username and not parts.password
+                and "@" not in parts.netloc and parts.port in (None, 443) and not parts.fragment
+                and not any(c.isspace() or ord(c) < 32 or ord(c) > 126 or c == "\\" for c in endpoint)
+                and (host in ("fcm.googleapis.com", "web.push.apple.com")
+                     or host.endswith(".push.services.mozilla.com")
+                     or host.endswith(".notify.windows.com")))
+    except (ValueError, TypeError):
+        return False
+
+
 def b64url_encode(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
 
@@ -148,5 +163,5 @@ async def send(client, subscription: Dict[str, Any], message: Dict[str, Any], pe
                **kwargs) -> int:
     """POST one push with an ``httpx.AsyncClient``; returns the HTTP status (404/410 = gone)."""
     url, headers, body = build_request(subscription, message, pem, subject, **kwargs)
-    resp = await client.post(url, headers=headers, content=body, timeout=15.0)
+    resp = await client.post(url, headers=headers, content=body, timeout=15.0, follow_redirects=False)
     return resp.status_code

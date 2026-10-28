@@ -52,6 +52,30 @@ async def pair(client, hub, name="Pixel"):
     return (await resp.json())["token"]
 
 
+async def test_webpush_rejects_untrusted_endpoints_and_drops_legacy_rows(client, hub):
+    token = await pair(client, hub)
+    auth = {'Authorization': f'Bearer {token}'}
+    device = hub.store.device_for_token(token)
+    key = ec.generate_private_key(ec.SECP256R1())
+    keys = {'p256dh': webpush.b64url_encode(webpush._public_bytes(key.public_key())),
+            'auth': webpush.b64url_encode(b'0123456789abcdef')}
+    bad = ['https://192.168.1.5/x', 'https://evil.example/x', 'https://fcm.googleapis.com.evil.example/x',
+           'https://evil@fcm.googleapis.com/x', 'https://fcm.googleapis.com:8443/x', 'https:///x']
+    for endpoint in bad:
+        response = await client.post('/api/push/webpush', json={'subscription': {'endpoint': endpoint, 'keys': keys}}, headers=auth)
+        assert response.status == 400, endpoint
+    for endpoint in ('https://fcm.googleapis.com/x', 'https://updates.push.services.mozilla.com/x',
+                     'https://web.push.apple.com/x', 'https://db5.notify.windows.com/x'):
+        response = await client.post('/api/push/webpush', json={'subscription': {'endpoint': endpoint, 'keys': keys}}, headers=auth)
+        assert response.status == 200, endpoint
+        hub.store.remove_push_sub(endpoint=endpoint, device_id=device['id'])
+    endpoint = 'https://192.168.1.5/x'
+    hub.store.add_push_sub(device['id'], 'webpush', endpoint, {'endpoint': endpoint, 'keys': keys})
+    result = await (await client.post('/api/push/test', headers=auth)).json()
+    assert result['accepted'] == 0 and hub._http.posts == []
+    assert not hub.store.list_push_subs('webpush')
+
+
 # -- store -------------------------------------------------------------------------------
 
 
@@ -223,14 +247,14 @@ async def test_approval_roundtrip_and_signed_action(client, hub):
         decisions.append(choice)
         return True
 
+    from test_trust import pair_phone, post_signed
     hub.on_approval = on_approval
-    token = await pair(client, hub)
+    phone = await pair_phone(client, hub)
     item = await hub.add_inbox("approval", "general", "Approval needed", "rm -rf build",
                                {"choices": ["once", "session", "deny"], "session_key": "k"}, push=False)
-    auth = {"Authorization": f"Bearer {token}"}
-    resp = await client.post(f"/api/inbox/{item['id']}/respond", json={"choice": "always"}, headers=auth)
+    resp = await post_signed(client, phone, f"/api/inbox/{item['id']}/respond", {"choice": "always"})
     assert resp.status == 409  # not an offered choice
-    resp = await client.post(f"/api/inbox/{item['id']}/respond", json={"choice": "once"}, headers=auth)
+    resp = await post_signed(client, phone, f"/api/inbox/{item['id']}/respond", {"choice": "once"})
     assert (await resp.json())["item"]["resolution"] == "once"
     assert decisions == ["once"]
 
@@ -269,7 +293,7 @@ async def test_webpush_subscription_and_delivery(client, hub):
     assert len(webpush.b64url_decode(vapid["public_key"])) == 65
 
     ua_key = ec.generate_private_key(ec.SECP256R1())
-    sub = {"endpoint": "https://push.example/abc",
+    sub = {"endpoint": "https://fcm.googleapis.com/abc",
            "keys": {"p256dh": webpush.b64url_encode(webpush._public_bytes(ua_key.public_key())),
                     "auth": webpush.b64url_encode(b"0123456789abcdef")}}
     resp = await client.post("/api/push/webpush", json={"subscription": sub}, headers=auth)

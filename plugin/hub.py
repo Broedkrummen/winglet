@@ -135,7 +135,7 @@ ROUTE_POLICY = {
     "h_push_prefs": "device", "h_push_prefs_put": "device", "h_inbox": "device", "h_webpush_subscribe": "device",
     "h_webpush_unsubscribe": "device", "h_ntfy": "device", "h_push_test": "device", "h_device_verify": "device",
     "h_devices": "owner", "h_audit": "owner",
-    "h_agent": "device", "h_picker_select": "owner",
+    "h_agent": "device", "h_picker_select": "owner_signed",
     "h_chat_goal": "device", "h_goals": "device", "h_search": "device", "h_chat_files": "device",
     "h_checkpoints": "owner", "h_checkpoint": "owner", "h_checkpoint_restore": "owner_signed",
     "h_task": "device",
@@ -1190,6 +1190,11 @@ class Hub:
         if device is None:
             return _error(401, "This pairing was revoked. Reconnect before sending.")
         self._visible_chat(device, request.match_info["chat_id"])
+        if device["role"] == "owner" and self._approval_command(str(body.get("text") or "")):
+            problem = await self._signature_problem(request, device)
+            if problem:
+                needs = {"needs": "verify"} if problem in (VERIFY_FIRST, BAD_SIGNATURE) else {}
+                return _json({"error": problem, **needs}, status=403)
         attachments = body.get("attachments") or []
         if not isinstance(attachments, list) or not all(isinstance(a, str) for a in attachments):
             return _error(400, "attachments must be a list of upload ids")
@@ -1287,6 +1292,20 @@ class Hub:
                 await self.post_message(chat_id, "⚠️ Couldn't reach the agent. Check the gateway logs.",
                                         role="system", push=False)
         return message
+
+    def _approval_command(self, text: str) -> bool:
+        text = text.strip()
+        if not text.startswith("/") or not text[1:].strip():
+            return False
+        typed = text[1:].split(maxsplit=1)[0].split("@")[0].lower()
+        if typed == "approve":
+            return True
+        if self.command_resolver is not None:
+            try:
+                return self.command_resolver(typed) == "approve"
+            except Exception:
+                return False
+        return False
 
     def _refused_command(self, device: Dict[str, Any], text: str) -> str:
         """The slash command a member typed that's for owners only, or "" when the message may go through."""
@@ -1606,6 +1625,14 @@ class Hub:
             sig = str(body.get("sig") or request.query.get("sig") or "")
             if not (choice == "deny" and hmac.compare_digest(sig, self.action_signature(item_id, choice))):
                 return _error(401, "not paired")
+        item = self.store.get_inbox(item_id)
+        if device is not None and item and item["kind"] == "approval" and choice != "deny":
+            if device["role"] != "owner":
+                return _error(403, "Only an owner can approve or deny commands. It's waiting in their inbox.")
+            problem = await self._signature_problem(request, device)
+            if problem:
+                needs = {"needs": "verify"} if problem in (VERIFY_FIRST, BAD_SIGNATURE) else {}
+                return _json({"error": problem, **needs}, status=403)
         try:
             ok, item = await self.respond(item_id, choice=choice, answer=answer, device=device)
         except Forbidden as exc:
@@ -1851,10 +1878,17 @@ class Hub:
         if kind == "ping":
             await ws.send_json({"type": "pong", "t": data.get("t")})
         elif kind == "message.send":
+            if device["role"] == "owner" and self._approval_command(str(data.get("text") or "")):
+                await ws.send_json({"type": "error", "message": "Approve from the app using signed HTTP."})
+                return
             with contextlib.suppress(MessageRejected):
                 await self.user_message(device, str(data.get("chat_id") or ""), str(data.get("text") or ""),
                                         str(data.get("client_id") or ""))
         elif kind == "inbox.respond":
+            item = self.store.get_inbox(str(data.get("id") or ""))
+            if item and item["kind"] == "approval" and str(data.get("choice") or "") != "deny":
+                await ws.send_json({"type": "error", "message": "Approve from the app using signed HTTP."})
+                return
             try:
                 await self.respond(str(data.get("id") or ""), choice=str(data.get("choice") or ""),
                                    answer=data.get("answer"), device=device)
@@ -2251,7 +2285,12 @@ class Hub:
         sign_key = str(data.get("sign_key") or "")
         if data.get("pinned") is not True or not keys.valid_public_key(sign_key):
             return _error(400, "Verify by scanning a code, so this phone can check the server's key.")
-        if self.store.redeem_pair_code(str(data.get("code") or "")) is None:
+        if self.store.device_sign_key(device["id"]):
+            problem = await self._signature_problem(request, device)
+            if problem:
+                needs = {"needs": "verify"} if problem in (VERIFY_FIRST, BAD_SIGNATURE) else {}
+                return _json({"error": problem, **needs}, status=403)
+        if self.store.redeem_pair_code(str(data.get("code") or ""), target_role=device["role"]) is None:
             self._pair_failed(throttle)
             return _error(403, "This code is invalid or expired. Make a new one and try again.")
         self._pair_failures.pop(throttle, None)
@@ -3533,6 +3572,10 @@ class Hub:
                     envelope = encrypted_push.seal(sub["data"]["key"], sub["data"]["kid"], self.server_id(), sub["device_id"], note)
                     status = await webpush.send(client, sub["data"]["subscription"], envelope, pem, PUSH_SUBJECT, urgency=urgency)
                 elif sub["kind"] == "webpush":
+                    if not webpush.allowed_endpoint(sub["data"].get("endpoint", "")):
+                        self.store.remove_push_sub(endpoint=sub["endpoint"], device_id=sub["device_id"])
+                        result["expired"] += 1
+                        return
                     outgoing = note
                     if sub["data"].get("guard_v") == 1:
                         stamp = int(time.time())
@@ -3601,7 +3644,7 @@ class Hub:
         endpoint = str(sub.get("endpoint") or "") if isinstance(sub, dict) else ""
         keys = (sub.get("keys") if isinstance(sub, dict) else None) or {}
         try:
-            valid = (endpoint.startswith("https://") and len(webpush.b64url_decode(keys["p256dh"])) == 65
+            valid = (webpush.allowed_endpoint(endpoint) and len(webpush.b64url_decode(keys["p256dh"])) == 65
                      and len(webpush.b64url_decode(keys["auth"])) >= 16)
         except Exception:
             valid = False

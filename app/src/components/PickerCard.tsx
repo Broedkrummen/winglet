@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, Text, TextInput, View } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
-import { api, ApiError } from '../lib/api';
+import { signedApi, ApiError } from '../lib/api';
 import { haptic } from '../lib/haptics';
 import { availableSavedModels, isCurrentModel, modelName, modelProviders, recentModels, savedModelKey, shortModel, toggleSavedModel, type SavedModel } from '../lib/modelOptions';
 import { spring, useReducedMotion } from '../lib/motion';
@@ -58,7 +58,7 @@ export function PickerCard({ server, message, presentation = 'card', onChosen }:
     setBusy(key);
     haptic.selection();
     try {
-      const result = await api<{ message: Message }>(server, `/api/pickers/${picker.id}/select`, { method: 'POST', body: JSON.stringify({ ...body, message_id: message.id }) });
+      const result = await signedApi<{ message: Message }>(server, 'POST', `/api/pickers/${picker.id}/select`, { ...body, message_id: message.id });
       if (result.message) setAnswer(result.message);
       if (picker.kind === 'model' && body.provider && body.model) {
         const prefs = usePrefs.getState();

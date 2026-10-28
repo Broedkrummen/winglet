@@ -287,13 +287,13 @@ class Store:
                        (_hash(code), now, now + ttl, role))
         return code
 
-    def redeem_pair_code(self, code: str) -> Optional[str]:
-        """Consume a pairing code. Returns the role it grants, exactly once per valid, unexpired code."""
+    def redeem_pair_code(self, code: str, *, target_role: Optional[str] = None) -> Optional[str]:
+        """Consume an authorized pairing code, returning its role exactly once."""
         code_hash = _hash(normalize_code(code))
         with self._lock:
             row = self._one("SELECT role FROM pair_codes WHERE code_hash = ? AND used = 0 AND expires_at >= ?",
                             (code_hash, _now()))
-            if row is None:
+            if row is None or (target_role == "owner" and row["role"] != "owner"):
                 return None
             changed = self._exec("UPDATE pair_codes SET used = 1 WHERE code_hash = ? AND used = 0", (code_hash,))
         return row["role"] if changed == 1 else None

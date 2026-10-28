@@ -34,10 +34,10 @@ function ratio(fg: RGB, bg: RGB) {
   return (x + 0.05) / (y + 0.05);
 }
 
-for (const scheme of ['light', 'dark']) {
+for (const [scheme, tone] of [['light', 'charcoal'], ['dark', 'charcoal'], ['dark', 'graphite'], ['dark', 'black']] as const) {
   for (const accent of ACCENT_NAMES) {
-    test(`${scheme} / ${accent}: every text and background pair passes WCAG AA (4.5:1)`, () => {
-      const c = buildColors(scheme, accent);
+    test(`${scheme}${scheme === 'dark' ? ` (${tone})` : ''} / ${accent}: every text and background pair passes WCAG AA (4.5:1)`, () => {
+      const c = buildColors(scheme, accent, tone);
       const bg = parse(c.bg).rgb;
       const surfaces: [string, RGB][] = ['bg', 'surface', 'surfaceRaised', 'surfaceSunken', 'surfaceHigh', 'glassOpaque']
         .map((k) => [k, over(c[k], bg)]);
@@ -70,6 +70,9 @@ for (const scheme of ['light', 'dark']) {
   }
 }
 
-test('dark is true black for OLED screens', () => {
-  assert.equal(buildColors('dark', 'iris').bg, '#000000');
+test('dark defaults to charcoal, with graphite and true black available', () => {
+  assert.equal(buildColors('dark', 'iris').bg, '#161618');
+  assert.equal(buildColors('dark', 'iris', 'graphite').bg, '#0C0C0E');
+  assert.equal(buildColors('dark', 'iris', 'black').bg, '#000000');
+  assert.equal(buildColors('light', 'iris', 'black').bg, buildColors('light', 'iris').bg);
 });

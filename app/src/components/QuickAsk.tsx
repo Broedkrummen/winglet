@@ -14,8 +14,8 @@ export function QuickAsk({ server, visible, onClose }: { server: Server; visible
   const [height, setHeight] = useState(64);
   return (
     <Sheet visible={visible} onClose={onClose} title={`Ask ${server.bot.title}`}>
-      <View ref={target} style={{ alignItems: 'center', justifyContent: 'center', height: 100 }}>
-        <LivePet server={server} size={60} glow />
+      <View ref={target} style={{ alignItems: 'center', justifyContent: 'center', height: 132 }}>
+        <LivePet server={server} size={76} glow />
       </View>
       <View style={{ height }}>
         <Composer server={server} chatId={chatId} busy={busy} bottomInset={0} target={target} onHeight={setHeight}

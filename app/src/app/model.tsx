@@ -6,7 +6,7 @@ import { modelName, modelProviders } from '../lib/modelOptions';
 import { Screen } from '../components/Screen';
 import { withSelectedServer } from '../components/ServerScreen';
 import { Sheet } from '../components/Sheet';
-import { Button, Card, Chip, Field, ListGroup, ListRow, LoadError, SearchField, SectionHeader, Skeleton } from '../components/ui';
+import { Button, Card, Chip, Field, Footnote, ListGroup, ListRow, LoadError, SearchField, SectionHeader, Skeleton } from '../components/ui';
 import { api, signedApi } from '../lib/api';
 import { haptic } from '../lib/haptics';
 import { useApp } from '../lib/store';
@@ -65,15 +65,14 @@ function ModelScreen() {
   const providers = useMemo(() => modelProviders({ providers: options?.providers, current_model: options?.model, current_provider: options?.provider }, q), [options, q]);
 
   return (
-    <Screen title="Default model" subtitle="New chats start with this model. To change one conversation, tap the model name in its message box."
+    <Screen title="Default model"
       onRefresh={load}>
-      {options ? (
-        <Card style={s.current}>
-          <Text style={s.label}>Now</Text>
-          <Text style={s.currentModel}>{modelName(options.model) || 'Not set'}</Text>
-          <Text style={s.note}>{options.providers.find((p) => p.slug === options.provider)?.name ?? options.provider}</Text>
-        </Card>
-      ) : null}
+      {options?.model && !options.providers.some((p) => p.slug === options.provider && p.models.includes(options.model)) ? <>
+        <SectionHeader title="Selected" />
+        <ListGroup><ListRow title={modelName(options.model)} subtitle={options.model} value={options.provider}
+          right={<Check size={18} color={t.colors.accent} />} /></ListGroup>
+      </> : null}
+      <Footnote>Used for new chats; each chat can choose its own model.</Footnote>
       <SearchField value={query} onChangeText={setQuery} placeholder="Find a model" style={{ marginTop: 16 }} />
       {options?.providers.length ? <>
         <SectionHeader title="Custom model" />
@@ -83,7 +82,7 @@ function ModelScreen() {
               selected={p.slug === (customProvider || options.provider || options.providers[0]?.slug)} onPress={() => setCustomProvider(p.slug)} />)}
           </View>
           <Field label="Model ID" value={customModel} onChangeText={setCustomModel} autoCapitalize="none" autoCorrect={false}
-            placeholder="Exact model ID, e.g. vendor/model-name" hint="Use any model supported by the selected provider, including models missing from its catalog." />
+            placeholder="Exact model ID, e.g. vendor/model-name" hint="Models outside the catalog are supported." />
           <Button title="Use custom model" variant="tonal" disabled={!!busy || !customModel.trim()} loading={!!busy && busy.endsWith(`/${customModel.trim()}`)}
             onPress={() => set(customProvider || options.provider || options.providers[0].slug, customModel.trim())} />
         </Card>
@@ -93,7 +92,7 @@ function ModelScreen() {
         <View style={{ gap: 10, marginTop: 16 }}>{[0, 1, 2].map((i) => <Skeleton key={i} height={52} radius={16} />)}</View>
       )) : providers.length === 0 ? (
         <Card style={{ marginTop: 16, gap: 12 }}>
-          <Text style={s.note}>{q ? `No model matches “${query}”.` : options.providers.length ? 'No catalog models are available yet. Enter a custom model ID above.' : 'No providers are set up yet. Add one with its API key.'}</Text>
+          <Text style={s.note}>{q ? `No model matches “${query}”.` : options.providers.length ? 'No catalog models. Enter a custom model ID.' : 'No providers yet.'}</Text>
           {q || options.providers.length ? null : <Button title="Add a provider" variant="tonal" size="sm" onPress={() => router.push('/providers')} />}
         </Card>
       ) : providers.map((p) => (
@@ -128,9 +127,6 @@ function ModelScreen() {
 }
 
 const useStyles = makeStyles((t) => ({
-  current: { gap: 2, marginTop: 4 },
-  label: { ...t.type.label, fontSize: 11.5, color: t.colors.textSecondary },
-  currentModel: { ...t.type.title, color: t.colors.text },
   note: { ...t.type.callout, color: t.colors.textSecondary },
   error: { ...t.type.callout, color: t.colors.danger, marginTop: 10 },
   sheetText: { ...t.type.callout, color: t.colors.textSecondary, textAlign: 'center' },

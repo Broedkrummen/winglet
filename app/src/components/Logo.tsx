@@ -1,23 +1,19 @@
-import Svg, { Defs, LinearGradient, Path, Rect, Stop } from 'react-native-svg';
-import { BRAND } from '../lib/theme';
+import Svg, { Circle, G, Path, Rect } from 'react-native-svg';
+import { useTheme } from '../lib/themeContext';
 
-/** The Winglet mark: a small wing on a violet-to-sky tile. */
+/** The two wings, tips turned up like winglets, on a 64-unit grid. The agent sits between them. */
+export const WINGS_PATH = 'M10.5 22.5c2.6 1 4.2 3 5.4 5.6 2.6 6.4 5 13.4 7.6 13.4 3.4 0 5.9-3.8 8.5-9.3 2.6 5.5 5.1 9.3 8.5 9.3 2.6 0 5-7 7.6-13.4 1.2-2.6 2.8-4.6 5.4-5.6';
+
+/** The Winglet mark on a solid tile, in the theme's ink so it sits quietly in either theme. */
 export function Logo({ size = 48 }: { size?: number }) {
+  const t = useTheme();
   return (
     <Svg width={size} height={size} viewBox="0 0 64 64" accessibilityLabel="Winglet">
-      <Defs>
-        <LinearGradient id="wg" x1="0" y1="0" x2="1" y2="1">
-          <Stop offset="0" stopColor={BRAND.from} />
-          <Stop offset="0.55" stopColor={BRAND.via} />
-          <Stop offset="1" stopColor={BRAND.to} />
-        </LinearGradient>
-      </Defs>
-      <Rect x={0} y={0} width={64} height={64} rx={18} fill="url(#wg)" />
-      <Path
-        d="M14 40c9-1 16-6 21-14 3-5 7-9 13-10-2 3-3 6-3 9 3-1 5-1 7 0-3 2-5 4-6 7 2 0 4 1 5 2-4 1-7 3-9 6-6 7-17 9-28 0z"
-        fill={BRAND.mark}
-      />
-      <Path d="M20 43c7-1 13-4 18-9" stroke={BRAND.stroke} strokeWidth={2.2} strokeLinecap="round" fill="none" />
+      <Rect x={0} y={0} width={64} height={64} rx={15} fill={t.colors.ink} />
+      <G transform="translate(32 32) scale(0.86) translate(-32 -30.5)">
+        <Path d={WINGS_PATH} fill="none" stroke={t.colors.onInk} strokeWidth={6} strokeLinecap="round" strokeLinejoin="round" />
+        <Circle cx={32} cy={21} r={4.6} fill={t.colors.onInk} />
+      </G>
     </Svg>
   );
 }

@@ -3,12 +3,13 @@ import { ActivityIndicator, ScrollView, Text, View } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { api } from '../lib/api';
 import { haptic } from '../lib/haptics';
+import { spring, useReducedMotion } from '../lib/motion';
 import { useApp } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
 import type { Job, Server } from '../lib/types';
 import { Check, CircleAlert, CircleHelp } from './icons';
 import { Sheet } from './Sheet';
-import { Button } from './ui';
+import { Button, Footnote, ListGroup, ListRow, SectionHeader } from './ui';
 
 const TITLES: Record<Job['kind'], string> = {
   restart: 'Restarting', hermes_update: 'Updating Hermes', winglet_update: 'Updating Winglet',
@@ -32,6 +33,7 @@ export function JobSheet({ server, job: initial, onClose, onDone }: {
   const [lost, setLost] = useState(false);
   const [slow, setSlow] = useState(false);
   const live = useApp((st) => st.runtime[server.id]?.job);
+  const reduced = useReducedMotion();
   const reported = useRef<string | null>(null);
 
   if (initial && initial.id !== job?.id) { setJob(initial); setLost(false); setSlow(false); }
@@ -67,35 +69,35 @@ export function JobSheet({ server, job: initial, onClose, onDone }: {
   const step = !running ? 3 : lost ? 1 : /Restarting/.test(d.message ?? '') ? 1 : 0;
   const tint = job.state === 'succeeded' ? t.colors.success : job.state === 'failed' ? t.colors.danger
     : job.state === 'unknown' ? t.colors.warning : t.colors.accent;
+  const soft = job.state === 'succeeded' ? t.colors.successSoft : job.state === 'failed' ? t.colors.dangerSoft
+    : job.state === 'unknown' ? t.colors.warningSoft : t.colors.accentSoft;
 
   return (
     <Sheet visible={!!initial} onClose={onClose} title={TITLES[job.kind]}>
       <View style={{ gap: 16, paddingHorizontal: 4 }} accessibilityLiveRegion="polite">
         <View style={s.hero}>
-          <View style={[s.badge, { backgroundColor: job.state === 'running' ? t.colors.accentSoft : job.state === 'succeeded' ? t.colors.successSoft : job.state === 'failed' ? t.colors.dangerSoft : t.colors.warningSoft }]}>
-            {running ? <ActivityIndicator color={tint} />
-              : job.state === 'succeeded' ? <Check size={26} color={tint} />
-              : job.state === 'failed' ? <CircleAlert size={26} color={tint} /> : <CircleHelp size={26} color={tint} />}
+          <View style={[s.badge, { backgroundColor: soft }]}>
+            {running ? <ActivityIndicator color={tint} /> : (
+              // The outcome pops into the badge with a small spring when the job ends.
+              <Animated.View key={job.state} entering={reduced ? undefined : FadeIn.duration(180)}>
+                {job.state === 'succeeded' ? <Check size={30} color={tint} />
+                  : job.state === 'failed' ? <CircleAlert size={30} color={tint} /> : <CircleHelp size={30} color={tint} />}
+              </Animated.View>
+            )}
           </View>
           <Text style={s.message}>{running && lost ? 'Waiting for the server to come back…' : d.message || 'Working…'}</Text>
           {job.state === 'succeeded' && d.from && d.to && d.from !== d.to ? <Text style={s.sub}>{d.from} → {d.to}</Text> : null}
         </View>
 
-        {steps.length ? <View style={s.steps}>
-          {steps.map((label, i) => {
+        {steps.length ? <>
+          <SectionHeader title="Progress" />
+          <ListGroup>{steps.map((label, i) => {
             const done = i < step || job.state === 'succeeded';
             const active = running && i === step;
-            return (
-              <View key={label} style={s.step}>
-                <View style={[s.dot, done ? { backgroundColor: t.colors.success, borderColor: t.colors.success }
-                  : active ? { borderColor: t.colors.accent } : null]}>
-                  {done ? <Check size={11} color={t.colors.onAccent} /> : active ? <View style={[s.pip, { backgroundColor: t.colors.accent }]} /> : null}
-                </View>
-                <Text style={[s.stepText, (done || active) && { color: t.colors.text }]}>{label}</Text>
-              </View>
-            );
-          })}
-        </View> : null}
+            return <ListRow key={label} title={label} value={done ? 'Done' : active ? 'Running' : 'Waiting'}
+              icon={done ? <Check /> : undefined} iconColor={done ? t.colors.success : undefined} />;
+          })}</ListGroup>
+        </> : null}
 
         {d.command ? (
           <View style={{ gap: 6 }}>
@@ -105,7 +107,7 @@ export function JobSheet({ server, job: initial, onClose, onDone }: {
         ) : null}
         {slow && running && restarts ? (
           <Animated.Text entering={FadeIn} style={[s.sub, { color: t.colors.warning }]}>
-            This is taking longer than usual. If the server doesn't come back on its own, start it with `hermes gateway start`.
+            Server still offline? Run `hermes gateway start` on it.
           </Animated.Text>
         ) : null}
         {d.lines?.length && !running ? (
@@ -114,26 +116,21 @@ export function JobSheet({ server, job: initial, onClose, onDone }: {
           </ScrollView>
         ) : null}
         <Button title={running ? 'Hide' : 'Done'} variant={running ? 'secondary' : 'primary'} onPress={onClose} />
-        {running ? <Text style={[s.sub, { textAlign: 'center' }]}>It keeps going if you close this.</Text> : null}
+        {running ? <Footnote>Keeps running while hidden.</Footnote> : null}
       </View>
     </Sheet>
   );
 }
 
 const useStyles = makeStyles((t) => ({
-  hero: { alignItems: 'center', gap: 10, paddingTop: 4 },
-  badge: { width: 64, height: 64, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
-  message: { ...t.type.bodyStrong, color: t.colors.text, textAlign: 'center' },
+  hero: { alignItems: 'center', gap: t.space.md, paddingTop: t.space.sm },
+  badge: { width: 72, height: 72, borderRadius: t.radius.pill, alignItems: 'center', justifyContent: 'center' },
+  message: { ...t.type.heading, color: t.colors.text, textAlign: 'center' },
   sub: { ...t.type.caption, color: t.colors.textSecondary },
-  steps: { flexDirection: 'row', justifyContent: 'space-between', gap: 8, paddingHorizontal: 4 },
-  step: { flex: 1, alignItems: 'center', gap: 6 },
-  dot: { width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: t.colors.borderStrong, alignItems: 'center', justifyContent: 'center' },
-  pip: { width: 8, height: 8, borderRadius: 4 },
-  stepText: { ...t.type.caption, fontSize: 12, color: t.colors.textTertiary, textAlign: 'center' },
   command: {
-    fontFamily: t.fonts.mono, fontSize: 13, color: t.colors.text, padding: 12, borderRadius: t.radius.md,
-    backgroundColor: t.colors.surfaceSunken,
+    ...t.type.footnote, fontFamily: t.fonts.mono, color: t.colors.codeText, padding: t.space.md, borderRadius: t.radius.md,
+    backgroundColor: t.colors.codeBg, overflow: 'hidden',
   },
-  log: { maxHeight: 220, borderRadius: t.radius.md, backgroundColor: t.colors.surfaceSunken },
-  logText: { fontFamily: t.fonts.mono, fontSize: 11.5, lineHeight: 17, color: t.colors.textSecondary },
+  log: { maxHeight: 220, borderRadius: t.radius.md, backgroundColor: t.colors.codeBg, borderWidth: 1, borderColor: t.colors.border },
+  logText: { ...t.type.footnote, fontFamily: t.fonts.mono, color: t.colors.textSecondary },
 }));

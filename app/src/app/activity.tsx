@@ -3,7 +3,7 @@ import { Text, View } from 'react-native';
 import { Ban, KeyRound, ShieldCheck, Smartphone, UserPlus } from '../components/icons';
 import { Screen } from '../components/Screen';
 import { withSelectedServer } from '../components/ServerScreen';
-import { Button, Card, Skeleton } from '../components/ui';
+import { Button, Footnote, ListGroup, ListRow, Skeleton } from '../components/ui';
 import { agoText } from '../lib/agent';
 import { api } from '../lib/api';
 import { useApp } from '../lib/store';
@@ -47,46 +47,37 @@ function ActivityScreen() {
   useEffect(() => { load(); }, [server?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const icon = (e: AuditEntry) => {
-    const color = e.outcome === 'refused' ? t.colors.danger : t.colors.onAccentSoft;
-    if (e.outcome === 'refused') return <Ban size={16} color={color} />;
-    if (e.action === 'approval') return <ShieldCheck size={16} color={color} />;
-    if (e.action === 'pairing_code' || e.action === 'device.paired') return <UserPlus size={16} color={color} />;
-    if (e.action.includes('token') || e.action.includes('key') || e.action === 'device.verified') return <KeyRound size={16} color={color} />;
-    return <Smartphone size={16} color={color} />;
+    if (e.outcome === 'refused') return <Ban />;
+    if (e.action === 'approval') return <ShieldCheck />;
+    if (e.action === 'pairing_code' || e.action === 'device.paired') return <UserPlus />;
+    if (e.action.includes('token') || e.action.includes('key') || e.action === 'device.verified') return <KeyRound />;
+    return <Smartphone />;
   };
 
   return (
-    <Screen title="Activity" subtitle="Changes to who can use your agent, approvals, and requests the server turned away. Kept for 180 days.">
+    <Screen title="Activity">
       {error ? <Text style={s.error}>{error}</Text> : null}
       {entries === null ? (
-        <View style={{ gap: 10, marginTop: 12 }}>{[0, 1, 2, 3].map((i) => <Skeleton key={i} height={58} radius={16} />)}</View>
+        <View style={{ gap: t.space.sm, marginTop: t.space.md }}>{[0, 1, 2, 3].map((i) => <Skeleton key={i} height={58} radius={16} />)}</View>
       ) : entries.length === 0 ? (
-        <Card style={{ marginTop: 12 }}><Text style={s.summary}>Nothing yet.</Text></Card>
+        <ListGroup style={{ marginTop: t.space.md }}><ListRow title="Nothing yet." /></ListGroup>
       ) : (
-        <Card style={{ marginTop: 12, paddingVertical: 4 }}>
-          {entries.map((e, i) => (
-            <View key={e.id} style={[s.row, i > 0 && s.divider]} accessible accessibilityLabel={`${LABELS[e.action] ?? e.action}. ${e.summary}. ${e.device_name || 'Server terminal'}, ${agoText(e.ts)}`}>
-              <View style={[s.icon, { backgroundColor: e.outcome === 'refused' ? t.colors.dangerSoft : t.colors.accentSoft }]}>{icon(e)}</View>
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={s.action}>{LABELS[e.action] ?? e.action}</Text>
-                {e.summary ? <Text style={s.summary} numberOfLines={3}>{e.summary}</Text> : null}
-                <Text style={s.meta}>{e.device_name || 'Server terminal'} · {agoText(e.ts)}</Text>
-              </View>
-            </View>
+        <ListGroup style={{ marginTop: t.space.md }}>
+          {entries.map((e) => (
+            <ListRow key={e.id} icon={icon(e)} iconColor={e.outcome === 'refused' ? t.colors.danger : undefined}
+              title={LABELS[e.action] ?? e.action}
+              subtitle={[e.device_name || 'Server terminal', e.summary].filter(Boolean).join(' · ')}
+              value={agoText(e.ts)} />
           ))}
-        </Card>
+        </ListGroup>
       )}
-      {entries?.length && more ? <Button title="Load older" variant="ghost" onPress={() => load(entries[entries.length - 1].id)} /> : null}
+      {entries?.length ? <Footnote>Kept for 180 days.</Footnote> : null}
+      {entries?.length && more ? <Button style={{ marginTop: t.space.md }} variant="ghost" title="Load older"
+        onPress={() => load(entries[entries.length - 1].id)} /> : null}
     </Screen>
   );
 }
 
 const useStyles = makeStyles((t) => ({
-  row: { flexDirection: 'row', gap: 12, paddingVertical: 12 },
-  divider: { borderTopWidth: 1, borderTopColor: t.colors.border },
-  icon: { width: 32, height: 32, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginTop: 2 },
-  action: { ...t.type.body, fontFamily: t.fonts.semibold, color: t.colors.text },
-  summary: { ...t.type.callout, color: t.colors.textSecondary },
-  meta: { ...t.type.caption, color: t.colors.textTertiary, marginTop: 2 },
-  error: { ...t.type.callout, color: t.colors.danger, marginTop: 8 },
+  error: { ...t.type.callout, color: t.colors.danger, marginTop: t.space.sm },
 }));

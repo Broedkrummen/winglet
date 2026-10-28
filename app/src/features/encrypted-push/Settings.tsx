@@ -6,9 +6,9 @@ import {useLock} from '../../lib/appLock';
 import {useApp} from '../../lib/store';
 import type {Server} from '../../lib/types';
 import {describeTestPush,sendTestPush} from '../../lib/push';
-import {makeStyles} from '../../lib/themeContext';
+import {makeStyles,useTheme} from '../../lib/themeContext';
 import {Sheet} from '../../components/Sheet';
-import {Button,Card,ListGroup,ListRow,SectionHeader,Toggle} from '../../components/ui';
+import {Button,Footnote,ListGroup,ListRow,SectionHeader,Toggle} from '../../components/ui';
 import {currentPairing,pushStatus,syncEncryptedPush} from './api';
 import {pushNative as defaultPushNative,type LocalPushStatus,type PushCapabilities,type PushNative} from './native';
 import type {RemotePushStatus} from './registration';
@@ -27,7 +27,7 @@ const errors:Record<string,string>={
 const when=(value?:number)=>value?new Date(value*1000).toLocaleString():'Not observed yet';
 export function EncryptedPushSettings({server,nativeClient=defaultPushNative}:{server:Server;nativeClient?:PushNative|null}){
   const pushNative=nativeClient;
-  const s=useStyles();
+  const s=useStyles(),t=useTheme();
   const supported=useApp(st=>!!st.runtime[server.id]?.info?.features?.encrypted_push);
   const online=useApp(st=>st.network && st.runtime[server.id]?.status==='online');
   const foreground=useApp(st=>st.foreground),locked=useLock(st=>st.locked);
@@ -85,59 +85,69 @@ export function EncryptedPushSettings({server,nativeClient=defaultPushNative}:{s
   };
   const active=!!local?.active && !!remote?.enrolled && local.kid===remote.kid;
   const needsRepair=!!local?.keyLost || (!!remote?.enrolled && !active) || local?.needsSync;
+  const status=needsRepair?'Delivery needs repair':active?'Encrypted notifications on':!supported?'Encrypted delivery unavailable':'Encrypted notifications off';
   return <>
     <SectionHeader title={server.bot.title}/>
-    <Card style={s.card}>
-      <Text style={s.heading}>{active?'Encrypted notifications are on':'Private Android notifications'}</Text>
-      <Text style={s.note}>Winglet decrypts notifications on this phone through a UnifiedPush distributor such as ntfy. Bot names, chat details and actions stay encrypted through the relay.</Text>
-      {!supported?<Text style={s.note}>{online?'Update Winglet on this server to enable encrypted delivery.':'Connect to this bot to check encrypted delivery support.'}</Text>:null}
-      {cap && !cap.distributors.length?<Text style={s.note}>Install and open the ntfy Android app, enable its UnifiedPush support, then refresh. Use this server's configured HTTPS ntfy relay.</Text>:null}
-      {cap && !cap.notificationsAllowed?<Text style={s.note}>Android notification permission is off. Setup will request it; if blocked, allow Winglet notifications in Android settings.</Text>:null}
-      {needsRepair?<Text style={s.note}>This phone and server need to resync. Delivery remains encrypted; there is no plaintext fallback.</Text>:null}
-      {local?.error && errors[local.error]?<Text style={s.error}>{errors[local.error]}</Text>:null}
-      <View style={s.buttons}>
-        <Button title={active?'Repair delivery':'Set up encrypted delivery'} loading={busy} disabled={!supported||!online||!cap?.distributors.length||busy}
-          onPress={()=>{setRotate(false);setChoose(true);}}/>
-        <Button title="Refresh status" variant="tonal" disabled={busy} onPress={()=>{setError('');void refresh();}}/>
-      </View>
-      {local?.registered?<>
-        <ListRow title="Show details when unlocked" right={<Toggle label="Show details when unlocked" value={!!local.previews} onValueChange={enabled=>{
-          if(busy)return;void run(async signal=>{currentPairing(server,signal);await pushNative?.previews(server.id,server.deviceId,enabled);});
-        }}/>}/>
-        <Text style={s.note}>Details are hidden on the lock screen. App lock always uses a generic preview. Relay addresses, timing and payload sizes remain visible to the relay.</Text>
-      </>:null}
-      {local?.kid || remote?.enrolled || local?.keyLost?<View style={s.buttons}>
-        <Button title="Rotate key" variant="tonal" disabled={!online||busy||!cap?.distributors.length} onPress={()=>{setRotate(true);setChoose(true);}}/>
-        <Button title="Turn off" variant="ghost" disabled={busy} onPress={()=>void run(async signal=>{
+    <ListGroup><ListRow title={status} icon={<View style={[s.dot,{backgroundColor:needsRepair?t.colors.warning:active?t.colors.success:t.colors.textTertiary}]} />}/></ListGroup>
+    {!supported?<Footnote>{online?'Update this server to enable encrypted delivery.':'Connect to check encrypted delivery support.'}</Footnote>:null}
+    {cap && !cap.distributors.length?<Footnote>Install and open ntfy, enable UnifiedPush, then refresh.</Footnote>:null}
+    {cap && !cap.notificationsAllowed?<Footnote>Allow Winglet notifications in Android settings.</Footnote>:null}
+    {needsRepair?<Footnote>Resync this phone and server. There is no plaintext fallback.</Footnote>:null}
+    {local?.error && errors[local.error]?<Text style={s.error}>{errors[local.error]}</Text>:null}
+    <SectionHeader title="Delivery"/>
+    <View style={s.buttons}>
+      <Button title={active?'Repair delivery':'Set up encrypted delivery'} loading={busy} disabled={!supported||!online||!cap?.distributors.length||busy}
+        onPress={()=>{setRotate(false);setChoose(true);}}/>
+      {active?<Button title="Send a test" variant="secondary" disabled={!online||busy} onPress={()=>void run(async signal=>{
+        currentPairing(server,signal);const result=await sendTestPush(server);currentPairing(server,signal);
+        if(alive.current)setMessage(describeTestPush(result)+' Acceptance does not prove receipt or display.');
+      })}/>:null}
+    </View>
+    <ListGroup style={s.group}>
+      {local?.registered?<ListRow title="Show details when unlocked" right={<Toggle label="Show details when unlocked" value={!!local.previews} onValueChange={enabled=>{
+        if(busy)return;void run(async signal=>{currentPairing(server,signal);await pushNative?.previews(server.id,server.deviceId,enabled);});
+      }}/>}/>:null}
+      <ListRow title="Details" onPress={()=>setDiagnostics(true)}/>
+      <ListRow title="Refresh status" disabled={busy} onPress={()=>{setError('');void refresh();}} chevron={false}/>
+    </ListGroup>
+    <Footnote>Lock screen and app lock always hide message details.</Footnote>
+    {local?.kid || remote?.enrolled || local?.keyLost?<>
+      <SectionHeader title="Security"/>
+      <ListGroup>
+        <ListRow title="Rotate key" disabled={!online||busy||!cap?.distributors.length} onPress={()=>{setRotate(true);setChoose(true);}}/>
+        <ListRow title="Turn off" destructive disabled={busy} chevron={false} onPress={()=>void run(async signal=>{
           await pushNative?.remove(server.id,server.deviceId);
           try{currentPairing(server,signal);await signedApi(server,'DELETE','/api/push/encrypted');if(alive.current)setMessage('Encrypted notifications are off. Plaintext fallback stays blocked.');}
           catch{throw new Error('Disabled on this phone. Reconnect and tap Turn off again to stop server delivery too.');}
         })}/>
-      </View>:null}
-      <ListRow title="Delivery diagnostics" subtitle="Registration, acceptance, receipt and display" onPress={()=>setDiagnostics(true)}/>
-      {active?<Button title="Send a test" variant="tonal" disabled={!online||busy} onPress={()=>void run(async signal=>{
-        currentPairing(server,signal);const result=await sendTestPush(server);currentPairing(server,signal);
-        if(alive.current)setMessage(describeTestPush(result)+' Acceptance does not prove receipt or display.');
-      })}/>:null}
-      {message?<Text style={s.note} accessibilityLiveRegion="polite">{message}</Text>:null}
-      {error?<Text style={s.error} accessibilityLiveRegion="polite">{error}</Text>:null}
-    </Card>
-    <Sheet visible={choose} onClose={()=>setChoose(false)} title={rotate?'Rotate encrypted push key':'Choose push distributor'}>
-      <Text style={s.note}>{rotate?'Rotation immediately retires the old local key. Delivery resumes once the server confirms the new key.':'This distributor carries encrypted payloads. It never receives your Winglet credentials or delivery key.'}</Text>
-      <ListGroup>{cap?.distributors.map(item=><ListRow key={item.id} title={item.name} subtitle={item.id} onPress={()=>setup(item.id)}/>)}</ListGroup>
-    </Sheet>
-    <Sheet visible={diagnostics} onClose={()=>setDiagnostics(false)} title="Delivery diagnostics" scrollable>
-      <ListGroup>
-        <ListRow title="Device registration" subtitle={local?.registered?'Distributor endpoint available':'Not registered'}/>
-        <ListRow title="Server registration" subtitle={remote?.enrolled?'Encrypted key enrolled':'Not enrolled'}/>
-        <ListRow title="Relay acceptance" subtitle={remote?.acceptance?`${remote.acceptance.ok?'Accepted':'Rejected'} · ${when(remote.acceptance.at)}`:'Not observed yet'}/>
-        <ListRow title="Received on phone" subtitle={when(local?.received)}/>
-        <ListRow title="Decrypted and authenticated" subtitle={when(local?.decrypted)}/>
-        <ListRow title="Display requested from Android" subtitle={when(local?.displayed)}/>
-        <ListRow title="Suppressed while connected in Winglet" subtitle={when(local?.suppressed)}/>
       </ListGroup>
-      <Text style={s.note}>A display request confirms Android accepted the local notification call; Focus modes, lock-screen settings and battery restrictions can still affect what you see. Open ntfy to check connectivity, allow Winglet's notification channel, then send a test.</Text>
+    </>:null}
+    {message?<Text style={s.note} accessibilityLiveRegion="polite">{message}</Text>:null}
+    {error?<Text style={s.error} accessibilityLiveRegion="polite">{error}</Text>:null}
+    <Sheet visible={choose} onClose={()=>setChoose(false)} title={rotate?'Rotate key':'Push distributor'}>
+      <ListGroup>{cap?.distributors.map(item=><ListRow key={item.id} title={item.name} value={item.id} onPress={()=>setup(item.id)}/>)}</ListGroup>
+      <Footnote>{rotate?'The old local key retires immediately; delivery resumes after server confirmation.':'Only encrypted payloads pass through this distributor, never your credentials or delivery key.'}</Footnote>
+    </Sheet>
+    <Sheet visible={diagnostics} onClose={()=>setDiagnostics(false)} title="Delivery details" scrollable>
+      <ListGroup>
+        <ListRow title="Device registration" value={local?.registered?'Registered':'Not registered'}/>
+        <ListRow title="Server registration" value={remote?.enrolled?'Enrolled':'Not enrolled'}/>
+        <ListRow title="Relay acceptance" value={remote?.acceptance?remote.acceptance.ok?'Accepted':'Rejected':'Not observed yet'} subtitle={remote?.acceptance?when(remote.acceptance.at):undefined}/>
+        <ListRow title="Received on phone" value={when(local?.received)}/>
+        <ListRow title="Decrypted and authenticated" value={when(local?.decrypted)}/>
+        <ListRow title="Display requested from Android" value={when(local?.displayed)}/>
+        <ListRow title="Suppressed while connected in Winglet" value={when(local?.suppressed)}/>
+      </ListGroup>
+      <Footnote>Android may still hide a requested notification due to Focus, lock-screen or battery settings.</Footnote>
+      <Footnote>Open ntfy to check connectivity and allow Winglet's notification channel before testing.</Footnote>
+      <Footnote>Content stays encrypted; relay addresses, timing and payload sizes remain visible to the relay.</Footnote>
+      <Footnote>Use the HTTPS ntfy relay configured on this server.</Footnote>
     </Sheet>
   </>;
 }
-const useStyles=makeStyles(t=>({card:{gap:14},heading:{...t.type.heading,color:t.colors.text},note:{...t.type.callout,color:t.colors.textSecondary},error:{...t.type.callout,color:t.colors.danger},buttons:{flexDirection:'row',flexWrap:'wrap',gap:8}}));
+const useStyles=makeStyles(t=>({
+  dot:{width:t.space.sm,height:t.space.sm,borderRadius:t.radius.pill},group:{marginTop:t.space.md},
+  note:{...t.type.footnote,color:t.colors.textSecondary,marginTop:t.space.sm},
+  error:{...t.type.footnote,color:t.colors.danger,marginTop:t.space.sm},
+  buttons:{flexDirection:'row',flexWrap:'wrap',gap:t.space.sm},
+}));

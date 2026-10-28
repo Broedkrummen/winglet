@@ -103,6 +103,7 @@ export { default as Smartphone } from 'lucide-react-native/icons/smartphone';
 export { default as Sparkles } from 'lucide-react-native/icons/sparkles';
 export { default as Square } from 'lucide-react-native/icons/square';
 export { default as Star } from 'lucide-react-native/icons/star';
+export { default as SquarePen } from 'lucide-react-native/icons/square-pen';
 export { default as SquarePlus } from 'lucide-react-native/icons/square-plus';
 export { default as SquareTerminal } from 'lucide-react-native/icons/square-terminal';
 export { default as Sun } from 'lucide-react-native/icons/sun';

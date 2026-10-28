@@ -6,7 +6,7 @@ import { useTheme } from '../lib/themeContext';
 import type { Server } from '../lib/types';
 import { Bot, QrCode, Smartphone } from './icons';
 import { Sheet } from './Sheet';
-import { ListGroup, ListRow } from './ui';
+import { Footnote, ListGroup, ListRow } from './ui';
 
 /**
  * The server a new bot would live on (the selected bot's, whichever of its bots is selected) and whether
@@ -28,11 +28,11 @@ export function PairRows({ onPick }: { onPick?: () => void }) {
   return (
     <ListGroup>
       {Platform.OS !== 'web' ? (
-        <ListRow icon={<QrCode size={18} color={t.colors.onAccentSoft} />} title="Scan a QR code"
-          subtitle="From `hermes winglet pair` on the other server" onPress={go('/scan')} />
+        <ListRow icon={<QrCode size={18} color={t.colors.textSecondary} />} title="Scan a QR code"
+          onPress={go('/scan')} />
       ) : null}
-      <ListRow icon={<Smartphone size={18} color={t.colors.onAccentSoft} />} title="Pair with a code"
-        subtitle="Type the address and code instead" onPress={go('/pair')} />
+      <ListRow icon={<Smartphone size={18} color={t.colors.textSecondary} />} title="Pair with a code"
+        onPress={go('/pair')} />
     </ListGroup>
   );
 }
@@ -43,19 +43,19 @@ export function PairRows({ onPick }: { onPick?: () => void }) {
  */
 export function useAddBot(): { open: () => void; sheet: ReactNode } {
   const t = useTheme();
-  const { canMake, main } = useBotHost();
+  const { canMake } = useBotHost();
   const [visible, setVisible] = useState(false);
   const open = useCallback(() => setVisible(true), []);
   const close = () => setVisible(false);
   const sheet = (
     <Sheet visible={visible} onClose={close} title="Add a bot" scrollable>
       <ListGroup style={{ marginBottom: 12 }}>
-        <ListRow icon={<Bot size={18} color={canMake ? t.colors.success : t.colors.textTertiary} />} iconColor={canMake ? t.colors.success : undefined}
+        <ListRow icon={<Bot size={18} color={canMake ? t.colors.success : t.colors.textTertiary} />} iconColor={canMake ? undefined : t.colors.textTertiary}
           title="Create a new bot"
-          subtitle={canMake ? `A new agent on ${main?.bot.title}'s server, with its own persona, memory and pet`
-            : 'Needs an owner phone and the latest Winglet plugin on this server'}
+          value={canMake ? undefined : 'Unavailable'}
           chevron={canMake} disabled={!canMake} onPress={canMake ? () => { close(); router.push('/new-bot'); } : () => undefined} />
       </ListGroup>
+      {!canMake ? <Footnote>Creating bots needs an owner device and the latest server plugin.</Footnote> : null}
       <PairRows onPick={close} />
     </Sheet>
   );

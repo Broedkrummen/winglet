@@ -1,6 +1,7 @@
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Text, TextInput, View } from 'react-native';
+import Animated, { FadeIn } from 'react-native-reanimated';
 import { PairRows, useBotHost } from '../components/AddBot';
 import { BotAvatar } from '../components/BotAvatar';
 import { Bot, RotateCw } from '../components/icons';
@@ -10,11 +11,15 @@ import { Button, Card, Field, SectionHeader } from '../components/ui';
 import { api, ApiError, signedApi } from '../lib/api';
 import { botName } from '../lib/bots';
 import { idempotencyKey } from '../lib/control';
+import { spring, useReducedMotion } from '../lib/motion';
 import { useApp } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
 import type { BotRow, Job } from '../lib/types';
 
 type BotsState = { bots: BotRow[]; multiplex: boolean; reason: string };
+
+const rise = (reduced: boolean, i: number) => (reduced ? undefined
+  : FadeIn.duration(180));
 
 /**
  * A new bot on the same server: a Hermes profile with its own persona, memory, skills, chats and pet, made the
@@ -23,6 +28,7 @@ type BotsState = { bots: BotRow[]; multiplex: boolean; reason: string };
 export default function NewBotScreen() {
   const t = useTheme();
   const s = useStyles();
+  const reduced = useReducedMotion();
   const { main, canMake } = useBotHost();
   const [state, setState] = useState<BotsState | null>(null);
   const [title, setTitle] = useState('');
@@ -83,44 +89,48 @@ export default function NewBotScreen() {
   };
 
   return (
-    <Screen title="Add a bot" subtitle={canMake
-      ? `A new agent on ${main.bot.title}'s server, for one job: its own persona, memory, skills, chats and pet. It's ready on this phone straight away, no pairing.`
-      : 'Pair a bot from another Hermes server.'}>
+    <Screen title="Add a bot" subtitle={main.bot.title}>
       {canMake ? (
         made ? (
-          <Card style={{ gap: 12, marginTop: 18, alignItems: 'center' }}>
-            <BotAvatar name={made.name} size={64} mood="happy" animated glow />
+          <Animated.View entering={rise(reduced, 0)} style={s.made}>
+            <BotAvatar name={made.name} size={112} mood="happy" animated glow />
             <Text style={s.lead}>{title.trim()} is ready</Text>
             {made.restart ? (
               <>
-                <Text style={s.note}>Hermes is serving only your main bot right now. Restart the server once and it serves every bot.</Text>
-                <Button title="Restart the server" icon={<RotateCw size={16} color={t.colors.onAccent} />} onPress={restart} />
+                <Text style={s.note}>Restart the server once to bring every bot online.</Text>
+                <Button title="Restart the server" icon={<RotateCw size={16} color={t.colors.onAccent} />} onPress={restart} style={s.wide} />
               </>
             ) : null}
-            <Button title={`Chat with ${title.trim()}`} variant={made.restart ? 'secondary' : 'primary'} onPress={open} />
-          </Card>
+            <Button title={`Chat with ${title.trim()}`} variant={made.restart ? 'secondary' : 'primary'} onPress={open} style={s.wide} />
+          </Animated.View>
         ) : (
           <View style={{ gap: 12, marginTop: 18 }}>
+            {/* A face for the new bot that changes as you name it: each name gets its own. */}
+            <Animated.View entering={rise(reduced, 0)} style={s.preview} accessible={false}>
+              <BotAvatar name={slug || 'new'} size={96} mood={title.trim() ? 'happy' : 'idle'} animated glow />
+              <Text style={s.previewName} numberOfLines={1}>{title.trim() || 'Your new bot'}</Text>
+            </Animated.View>
             {state && !state.multiplex ? (
               <Card style={{ gap: 6 }}>
-                <Text style={s.lead}>One restart after you make it</Text>
+                <Text style={s.noticeTitle}>Restart required after creation</Text>
                 <Text style={s.note}>
-                  Hermes serves one profile until there are two{state.reason ? ` (${state.reason})` : ''}. After you make this bot,
-                  restart the server once from here.
+                  Restart once after creation{state.reason ? `: ${state.reason}` : '.'}
                 </Text>
               </Card>
             ) : null}
-            <Field label="Name" value={title} onChangeText={setTitle} placeholder="Chef, Researcher, Tutor…" maxLength={60} />
-            <Field label="Short name" value={slug} onChangeText={(v) => { setNameTouched(true); setName(botName(v)); }}
-              hint="How Hermes and your other bots refer to it" autoCapitalize="none" autoCorrect={false} maxLength={40} />
-            <View style={{ gap: 6 }}>
-              <Text style={s.label}>What it's for</Text>
-              <TextInput value={purpose} onChangeText={setPurpose} multiline placeholder="Plans the week's meals, keeps the shopping list, and suggests recipes from what's in the fridge."
-                placeholderTextColor={t.colors.textTertiary} style={s.area} accessibilityLabel="What the bot is for" />
-              <Text style={s.hint}>This becomes its persona. You can change it later under Persona.</Text>
-            </View>
+            <Animated.View entering={rise(reduced, 1)} style={{ gap: 12 }}>
+              <Field label="Name" value={title} onChangeText={setTitle} placeholder="Chef, Researcher, Tutor…" maxLength={60} />
+              <Field label="Short name" value={slug} onChangeText={(v) => { setNameTouched(true); setName(botName(v)); }}
+                hint="How Hermes and your other bots refer to it" autoCapitalize="none" autoCorrect={false} maxLength={40} />
+              <View style={{ gap: 6 }}>
+                <Text style={s.label}>What it's for</Text>
+                <TextInput value={purpose} onChangeText={setPurpose} multiline placeholder="Plans meals and keeps the shopping list."
+                  placeholderTextColor={t.colors.textTertiary} style={s.area} accessibilityLabel="What the bot is for" />
+                <Text style={s.hint}>Sets its persona; editable later.</Text>
+              </View>
+            </Animated.View>
             {error ? <Text style={s.error}>{error}</Text> : null}
-            <Button title={`Make ${title.trim() || 'the bot'}`} icon={<Bot size={16} color={t.colors.onAccent} />} loading={busy}
+            <Button title="Create bot" icon={<Bot size={16} color={t.colors.onAccent} />} loading={busy}
               disabled={!title.trim() || !slug} onPress={create} />
           </View>
         )
@@ -136,11 +146,16 @@ export default function NewBotScreen() {
 }
 
 const useStyles = makeStyles((t) => ({
-  lead: { ...t.type.bodyStrong, color: t.colors.text, textAlign: 'center' },
-  note: { ...t.type.callout, color: t.colors.textSecondary },
+  made: { gap: t.space.md, marginTop: t.space.xl, alignItems: 'center', paddingVertical: t.space.lg },
+  wide: { alignSelf: 'stretch' },
+  preview: { alignItems: 'center', gap: t.space.sm, paddingVertical: t.space.md },
+  previewName: { ...t.type.title, color: t.colors.text, textAlign: 'center' },
+  lead: { ...t.type.title, color: t.colors.text, textAlign: 'center' },
+  noticeTitle: { ...t.type.bodyStrong, color: t.colors.text, textAlign: 'center' },
+  note: { ...t.type.callout, color: t.colors.textSecondary, textAlign: 'center' },
   label: { ...t.type.label, color: t.colors.textSecondary },
   hint: { ...t.type.caption, fontFamily: t.fonts.regular, color: t.colors.textSecondary },
   area: { ...t.type.body, color: t.colors.text, backgroundColor: t.colors.surfaceSunken, borderRadius: t.radius.md, padding: 14,
-    minHeight: 110, textAlignVertical: 'top' },
+    minHeight: 110, textAlignVertical: 'top', ...({ outlineStyle: 'none' } as object) },
   error: { ...t.type.callout, color: t.colors.danger },
 }));

@@ -5,9 +5,10 @@ import Animated, { FadeIn } from 'react-native-reanimated';
 import { MessageSquareText, Pin, Search } from '../components/icons';
 import { Screen } from '../components/Screen';
 import { withSelectedServer } from '../components/ServerScreen';
-import { Button, LoadError, SearchField, Skeleton, Tap } from '../components/ui';
+import { Button, ListGroup, ListRow, LoadError, SearchField, SectionHeader, Skeleton, Tap } from '../components/ui';
 import { ago } from '../lib/agent';
 import { api } from '../lib/api';
+import { spring, useReducedMotion } from '../lib/motion';
 import { markedParts, sessionTitle, sourceLabel } from '../lib/sessions';
 import { useApp } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
@@ -21,6 +22,7 @@ export default withSelectedServer(SessionsScreen);
 function SessionsScreen() {
   const t = useTheme();
   const s = useStyles();
+  const reduced = useReducedMotion();
   const server = useApp((st) => st.servers.find((x) => x.id === st.selection.serverId) ?? st.servers[0]);
   const [rows, setRows] = useState<SessionRow[] | null>(null);
   const [total, setTotal] = useState(0);
@@ -79,15 +81,19 @@ function SessionsScreen() {
       {!list ? (
         error && !searching ? <LoadError message={error} onRetry={load} style={{ marginTop: 12 }} />
           : searching && searchError ? null
-          : <View style={{ gap: 10, marginTop: 18 }}>{[0, 1, 2, 3].map((i) => <Skeleton key={i} height={68} radius={16} />)}</View>
+          : <View style={{ gap: 10, marginTop: 18 }}>{[0, 1, 2, 3].map((i) => <Skeleton key={i} height={68} radius={t.radius.lg} />)}</View>
       ) : (
-        <Animated.View entering={FadeIn} style={s.group}>
-          {list.map((row, i) => (
-            <SessionItem key={row.id} row={row} first={i === 0} onPress={() => router.push(`/session/${encodeURIComponent(row.id)}`)} />
-          ))}
+        <Animated.View entering={reduced ? undefined : FadeIn}>
+          <SectionHeader title={searching ? 'Search results' : 'Conversations'} right={<Text style={s.time}>{searching ? list.length : total}</Text>} />
+          {list.length ? <ListGroup>{list.map((row, i) => (
+            <Animated.View key={row.id} entering={reduced || i > 12 ? undefined
+              : FadeIn.duration(180)}>
+              <SessionItem row={row} first={i === 0} onPress={() => router.push(`/session/${encodeURIComponent(row.id)}`)} />
+            </Animated.View>
+          ))}</ListGroup> : null}
           {!list.length ? (
             <View style={s.empty}>
-              <Search size={22} color={t.colors.textTertiary} />
+              <View style={s.emptyIcon}><Search size={24} color={t.colors.textSecondary} /></View>
               <Text style={s.emptyText}>{searching ? `Nothing said matches "${query.trim()}".` : 'No conversations yet.'}</Text>
             </View>
           ) : null}
@@ -106,48 +112,33 @@ function SessionItem({ row, first, onPress }: { row: SessionRow; first: boolean;
   const t = useTheme();
   const s = useStyles();
   const when = row.last_active ?? row.started_at;
-  const meta = [sourceLabel(row.source), row.message_count ? `${row.message_count} messages` : null,
-    row.tool_call_count ? `${row.tool_call_count} tool ${row.tool_call_count === 1 ? 'call' : 'calls'}` : null].filter(Boolean).join(' · ');
+  const meta = `${sourceLabel(row.source)}, ${row.message_count ?? 0} messages, ${row.tool_call_count ?? 0} tool calls`;
   return (
     <Tap feedback="selection" scaleTo={0.99} onPress={onPress} accessibilityLabel={`${sessionTitle(row)}, ${meta}. Open`}
-      style={({ pressed, hovered }) => [s.row, !first && s.rowBorder, (pressed || hovered) && { backgroundColor: t.colors.pressed }]}>
-      <View style={s.icon}>
-        <MessageSquareText size={18} color={t.colors.onAccentSoft} />
-        {row.active ? <View style={[s.live, { borderColor: t.colors.surface }]} /> : null}
-      </View>
-      <View style={{ flex: 1, minWidth: 0 }}>
-        <View style={s.head}>
-          {row.pinned ? <Pin size={13} color={t.colors.textTertiary} accessibilityLabel="Pinned" /> : null}
-          <Text style={s.title} numberOfLines={1}>{sessionTitle(row)}</Text>
-          {when ? <Text style={s.time}>{ago(when)}</Text> : null}
-        </View>
-        {row.snippet ? (
-          <Text style={s.preview} numberOfLines={2}>
-            {markedParts(row.snippet).map((p, i) => (p.hit ? <Text key={i} style={s.hit}>{p.text}</Text> : p.text))}
-          </Text>
-        ) : row.title && row.preview ? (
-          // How it started, under a titled conversation (untitled ones already show it as their title).
-          <Text style={s.preview} numberOfLines={1}>{row.preview.replace(/^\[[^\]]*\]\s*/, '')}</Text>
-        ) : null}
-        <Text style={s.meta} numberOfLines={1}>{meta}</Text>
-      </View>
+      style={({ pressed, hovered }) => [(pressed || hovered) && { backgroundColor: t.colors.pressed }]}>
+      <ListRow icon={row.pinned ? <Pin /> : <MessageSquareText />} title={sessionTitle(row)}
+        value={when ? ago(when) : undefined} subtitle={row.active ? `Active in ${sourceLabel(row.source)}` : sourceLabel(row.source)} chevron />
+      {row.snippet ? (
+        <Text style={s.preview} numberOfLines={2}>
+          {markedParts(row.snippet).map((p, i) => (p.hit ? <Text key={i} style={s.hit}>{p.text}</Text> : p.text))}
+        </Text>
+      ) : row.title && row.preview ? <Text style={s.preview} numberOfLines={1}>{row.preview.replace(/^\[[^\]]*\]\s*/, '')}</Text> : null}
+      {row.message_count || row.tool_call_count ? <View style={s.counts}>
+        {row.message_count ? <Text style={s.meta}>Messages {row.message_count}</Text> : null}
+        {row.tool_call_count ? <Text style={s.meta}>Tool calls {row.tool_call_count}</Text> : null}
+      </View> : null}
     </Tap>
   );
 }
 
 const useStyles = makeStyles((t) => ({
   error: { ...t.type.callout, color: t.colors.danger, marginTop: 10 },
-  group: { marginTop: 18, borderRadius: t.radius.lg, backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border, overflow: 'hidden' },
-  row: { flexDirection: 'row', gap: 12, paddingHorizontal: 14, paddingVertical: 12, alignItems: 'flex-start' },
-  rowBorder: { borderTopWidth: 1, borderTopColor: t.colors.border },
-  icon: { width: 34, height: 34, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: t.colors.accentSoft },
-  live: { position: 'absolute', right: -2, top: -2, width: 11, height: 11, borderRadius: 6, borderWidth: 2, backgroundColor: t.colors.success },
-  head: { flexDirection: 'row', alignItems: 'baseline', gap: 8 },
-  title: { ...t.type.callout, fontFamily: t.fonts.semibold, color: t.colors.text, flex: 1 },
   time: { ...t.type.caption, color: t.colors.textTertiary },
-  preview: { ...t.type.caption, color: t.colors.textSecondary, marginTop: 3 },
+  preview: { ...t.type.footnote, color: t.colors.textSecondary, paddingHorizontal: t.space.lg, paddingBottom: t.space.sm },
   hit: { color: t.colors.text, fontFamily: t.fonts.semibold },
-  meta: { ...t.type.caption, color: t.colors.textTertiary, marginTop: 3 },
-  empty: { alignItems: 'center', gap: 8, paddingVertical: 32 },
+  meta: { ...t.type.caption, color: t.colors.textTertiary },
+  counts: { flexDirection: 'row', gap: t.space.md, paddingHorizontal: t.space.lg, paddingBottom: t.space.md },
+  empty: { alignItems: 'center', gap: t.space.md, paddingVertical: t.space.xxl },
+  emptyIcon: { width: 56, height: 56, borderRadius: t.radius.pill, backgroundColor: t.colors.surfaceSunken, alignItems: 'center', justifyContent: 'center' },
   emptyText: { ...t.type.callout, color: t.colors.textSecondary },
 }));

@@ -14,7 +14,7 @@ export function withSelectedServer(Component: ComponentType) {
     const t = useTheme();
     if (!server) return <Screen title="Connect a bot">
       <View style={{ gap: 16, marginTop: 16 }}>
-        <Text style={{ ...t.type.body, color: t.colors.textSecondary }}>Pair your Hermes server to manage your agent.</Text>
+        <Text style={{ ...t.type.body, color: t.colors.textSecondary }}>No bot connected.</Text>
         <Button title="Pair a bot" onPress={() => router.push('/pair')} />
       </View>
     </Screen>;

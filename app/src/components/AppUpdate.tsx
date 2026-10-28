@@ -53,7 +53,7 @@ export function UpdatePrompt() {
         {downloading ? null : (
           <>
             <Button title="Later" variant="secondary" onPress={later} />
-            <Text style={s.link} accessibilityRole="button" onPress={skip}>Skip this version</Text>
+            <Button title="Skip this version" variant="ghost" onPress={skip} />
           </>
         )}
       </View>
@@ -89,7 +89,7 @@ export function InstallButton({ update }: { update: AppUpdate }) {
           {error} <Text style={s.inlineLink} onPress={() => Linking.openURL(update.apk ?? update.page)}>Download in the browser</Text>
         </Text>
       ) : (
-        <Text style={s.caption}>It installs over this version and keeps your bots and chats.</Text>
+        <Text style={s.caption}>Your bots and chats are kept.</Text>
       )}
     </View>
   );
@@ -102,7 +102,6 @@ const useStyles = makeStyles((t) => ({
   caption: { ...t.type.caption, color: t.colors.textSecondary, textAlign: 'center' },
   error: { ...t.type.callout, color: t.colors.danger },
   inlineLink: { color: t.colors.accent, textDecorationLine: 'underline' },
-  link: { ...t.type.callout, color: t.colors.textSecondary, textAlign: 'center', paddingVertical: 8 },
-  track: { height: 6, borderRadius: 3, backgroundColor: t.colors.surfaceSunken, overflow: 'hidden' },
-  fill: { height: 6, borderRadius: 3, backgroundColor: t.colors.accentFill },
+  track: { height: 8, borderRadius: t.radius.pill, backgroundColor: t.colors.surfaceSunken, overflow: 'hidden' },
+  fill: { height: 8, borderRadius: t.radius.pill, backgroundColor: t.colors.accentFill },
 }));

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { composition, compressionRetryRequest, contextPercent, costLabel, sourceLabel, tokenCount, type ContextAmount } from '../src/features/context-insights/model.ts';
+import { composition, compressionRetryRequest, contextRows, contextPercent, costLabel, sourceLabel, tokenCount, type ContextAmount } from '../src/features/context-insights/model.ts';
 const context=(used:unknown,window:unknown)=>({used,window} as ContextAmount);
 test('unknown windows never produce invented occupancy percentages',()=>{for(const value of [null,0,NaN,Infinity,-1])assert.equal(contextPercent(context(100,value)),null);assert.equal(contextPercent(context(100,200)),50);assert.equal(contextPercent(context(300,200)),100);assert.equal(contextPercent(context(0,200)),0);});
 test('nonfinite and missing telemetry remains unknown, actual zero remains zero',()=>{for(const value of [null,undefined,NaN,Infinity,-1,'123'])assert.equal(tokenCount(value),'Unknown');assert.equal(tokenCount(0),'0');});
@@ -16,3 +16,5 @@ test('definite compression rejection permits a fresh preview while ambiguous fai
   const refreshed={operation_id:'context-request-456',revision:'fresh-preview'};
   assert.equal(compressionRetryRequest(refreshed,0),refreshed);
 });
+
+test('context rows keep unknown and empty categories, with shares of the known estimates',()=>{const rows=contextRows([{id:'a',label:'Prompt',tokens:1000},{id:'b',label:'Tools',tokens:null},{id:'c',label:'Memory',tokens:0}]);assert.deepEqual(rows.map(x=>[x.id,x.share,x.partial]),[['a',1,true],['b',null,true],['c',0,true]]);assert.equal(contextRows([{id:'a',label:'Prompt',tokens:5}])[0].partial,false);});

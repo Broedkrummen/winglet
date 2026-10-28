@@ -144,7 +144,7 @@ function FileTile({ attachment, uri }: { attachment: Attachment; uri: string }) 
       <Tap feedback="selection" accessibilityRole="link" accessibilityLabel={`Open ${attachment.name}`} style={s.fileMain}
         onPress={() => (Platform.OS === 'web' ? globalThis.open?.(uri, '_blank', 'noopener') : Linking.openURL(uri))}>
         <View style={s.fileIcon}>
-          <FileText size={18} color={t.colors.onAccentSoft} />
+          <FileText size={18} color={t.colors.textSecondary} />
           <Text style={s.fileExt}>{ext}</Text>
         </View>
         <View style={{ flex: 1, minWidth: 0 }}>
@@ -185,8 +185,8 @@ const useStyles = makeStyles((t) => ({
     backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border,
   },
   fileMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10, padding: 10 },
-  fileIcon: { width: 42, height: 46, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: t.colors.accentSoft, gap: 1 },
-  fileExt: { fontFamily: t.fonts.bold, fontSize: 9, color: t.colors.onAccentSoft },
+  fileIcon: { width: 42, height: 46, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: t.colors.surfaceSunken, gap: 1 },
+  fileExt: { fontFamily: t.fonts.bold, fontSize: 9, color: t.colors.textSecondary },
   fileName: { ...t.type.callout, fontFamily: t.fonts.semibold, color: t.colors.text },
   fileSize: { ...t.type.caption, color: t.colors.textSecondary },
   fileShare: { width: 48, height: 48, alignItems: 'center', justifyContent: 'center' },

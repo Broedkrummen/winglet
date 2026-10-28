@@ -5,8 +5,7 @@ import { Plug, ShieldAlert, TriangleAlert } from '../components/icons';
 import { Screen } from '../components/Screen';
 import { withSelectedServer } from '../components/ServerScreen';
 import { Sheet } from '../components/Sheet';
-import { Button, ListGroup, ListRow, LoadError, SectionHeader, Segmented, Skeleton, Toggle } from '../components/ui';
-import { shortDescription } from '../lib/abilities';
+import { Button, Card, Footnote, ListGroup, ListRow, LoadError, SectionHeader, Segmented, Skeleton, Toggle } from '../components/ui';
 import { api, signedApi } from '../lib/api';
 import { haptic } from '../lib/haptics';
 import { useApp } from '../lib/store';
@@ -60,7 +59,7 @@ function ToolsScreen() {
   const mode = MODES.find((m) => m.value === info?.approvals) ?? MODES[0];
   const mine = (info?.toolsets ?? []).filter((ts) => ts.enabled);
   return (
-    <Screen title="Tools" subtitle="What your agent can use when you talk to it here. Its terminal and other chat apps keep their own settings."
+    <Screen title="Tools"
       onRefresh={load}>
       {error && info ? <Text style={s.error}>{error}</Text> : null}
       {!info ? (error ? <LoadError message={error} onRetry={load} /> : (
@@ -68,27 +67,27 @@ function ToolsScreen() {
       )) : (
         <Animated.View entering={FadeIn}>
           <SectionHeader title="Approvals" />
-          <View style={s.card}>
+          <Card style={s.card}>
             <Segmented label="Approvals" value={info.approvals} onChange={setMode} options={MODES.map(({ value, label }) => ({ value, label }))} />
             <View style={s.about}>
               {info.approvals === 'off' ? <TriangleAlert size={16} color={t.colors.danger} /> : <ShieldAlert size={16} color={t.colors.textSecondary} />}
               <Text style={[s.aboutText, info.approvals === 'off' && { color: t.colors.danger }]}>{mode.about}</Text>
             </View>
-          </View>
+          </Card>
 
           <SectionHeader title="Toolsets" />
           <ListGroup>
             {info.toolsets.map((ts) => (
               <ListRow key={ts.name} title={ts.label}
-                subtitle={ts.configured ? shortDescription(ts.description) : `${shortDescription(ts.description)} · needs setting up on the server`}
+                subtitle={ts.configured ? undefined : 'Needs setup on the server'}
                 right={<Toggle label={ts.label} value={ts.enabled} onValueChange={(on) => toggle(ts.name, on)} />} />
             ))}
           </ListGroup>
-          <Text style={s.note}>Changes apply from the next message.</Text>
+          <Footnote>Changes apply next message, in Winglet only.</Footnote>
 
           {server.parent ? null : (<>
           <SectionHeader title="Members" />
-          <View style={s.card}>
+          <Card style={s.card}>
             {info.members.can_limit === false && !info.members.limited ? null : (
               <Segmented label="Members' tools" value={info.members.limited ? 'limited' : 'same'}
                 onChange={(v) => setMembers({ ...info.members, limited: v === 'limited' })}
@@ -103,7 +102,7 @@ function ToolsScreen() {
                   ? 'Members only get the tools you pick here, and only while they are on for you too.'
                   : 'People you add as members can use every tool you can. Risky commands still wait for an owner.'}
             </Text>
-          </View>
+          </Card>
           {info.members.limited && info.members.can_limit !== false ? (
             <ListGroup style={{ marginTop: 12 }}>
               {mine.map((ts) => {
@@ -113,7 +112,7 @@ function ToolsScreen() {
                     setMembers({ ...info.members, toolsets: v ? [...info.members.toolsets, ts.name] : info.members.toolsets.filter((n) => n !== ts.name) })} />} />
                 );
               })}
-              <ListRow icon={<Plug size={18} color={t.colors.onAccentSoft} />} title="MCP servers" subtitle="Your connected apps and services"
+              <ListRow icon={<Plug size={18} color={t.colors.textSecondary} />} title="MCP servers"
                 right={<Toggle label="MCP servers for members" value={info.members.mcp} onValueChange={(mcp) => setMembers({ ...info.members, mcp })} />} />
             </ListGroup>
           ) : null}
@@ -140,9 +139,8 @@ function ToolsScreen() {
 
 const useStyles = makeStyles((t) => ({
   error: { ...t.type.callout, color: t.colors.danger, marginTop: 10 },
-  card: { gap: 12, padding: 14, borderRadius: t.radius.lg, backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border },
+  card: { gap: t.space.md },
   about: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
   aboutText: { ...t.type.caption, color: t.colors.textSecondary, flex: 1 },
-  note: { ...t.type.caption, color: t.colors.textTertiary, marginTop: 8, paddingHorizontal: 4 },
   warn: { flexDirection: 'row', gap: 10, padding: 14, borderRadius: t.radius.md, backgroundColor: t.colors.dangerSoft },
 }));

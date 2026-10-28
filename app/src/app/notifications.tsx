@@ -21,7 +21,7 @@ export default function NotificationsScreen() {
   // A device has one subscription and one set of quiet hours per Hermes server.
   const servers = allServers.filter((server) => !server.parent);
   return (
-    <Screen title="Notifications" subtitle="Get a nudge when a bot needs an approval, asks a question, or finishes something. Tapping a notification opens exactly that item.">
+    <Screen title="Notifications">
       {Platform.OS === 'web' ? <WebPushSettings servers={servers} /> : servers.map((srv) => pushNative ? <EncryptedPushSettings key={srv.id} server={srv} /> : <NtfySettings key={srv.id} server={srv} />)}
       {(Platform.OS === 'web' ? [webPushServer(servers)].filter((x): x is Server => !!x) : servers).map((srv) => (
         <QuietSettings key={srv.id} server={srv} named={servers.length > 1} />
@@ -63,16 +63,16 @@ function QuietSettings({ server, named }: { server: Server; named: boolean }) {
 
   return (
     <>
-      <SectionHeader title={named ? `Quiet hours · ${server.bot.title}` : 'Quiet hours'} />
+      <SectionHeader title={named ? `${server.bot.title}: quiet hours` : 'Quiet hours'} />
       <ListGroup>
-        <ListRow icon={<Moon size={18} color={t.colors.onAccentSoft} />} title="Quiet hours" subtitle={quiet ? `${clock(quiet.start)} to ${clock(quiet.end)}` : 'Off'}
+        <ListRow icon={<Moon size={18} color={t.colors.textSecondary} />} title="Quiet hours" value={quiet ? 'On' : 'Off'}
           right={<Toggle label="Quiet hours" value={!!quiet} onValueChange={(on) => save((p) => ({ ...p, quiet: on ? quietHours('22:00', '07:00', true) : undefined }))} />} />
         {quiet ? (
           <>
             <ListRow title="Starts" value={clock(quiet.start)} onPress={() => setEditing('start')} />
             <ListRow title="Ends" value={clock(quiet.end)} onPress={() => setEditing('end')} />
-            <ListRow title="Let approvals and questions through" subtitle={`${server.bot.title} is stuck until you answer those.`}
-              right={<Toggle label="Let approvals and questions through" value={quiet.allow_urgent}
+            <ListRow title="Allow approvals & questions"
+              right={<Toggle label="Allow approvals and questions during quiet hours" value={quiet.allow_urgent}
                 onValueChange={(v) => save((p) => ({ ...p, quiet: p.quiet && { ...p.quiet, allow_urgent: v } }))} />} />
           </>
         ) : null}
@@ -82,8 +82,8 @@ function QuietSettings({ server, named }: { server: Server; named: boolean }) {
           <SectionHeader title="Muted" />
           <ListGroup>
             {muted.map(([id, until]) => (
-              <ListRow key={id} icon={<BellOff size={18} color={t.colors.onAccentSoft} />} title={chatName(id)}
-                subtitle={until ? `Until ${new Date(until * 1000).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}` : 'Until you turn it back on'}
+              <ListRow key={id} icon={<BellOff size={18} color={t.colors.textSecondary} />} title={chatName(id)}
+                subtitle={until ? `Until ${new Date(until * 1000).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' })}` : 'Until unmuted'}
                 right={<Button title="Unmute" size="sm" variant="tonal" onPress={() => save((p) => {
                   const next = { ...p.muted };
                   delete next[id];
@@ -117,17 +117,17 @@ function WebPushSettings({ servers }: { servers: Server[] }) {
   const [msg, setMsg] = useState('');
   const [busy, setBusy] = useState(false);
   let body: React.ReactNode;
-  if (!server) body = <Text style={s.note}>Open Winglet from your Hermes server's address to turn on notifications here.</Text>;
-  else if (state === 'insecure') body = <Text style={s.note}>Browsers only allow notifications over HTTPS. Open Winglet from your server's HTTPS address.</Text>;
-  else if (state === 'needs-install') body = <Text style={s.note}>On iPhone, add Winglet to your Home Screen first (Share → Add to Home Screen), then open it from there.</Text>;
+  if (!server) body = <Text style={s.note}>Open Winglet at your server's address to enable notifications.</Text>;
+  else if (state === 'insecure') body = <Text style={s.note}>Open your server's HTTPS address to enable notifications.</Text>;
+  else if (state === 'needs-install') body = <Text style={s.note}>On iPhone, use Share → Add to Home Screen, then open Winglet there.</Text>;
   else if (state === 'unsupported') body = <Text style={s.note}>This browser doesn't support push notifications.</Text>;
-  else if (state === 'denied') body = <Text style={s.note}>Notifications are blocked for this site. Allow them in your browser or system settings, then come back.</Text>;
+  else if (state === 'denied') body = <Text style={s.note}>Allow this site's notifications in browser or system settings.</Text>;
   else {
     body = (
       <>
         <Text style={s.note}>
-          {state === 'granted' ? `You'll be notified when ${server.bot.title} needs you, even when Winglet is closed.`
-            : `Get a notification when ${server.bot.title} needs an approval, asks a question, or finishes something.`}
+          {state === 'granted' ? `Notifications are on for ${server.bot.title}.`
+            : 'Notify me about approvals, questions and results.'}
         </Text>
         <View style={s.buttons}>
           <Button title={state === 'granted' ? 'Re-register this device' : 'Turn on notifications'} icon={<BellRing size={17} color={t.colors.onAccent} />}
@@ -168,7 +168,7 @@ function NtfySettings({ server }: { server: Server }) {
         <View style={s.botRow}>
           <AgentFace server={server} size={36} still />
           <Text style={[s.note, { flex: 1 }]}>
-            This build uses generic ntfy notifications. The relay can see bot names and timing; message details stay on your server. Install the current Android build to set up encrypted delivery in Winglet.
+            ntfy can see bot names and timing, not message details. Install the current Android build for encrypted notifications.
           </Text>
         </View>
         {topic ? (
@@ -196,5 +196,5 @@ const useStyles = makeStyles((t) => ({
   buttons: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   botRow: { flexDirection: 'row', gap: 12, alignItems: 'flex-start' },
   times: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'center', paddingBottom: 8 },
-  topic: { fontFamily: t.fonts.mono, fontSize: 15, color: t.colors.text, backgroundColor: t.colors.surfaceSunken, padding: 12, borderRadius: t.radius.md },
+  topic: { ...t.type.callout, fontFamily: t.fonts.mono, color: t.colors.text, backgroundColor: t.colors.surfaceSunken, padding: 12, borderRadius: t.radius.md },
 }));

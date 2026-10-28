@@ -1,31 +1,23 @@
 import { router, useLocalSearchParams } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, Text, useWindowDimensions, View } from 'react-native';
-import Animated, { FadeInDown, ZoomIn } from 'react-native-reanimated';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { KeyboardAvoidingView, Linking, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
+import Animated, { FadeIn } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Svg, { Defs, RadialGradient, Rect, Stop } from 'react-native-svg';
 import { BotAvatar } from '../components/BotAvatar';
-import { BellRing, ChevronLeft, QrCode, Server as ServerIcon, Share, ShieldCheck, SquarePlus } from '../components/icons';
+import { ArrowLeft, ExternalLink, KeyRound, QrCode, Share, SquarePlus } from '../components/icons';
 import { Logo } from '../components/Logo';
 import { Button, Field, IconButton } from '../components/ui';
 import { defaultDeviceName, fetchInfo, normalizeUrl, pair, parsePairLink } from '../lib/api';
+import { useReducedMotion } from '../lib/motion';
 import { isIOS, isStandalone } from '../lib/push';
 import { useApp } from '../lib/store';
-import { BRAND } from '../lib/theme';
 import { makeStyles, useTheme } from '../lib/themeContext';
-import { easeOut } from '../lib/motion';
-
-const FEATURES = [
-  { icon: ServerIcon, title: 'Runs on your machine', text: 'Your Hermes agents, your models, your data.' },
-  { icon: BellRing, title: 'Taps you when needed', text: 'Approvals, questions and results as notifications.' },
-  { icon: ShieldCheck, title: 'You stay in control', text: 'Approve anything risky, from anywhere.' },
-];
 
 export default function PairScreen() {
   const t = useTheme();
   const s = useStyles();
+  const reduced = useReducedMotion();
   const insets = useSafeAreaInsets();
-  const { width } = useWindowDimensions();
   const params = useLocalSearchParams<{ code?: string; url?: string; fp?: string }>();
   const hasServers = useApp((st) => st.servers.length > 0);
   const addServer = useApp((st) => st.addServer);
@@ -81,94 +73,84 @@ export default function PairScreen() {
   const showInstall = iosBrowser && !skipInstall;
 
   return (
-    <KeyboardAvoidingView style={s.root} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <View pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 560 }}>
-        <Svg width={width} height={560}>
-          <Defs>
-            <RadialGradient id="g1" cx="30%" cy="12%" rx="65%" ry="40%">
-              <Stop offset="0" stopColor={BRAND.from} stopOpacity={t.scheme === 'dark' ? 0.45 : 0.22} />
-              <Stop offset="1" stopColor={BRAND.from} stopOpacity={0} />
-            </RadialGradient>
-            <RadialGradient id="g2" cx="85%" cy="28%" rx="55%" ry="35%">
-              <Stop offset="0" stopColor={BRAND.to} stopOpacity={t.scheme === 'dark' ? 0.35 : 0.18} />
-              <Stop offset="1" stopColor={BRAND.to} stopOpacity={0} />
-            </RadialGradient>
-          </Defs>
-          <Rect x={0} y={0} width={width} height={560} fill="url(#g1)" />
-          <Rect x={0} y={0} width={width} height={560} fill="url(#g2)" />
-        </Svg>
-      </View>
-      <ScrollView contentContainerStyle={[s.scroll, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 28 }]} keyboardShouldPersistTaps="handled">
-        {hasServers ? (
-          <IconButton label="Back" variant="filled" style={{ alignSelf: 'flex-start' }} onPress={() => (router.canGoBack() ? router.back() : router.replace('/'))}>
-            <ChevronLeft size={24} color={t.colors.text} />
-          </IconButton>
-        ) : null}
+    <View style={s.root}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <ScrollView contentContainerStyle={[s.scroll, { paddingTop: insets.top + 8, paddingBottom: insets.bottom + 24 }]} keyboardShouldPersistTaps="handled">
+          {hasServers ? (
+            <IconButton label="Back" style={{ alignSelf: 'flex-start' }} onPress={() => (router.canGoBack() ? router.back() : router.replace('/'))}>
+              <ArrowLeft size={22} color={t.colors.text} />
+            </IconButton>
+          ) : null}
 
-        <Animated.View entering={ZoomIn.duration(220).easing(easeOut)} style={s.family}>
-          <BotAvatar name="atlas" size={58} mood="happy" animated style={{ marginRight: -14, marginTop: 26 }} />
-          <BotAvatar name="hermes" size={92} mood="idle" animated glow />
-          <BotAvatar name="nova" size={58} mood="idle" animated style={{ marginLeft: -14, marginTop: 26 }} />
-        </Animated.View>
-        <View style={s.hero}>
-          <View style={s.brandRow}><Logo size={28} /><Text style={s.brand}>Winglet</Text></View>
-          <Text style={s.tagline}>{hasServers ? 'Add another bot' : 'Your agents,\nin your pocket.'}</Text>
-        </View>
+          <Animated.View entering={reduced ? undefined : FadeIn.duration(260)} style={s.column}>
+            <View style={s.brand}>
+              <Logo size={26} />
+              <Text style={s.brandText}>Winglet</Text>
+            </View>
 
-        {!hasServers ? (
-          <View style={s.features}>
-            {FEATURES.map(({ icon: Icon, title, text }, i) => (
-              <Animated.View key={title} entering={FadeInDown.delay(120 + i * 80).duration(260).easing(easeOut)} style={s.feature}>
-                <View style={s.featureIcon}><Icon size={20} color={t.colors.onAccentSoft} /></View>
-                <View style={{ flex: 1 }}>
-                  <Text style={s.featureTitle}>{title}</Text>
-                  <Text style={s.featureText}>{text}</Text>
-                </View>
-              </Animated.View>
-            ))}
-          </View>
-        ) : null}
+            <View style={s.family} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+              <BotAvatar name="atlas" size={44} mood="happy" animated style={{ marginRight: -8, marginTop: 22 }} />
+              <BotAvatar name="hermes" size={80} mood="idle" animated />
+              <BotAvatar name="nova" size={44} mood="idle" animated style={{ marginLeft: -8, marginTop: 22 }} />
+            </View>
 
-        <Animated.View entering={FadeInDown.delay(320).duration(260).easing(easeOut)} style={s.card}>
-          {showInstall ? (
-            <>
-              <Text style={s.cardTitle}>Install Winglet on your iPhone</Text>
-              <Text style={s.cardText}>Notifications on iPhone need Winglet on your Home Screen. It takes five seconds:</Text>
-              <View style={s.step}><Share size={18} color={t.colors.accent} /><Text style={s.stepText}>Tap <Text style={s.bold}>Share</Text> in Safari's toolbar</Text></View>
-              <View style={s.step}><SquarePlus size={18} color={t.colors.accent} /><Text style={s.stepText}>Choose <Text style={s.bold}>Add to Home Screen</Text></Text></View>
-              <View style={s.step}><QrCode size={18} color={t.colors.accent} /><Text style={s.stepText}>Open Winglet from your Home Screen and enter code <Text style={s.code}>{formatCode(params.code ?? '')}</Text></Text></View>
-              <Button title="Continue in Safari instead" variant="ghost" onPress={() => setSkipInstall(true)} />
-            </>
-          ) : (
-            <>
-              <Text style={s.cardTitle}>{params.code ? 'Pairing…' : 'Connect to your Hermes'}</Text>
-              <Text style={s.cardText}>
-                On the machine running Hermes, run <Text style={s.code}>hermes winglet pair</Text> and {Platform.OS === 'web' ? 'enter the code below.' : 'scan the QR code it shows.'}
+            <View style={s.hero}>
+              <Text style={s.tagline} accessibilityRole="header">
+                {showInstall ? 'Install on your iPhone' : params.code ? 'Pairing…' : hasServers ? 'Add another bot' : 'Your agents, in your pocket'}
               </Text>
-              {Platform.OS !== 'web' ? (
-                <Button size="lg" title="Scan QR code" icon={<QrCode size={20} color={t.colors.onAccent} />} onPress={() => router.push('/scan')} />
-              ) : null}
-              {manual ? (
-                <View style={{ gap: 14, marginTop: 4 }}>
-                  <Field label="Server address" value={url} onChangeText={setUrl} placeholder="192.168.1.20:8787 or https://box.ts.net" autoCapitalize="none" autoCorrect={false} keyboardType="url" />
-                  <Field label="Pairing code" value={code} onChangeText={setCode} placeholder="ABCD-2345" autoCapitalize="characters" autoCorrect={false}
-                    style={s.codeInput} onSubmitEditing={() => connect()} />
-                  <Field label="This device's name" value={deviceName} onChangeText={setDeviceName} placeholder="My phone" />
-                  <Button size="lg" title="Connect" loading={busy} onPress={() => connect()} variant={Platform.OS === 'web' ? 'primary' : 'secondary'} />
-                </View>
-              ) : (
-                <Button title="Enter a code instead" variant="ghost" onPress={() => setManual(true)} />
-              )}
-              {error ? <Text style={s.error} accessibilityRole="alert">{error}</Text> : null}
-            </>
-          )}
-        </Animated.View>
+              <Text style={s.context}>
+                {showInstall ? 'Add Winglet to your Home Screen for notifications.'
+                  : <>Run <Text style={s.code}>hermes winglet pair</Text> on your server, then {Platform.OS === 'web' ? 'enter the code it shows' : 'scan the code it shows'}.</>}
+              </Text>
+            </View>
 
-        <Text style={s.footer}>
-          New here? Winglet is an app for <Text style={s.bold}>Hermes Agent</Text>. Install the Winglet plugin on your Hermes machine first: see github.com/VIKASRP24/winglet
-        </Text>
-      </ScrollView>
-    </KeyboardAvoidingView>
+            {showInstall ? (
+              <View style={s.actions}>
+                <View style={s.panel}>
+                  <Step n={1} icon={<Share size={18} color={t.colors.textSecondary} />}>Tap <Text style={s.bold}>Share</Text> in the Safari toolbar</Step>
+                  <Step n={2} icon={<SquarePlus size={18} color={t.colors.textSecondary} />}>Choose <Text style={s.bold}>Add to Home Screen</Text></Step>
+                  <Step n={3} icon={<QrCode size={18} color={t.colors.textSecondary} />}>
+                    Open Winglet there{params.code ? <> and enter <Text style={s.code}>{formatCode(params.code)}</Text></> : null}
+                  </Step>
+                </View>
+                <Button size="lg" variant="secondary" title="Continue in Safari instead" onPress={() => setSkipInstall(true)} />
+              </View>
+            ) : (
+              <View style={s.actions}>
+                {Platform.OS !== 'web' ? (
+                  <Button size="lg" title="Scan QR code" icon={<QrCode size={19} color={t.colors.onInk} />} onPress={() => router.push('/scan')} />
+                ) : null}
+                {manual ? (
+                  <View style={[s.panel, { gap: t.space.lg }]}>
+                    <Field label="Server address" value={url} onChangeText={setUrl} placeholder="192.168.1.20:8787 or https://box.ts.net" autoCapitalize="none" autoCorrect={false} keyboardType="url" />
+                    <Field label="Pairing code" value={code} onChangeText={setCode} placeholder="ABCD-2345" autoCapitalize="characters" autoCorrect={false}
+                      style={s.codeInput} onSubmitEditing={() => connect()} />
+                    <Field label="This device's name" value={deviceName} onChangeText={setDeviceName} placeholder="My phone" />
+                    <Button size="lg" title="Connect" loading={busy} onPress={() => connect()} variant={Platform.OS === 'web' ? 'primary' : 'secondary'} />
+                  </View>
+                ) : (
+                  <Button size="lg" variant="secondary" title="Enter a code instead" icon={<KeyRound size={17} color={t.colors.text} />} onPress={() => setManual(true)} />
+                )}
+                {error ? <Text style={s.error} accessibilityRole="alert">{error}</Text> : null}
+              </View>
+            )}
+
+            <Button size="sm" variant="ghost" title="Set up the server plugin" icon={<ExternalLink size={14} color={t.colors.accent} />}
+              style={{ alignSelf: 'center' }} onPress={() => Linking.openURL('https://github.com/VIKASRP24/winglet')} />
+          </Animated.View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </View>
+  );
+}
+
+function Step({ n, icon, children }: { n: number; icon: ReactNode; children: ReactNode }) {
+  const s = useStyles();
+  return (
+    <View style={s.step}>
+      {icon}
+      <Text style={s.stepText}><Text style={s.stepNumber}>{n}. </Text>{children}</Text>
+    </View>
   );
 }
 
@@ -179,31 +161,24 @@ function formatCode(code: string) {
 
 const useStyles = makeStyles((t) => ({
   root: { flex: 1, backgroundColor: t.colors.bg },
-  scroll: { flexGrow: 1, paddingHorizontal: 20, alignItems: 'center', gap: 22 },
-  family: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'center', marginTop: 24 },
-  hero: { alignItems: 'center', gap: 10 },
-  brandRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  brand: { ...t.type.heading, color: t.colors.text },
-  tagline: { ...t.type.display, fontSize: 34, lineHeight: 40, color: t.colors.text, textAlign: 'center' },
-  features: { width: '100%', maxWidth: 440, gap: 10 },
-  feature: {
-    flexDirection: 'row', alignItems: 'center', gap: 14, padding: 14, borderRadius: t.radius.lg,
-    backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border,
+  scroll: { flexGrow: 1, paddingHorizontal: t.space.xl },
+  column: { flex: 1, width: '100%', maxWidth: 400, alignSelf: 'center', justifyContent: 'center', gap: 28, paddingVertical: t.space.lg },
+  brand: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: t.space.sm },
+  brandText: { ...t.type.heading, color: t.colors.text },
+  family: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'center' },
+  hero: { alignItems: 'center', gap: t.space.sm },
+  tagline: { ...t.type.display, color: t.colors.text, textAlign: 'center' },
+  context: { ...t.type.callout, color: t.colors.textSecondary, textAlign: 'center', maxWidth: 320 },
+  actions: { gap: t.space.md },
+  panel: {
+    borderRadius: t.radius.lg, padding: t.space.lg, gap: t.space.xs, backgroundColor: t.colors.surface,
+    borderWidth: StyleSheet.hairlineWidth * 2, borderColor: t.colors.border,
   },
-  featureIcon: { width: 40, height: 40, borderRadius: 13, backgroundColor: t.colors.accentSoft, alignItems: 'center', justifyContent: 'center' },
-  featureTitle: { ...t.type.bodyStrong, color: t.colors.text },
-  featureText: { ...t.type.callout, color: t.colors.textSecondary, marginTop: 1 },
-  card: {
-    width: '100%', maxWidth: 440, backgroundColor: t.colors.surface, borderRadius: t.radius.xl, padding: 20, gap: 14,
-    borderWidth: 1, borderColor: t.colors.border,
-  },
-  cardTitle: { ...t.type.title, color: t.colors.text },
-  cardText: { ...t.type.callout, fontSize: 15, lineHeight: 22, color: t.colors.textSecondary },
-  code: { fontFamily: t.fonts.mono, color: t.colors.text, backgroundColor: t.colors.surfaceSunken, fontSize: 14 },
-  codeInput: { fontFamily: t.fonts.bold, fontSize: 22, letterSpacing: 4, textAlign: 'center' },
+  code: { ...t.type.callout, fontFamily: t.fonts.mono, color: t.colors.text },
+  codeInput: { ...t.type.title, letterSpacing: 4, textAlign: 'center' },
   bold: { fontFamily: t.fonts.semibold, color: t.colors.text },
-  step: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: t.colors.surfaceSunken, borderRadius: t.radius.md, padding: 12 },
-  stepText: { flex: 1, ...t.type.callout, fontSize: 15, color: t.colors.text },
-  error: { ...t.type.callout, color: t.colors.danger },
-  footer: { ...t.type.caption, fontFamily: t.fonts.regular, color: t.colors.textSecondary, textAlign: 'center', maxWidth: 400, lineHeight: 18 },
+  step: { flexDirection: 'row', alignItems: 'center', gap: t.space.md, paddingVertical: t.space.sm },
+  stepNumber: { fontFamily: t.fonts.semibold, color: t.colors.textSecondary },
+  stepText: { flex: 1, ...t.type.callout, color: t.colors.text },
+  error: { ...t.type.callout, color: t.colors.danger, textAlign: 'center' },
 }));

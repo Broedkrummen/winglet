@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Text, View } from 'react-native';
 import { Markdown } from '../components/Markdown';
 import { Screen } from '../components/Screen';
-import { Card, Tap } from '../components/ui';
+import { Card, Footnote, Tap } from '../components/ui';
 import notices from '../generated/third-party-notices.json';
 import { makeStyles, useTheme } from '../lib/themeContext';
 
@@ -12,7 +12,7 @@ export default function OpenSourceNoticesScreen() {
   const t = useTheme();
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   return (
-    <Screen title="Open-source notices" subtitle="Licenses and attribution for adapted open-source code. Full notices are included in this app and available offline.">
+    <Screen title="Open-source notices">
       <View style={s.list}>
         {notices.map(notice => {
           const open = expanded.has(notice.file);
@@ -29,6 +29,7 @@ export default function OpenSourceNoticesScreen() {
           );
         })}
       </View>
+      <Footnote>Full licenses and attribution are available offline.</Footnote>
     </Screen>
   );
 }

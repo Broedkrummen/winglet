@@ -5,15 +5,15 @@ import { createContext, useContext, useEffect, useMemo, type ReactNode } from 'r
 import { Platform, StyleSheet, useColorScheme } from 'react-native';
 import { ReducedMotionConfig, ReduceMotion } from 'react-native-reanimated';
 import { usePrefs } from './prefs';
-import { buildTheme, type AccentName, type Scheme, type Theme } from './theme';
+import { buildTheme, type AccentName, type DarkTone, type Scheme, type Theme } from './theme';
 
 const themes = new Map<string, Theme>();
-/** One theme object per scheme and accent, so styles can be cached by identity. */
-export function themeFor(scheme: Scheme, accent: AccentName): Theme {
-  const key = `${scheme}:${accent}`;
+/** One theme object per scheme, accent and dark tone, so styles can be cached by identity. */
+export function themeFor(scheme: Scheme, accent: AccentName, tone: DarkTone = 'charcoal'): Theme {
+  const key = `${scheme}:${accent}:${scheme === 'dark' ? tone : ''}`;
   let t = themes.get(key);
   if (!t) {
-    t = buildTheme(scheme, accent);
+    t = buildTheme(scheme, accent, tone);
     themes.set(key, t);
   }
   return t;
@@ -23,9 +23,9 @@ const ThemeContext = createContext<Theme>(themeFor('dark', 'iris'));
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const system = useColorScheme();
-  const { theme: mode, accent, motion } = usePrefs((s) => s.prefs);
+  const { theme: mode, accent, motion, darkTone } = usePrefs((s) => s.prefs);
   const scheme: Scheme = mode === 'system' ? (system === 'light' ? 'light' : 'dark') : mode;
-  const theme = useMemo(() => themeFor(scheme, accent), [scheme, accent]);
+  const theme = useMemo(() => themeFor(scheme, accent, darkTone), [scheme, accent, darkTone]);
 
   // Keep the system chrome (status bar, navigation bar, browser UI) in step with the theme.
   useEffect(() => {

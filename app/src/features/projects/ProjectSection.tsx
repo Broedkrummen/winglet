@@ -11,15 +11,16 @@ import { ProjectCreateSheet, ProjectMenuSheet } from './ProjectSheets';
 import { projectCountLabel } from './logic';
 
 const useStyles = makeStyles((t) => ({
-  head: { flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 44, paddingLeft: 10, paddingRight: 4, borderRadius: 12 },
-  heading: { ...t.type.caption, fontFamily: t.fonts.semibold, color: t.colors.textSecondary, flex: 1, letterSpacing: 0.2 },
+  headRow: { flexDirection: 'row', alignItems: 'center' },
+  head: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 36, paddingLeft: 10, paddingRight: 8, borderRadius: t.radius.md },
+  heading: { ...t.type.caption, color: t.colors.textTertiary, flex: 1 },
   count: { ...t.type.caption, fontFamily: t.fonts.regular, color: t.colors.textTertiary },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 9, minHeight: 42, paddingLeft: 12, paddingRight: 2, borderRadius: 12 },
-  active: { backgroundColor: t.colors.pressed },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 40, paddingLeft: 10, paddingRight: 2, borderRadius: t.radius.md },
+  hover: { backgroundColor: t.colors.pressed },
+  active: { backgroundColor: t.colors.surfaceHigh },
   name: { ...t.type.callout, color: t.colors.text, flex: 1 },
-  small: { ...t.type.caption, fontFamily: t.fonts.regular, color: t.colors.textTertiary, paddingHorizontal: 12, paddingVertical: 6 },
-  more: { ...t.type.caption, fontFamily: t.fonts.medium, color: t.colors.textSecondary },
-  link: { flexDirection: 'row', alignItems: 'center', gap: 9, minHeight: 40, paddingHorizontal: 12, borderRadius: 12 },
+  small: { ...t.type.caption, fontFamily: t.fonts.regular, color: t.colors.textTertiary, paddingHorizontal: 10, paddingVertical: 6 },
+  more: { ...t.type.callout, color: t.colors.textSecondary, flex: 1 },
 }));
 
 /**
@@ -49,13 +50,17 @@ export function ProjectSection({ server, onNavigate }: { server: Server; onNavig
   };
   return (
     <>
-      <Tap accessibilityRole="button" accessibilityLabel={`Projects, ${active.length} active`}
-        accessibilityState={{ expanded }} accessibilityHint={expanded ? 'Collapse projects' : 'Expand projects'}
-        onPress={() => { haptic.selection(); setExpanded((v) => !v); }} style={s.head}>
-        {expanded ? <ChevronDown size={16} color={t.colors.textSecondary} /> : <ChevronRight size={16} color={t.colors.textSecondary} />}
-        <Text style={s.heading}>PROJECTS</Text>
-        {active.length ? <Text style={s.count}>{active.length}</Text> : null}
-      </Tap>
+      <View style={s.headRow}>
+        <Tap accessibilityRole="button" accessibilityLabel={`Projects, ${active.length} active`}
+          accessibilityState={{ expanded }} accessibilityHint={expanded ? 'Collapse projects' : 'Expand projects'}
+          onPress={() => { haptic.selection(); setExpanded((v) => !v); }} style={({ hovered }) => [s.head, hovered && s.hover]}>
+          <Text style={s.heading}>Projects</Text>
+          {expanded ? <ChevronDown size={14} color={t.colors.textTertiary} /> : <ChevronRight size={14} color={t.colors.textTertiary} />}
+        </Tap>
+        {online ? <IconButton label="New project" size={32} onPress={() => { haptic.selection(); setCreating(true); }}>
+          <Plus size={16} color={t.colors.textSecondary} />
+        </IconButton> : null}
+      </View>
       {expanded ? (
         <>
           {shown.map((project) => {
@@ -65,8 +70,8 @@ export function ProjectSection({ server, onNavigate }: { server: Server; onNavig
                 accessibilityHint={project.can_manage && online ? 'Long-press for project options' : undefined}
                 accessibilityState={{ selected }}
                 onPress={() => open(project)} onLongPress={() => { if (project.can_manage && online) setMenu(project.id); }}
-                delayLongPress={350} style={({ pressed, hovered }) => [s.row, (selected || pressed || hovered) && s.active]}>
-                <Folder size={16} color={selected ? t.colors.onAccentSoft : t.colors.textSecondary} />
+                delayLongPress={350} style={({ pressed, hovered }) => [s.row, selected ? s.active : (pressed || hovered) && s.hover]}>
+                <Folder size={18} color={selected ? t.colors.text : t.colors.textSecondary} />
                 <Text style={s.name} numberOfLines={1}>{project.name}</Text>
                 <Text style={s.count} accessibilityElementsHidden>{project.chat_count || ''}</Text>
                 {project.can_manage && online ? (
@@ -77,19 +82,15 @@ export function ProjectSection({ server, onNavigate }: { server: Server; onNavig
               </Tap>
             );
           })}
-          {!active.length ? <Text style={s.small}>Group chats by topic, on every device.</Text> : null}
+          
           {active.length > 6 ? <Text style={s.small}>{active.length - 6} more in All projects</Text> : null}
-          <Tap accessibilityLabel="All projects" onPress={() => { onNavigate?.(); useApp.getState().select(server.id); router.navigate('/projects'); }}
-            style={({ pressed, hovered }) => [s.link, (pressed || hovered) && s.active]}>
-            <Folder size={15} color={t.colors.textSecondary} />
-            <Text style={s.more}>All projects</Text>
-            {archived.length ? <Text style={s.count}>{archived.length} archived</Text> : null}
+          <Tap accessibilityLabel={`All projects${archived.length ? `, ${archived.length} archived` : ''}`} scaleTo={0.99}
+            onPress={() => { onNavigate?.(); useApp.getState().select(server.id); router.navigate('/projects'); }}
+            style={({ pressed, hovered }) => [s.row, (pressed || hovered) && s.hover]}>
+            <MoreHorizontal size={18} color={t.colors.textSecondary} />
+            <Text style={s.more} numberOfLines={1}>All projects</Text>
+            {archived.length ? <Text style={[s.count, { paddingRight: 8 }]}>{archived.length} archived</Text> : null}
           </Tap>
-          {online ? <Tap accessibilityLabel="New project" onPress={() => { haptic.selection(); setCreating(true); }}
-            style={({ pressed, hovered }) => [s.link, (pressed || hovered) && s.active]}>
-            <Plus size={15} color={t.colors.textSecondary} />
-            <Text style={s.more}>New project</Text>
-          </Tap> : null}
         </>
       ) : null}
       <ProjectCreateSheet server={server} visible={creating} onClose={() => setCreating(false)}

@@ -1,7 +1,9 @@
 import {useEffect,useRef} from 'react';
+import {useTheme} from '../../lib/themeContext';
 import type {SourceSelectionProps} from './SourceSelection';
 /** Keep DOM selection local to this source; RN Web's read-only selection events vary by browser. */
 export function SourceSelection({text,onSelect,colors,fontFamily}:SourceSelectionProps){
+  const t=useTheme();
   const ref=useRef<HTMLTextAreaElement>(null);
   const callback=useRef(onSelect);
   callback.current=onSelect;
@@ -20,8 +22,8 @@ export function SourceSelection({text,onSelect,colors,fontFamily}:SourceSelectio
     };
   },[]);
   return <textarea ref={ref} value={text} readOnly aria-label="Original reply, select text to quote"
-    style={{height:180,width:'100%',boxSizing:'border-box',padding:12,borderRadius:16,border:'1px solid '+colors.border,
-      background:colors.surface,color:colors.text,fontFamily:fontFamily+', system-ui, sans-serif',fontSize:15,lineHeight:'22px',resize:'vertical',
+    style={{height:180,width:'100%',boxSizing:'border-box',padding:t.space.md,borderRadius:t.radius.md,border:'1px solid '+colors.border,
+      background:colors.surface,color:colors.text,fontFamily:fontFamily+', system-ui, sans-serif',fontSize:t.type.callout.fontSize,lineHeight:`${t.type.callout.lineHeight}px`,resize:'vertical',
       userSelect:'text',WebkitUserSelect:'text',outlineOffset:2}} />;
 }
 

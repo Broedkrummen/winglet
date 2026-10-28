@@ -1,35 +1,38 @@
-import Constants from 'expo-constants';
-import { useCallback, useEffect, useState } from 'react';
-import { Platform } from 'react-native';
+import { useCallback, useState } from 'react';
 import { Redirect, router, useFocusEffect } from 'expo-router';
-import { ScrollView, Text, useWindowDimensions, View } from 'react-native';
+import { Text, useWindowDimensions, View } from 'react-native';
+import Animated, { useAnimatedScrollHandler, useSharedValue } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useAddBot } from '../../components/AddBot';
-import { AgentFace } from '../../components/AgentFace';
 import { ManageBot } from '../../components/ManageBot';
 import { VerifyNotice } from '../../components/VerifyPhone';
 import { BotSwitcher } from '../../components/BotSwitcher';
-import { NavigationToggle } from '../../components/AppNavigation';
+import { HUB_BAR, HubBar } from '../../components/InboxView';
+import { LivePet } from '../../components/LivePet';
 import {
-  Activity, BarChart, Bell, Brain, CalendarClock, Cpu, FileDiff, Fingerprint, HeartPulse, Info, Key, MessageCircle, MessageSquareText, Palette, PawPrint, Plug, Plus, ScrollText,
-  ShieldCheck, Smartphone, Sparkles, SquareTerminal, Star, UserRoundPen,
+  Activity, BarChart, Brain, CalendarClock, Check, Cpu, FileDiff, HeartPulse, Key, MessageCircle, MessageSquareText, PawPrint, Plug,
+  ScrollText, ShieldCheck, Sparkles, SquareTerminal, Star, UserRoundPen,
 } from '../../components/icons';
+import { moodOf } from '../../lib/agent';
 import { modelName } from '../../lib/modelOptions';
 import { api } from '../../lib/api';
 import { useTabBarSpace } from '../../components/TabBar';
-import { ListGroup, ListRow, SectionHeader, Toggle } from '../../components/ui';
-import { lockAvailable, unlock } from '../../lib/appLock';
-import { useAppUpdate } from '../../lib/appUpdateCheck';
+import { Button, Footnote, ListGroup, ListRow, SectionHeader } from '../../components/ui';
 import { connectionView } from '../../lib/connection';
 import { setMainBot, useMainBot } from '../../lib/mainBot';
-import { usePrefs } from '../../lib/prefs';
-import { homeChat, isOwner, type ServerState, useApp, useServerState } from '../../lib/store';
+import { homeChat, isOwner, useApp, useServerState } from '../../lib/store';
 import type { AgentInfo, Server } from '../../lib/types';
-import { ACCENTS, WIDE_BREAKPOINT } from '../../lib/theme';
+import { WIDE_BREAKPOINT } from '../../lib/theme';
 import { makeStyles, useTheme } from '../../lib/themeContext';
 
-/** Your agent's card, and everything you can set from the phone. Sections appear as the server supports them. */
+/** This bot's management. App-wide preferences live in Settings. */
 export default function AgentTab() {
+  const servers = useApp((st) => st.servers);
+  const selection = useApp((st) => st.selection);
+  if (!servers.length) return <Redirect href="/pair" />;
+  return <AgentHub server={servers.find((x) => x.id === selection.serverId) ?? servers[0]} />;
+}
+
+function AgentHub({ server }: { server: Server }) {
   const t = useTheme();
   const s = useStyles();
   const insets = useSafeAreaInsets();
@@ -37,222 +40,120 @@ export default function AgentTab() {
   const { width } = useWindowDimensions();
   const wide = width >= WIDE_BREAKPOINT;
   const servers = useApp((st) => st.servers);
-  const selection = useApp((st) => st.selection);
-  // This bot's state, not every bot's messages: a reply streaming in doesn't re-render this tab.
-  const rt = useServerState((servers.find((x) => x.id === selection.serverId) ?? servers[0])?.id);
+  const rt = useServerState(server.id);
   const network = useApp((st) => st.network);
-  const prefs = usePrefs((st) => st.prefs);
-  const appUpdate = useAppUpdate((st) => st.update);
-  const addBot = useAddBot();
+  const mood = useApp((st) => moodOf(st.runtime[server.id]));
   const mainBot = useMainBot();
-  if (!servers.length) return <Redirect href="/pair" />;
-  const server = servers.find((x) => x.id === selection.serverId) ?? servers[0];
+  const y = useSharedValue(0);
+  const onScroll = useAnimatedScrollHandler((e) => { y.value = e.contentOffset.y; });
   const child = !!server.parent;
   const parent = child ? servers.find((x) => x.id === server.parent) : undefined;
   const view = connectionView(network, rt, server.bot.title);
-  const themeLabel = prefs.theme === 'system' ? 'System' : prefs.theme === 'dark' ? 'Dark' : 'Light';
+  const owner = isOwner(rt);
+  const control = rt?.info?.features?.control && owner;
+  const brain = !!rt?.info?.features?.agent && owner;
+  const info = useAgentInfo(server, brain);
+  const model = info?.configured.model ? modelName(info.configured.model) : undefined;
+
+  const online = view.kind === 'online';
+  const status = !online ? view.title : mood === 'waiting' ? 'Needs you' : mood === 'working' ? 'Working' : 'Online';
+  const tone = !online ? view.tone === 'error' ? t.colors.danger : t.colors.warning
+    : mood === 'waiting' ? t.colors.warning : t.colors.success;
+
+  const brainRows = brain ? [
+    <ListRow key="model" icon={<Cpu />} title="Model" value={model} onPress={() => router.push('/model')} />,
+    <ListRow key="providers" icon={<Key />} title="Providers" onPress={() => router.push('/providers')} />,
+    <ListRow key="persona" icon={<UserRoundPen />} title="Persona" onPress={() => router.push('/persona')} />,
+    ...(rt?.info?.features?.pets ? [<ListRow key="pet" icon={<PawPrint />} title="Pet" value={rt.pet?.name} onPress={() => router.push('/pets')} />] : []),
+    <ListRow key="memory" icon={<Brain />} title="Memory" onPress={() => router.push('/memory')} />,
+    <ListRow key="usage" icon={<BarChart />} title="Usage" onPress={() => router.push('/usage')} />,
+  ] : [];
+  const abilityRows = rt?.info?.features?.abilities && owner ? [
+    <ListRow key="skills" icon={<Sparkles />} title="Skills" onPress={() => router.push('/skills')} />,
+    <ListRow key="tools" icon={<SquareTerminal />} title="Tools" onPress={() => router.push('/tools')} />,
+    <ListRow key="mcp" icon={<Plug />} title="MCP servers" onPress={() => router.push('/mcp')} />,
+  ] : [];
+  const historyRows = control ? [
+    <ListRow key="schedule" icon={<CalendarClock />} title="Schedule" onPress={() => router.push('/schedule')} />,
+    ...(rt.info?.features?.checkpoints ? [<ListRow key="checkpoints" icon={<FileDiff />} title="Checkpoints" onPress={() => router.push('/checkpoints')} />] : []),
+    ...(rt.info?.features?.sessions ? [<ListRow key="sessions" icon={<MessageSquareText />} title="Sessions" onPress={() => router.push('/sessions')} />] : []),
+    ...(!child ? [<ListRow key="logs" icon={<ScrollText />} title="Logs" onPress={() => router.push('/logs')} />] : []),
+  ] : [];
 
   return (
     <View style={s.root}>
-      <ScrollView contentContainerStyle={[s.content, { paddingTop: insets.top + 8, paddingBottom: (wide ? 24 : tabSpace) + 8 }]}>
-        <View style={s.topRow}><NavigationToggle /><View style={{ flex: 1 }} /><BotSwitcher /></View>
+      <Animated.ScrollView onScroll={onScroll} scrollEventThrottle={16}
+        contentContainerStyle={[s.content, { paddingTop: insets.top + HUB_BAR, paddingBottom: (wide ? t.space.xl : tabSpace) + t.space.sm }]}>
         <View style={s.profile}>
-          <AgentFace server={server} size={88} animated glow />
-          <Text style={s.name} accessibilityRole="header">{server.bot.title}</Text>
-          {server.bot.description ? <Text style={s.description}>{server.bot.description}</Text> : null}
-          <View style={s.statusChip}>
-            <View style={[s.statusDot, { backgroundColor: view.tone === 'ok' ? t.colors.success : view.tone === 'error' ? t.colors.danger : t.colors.warning }]} />
-            <Text style={s.statusText}>{view.kind === 'online' ? 'Online' : view.title}</Text>
+          <LivePet server={server} size={64} accessibilityLabel={`${server.bot.title}, ${status}. Tap to poke`} />
+          <View style={s.identity}>
+            <Text style={s.name} accessibilityRole="header" numberOfLines={2}>{server.bot.title}</Text>
+            <View style={s.meta} accessibilityLabel={`Status: ${status}${model ? `. Model: ${model}` : ''}`}>
+              <View style={[s.dot, { backgroundColor: tone }]} />
+              <Text style={s.metaText} numberOfLines={1}>{status}{model ? ` · ${model}` : ''}</Text>
+            </View>
           </View>
-          {rt?.info?.version ? (
-            <Text style={s.versions}>Winglet {rt.info.version}{rt.info.hermes_version ? ` · Hermes ${rt.info.hermes_version}` : ''}</Text>
-          ) : null}
+        </View>
+        <View style={s.actions}>
+          <Button title="Open chat" style={s.action} icon={<MessageCircle size={17} color={t.colors.onInk} />}
+            onPress={() => router.push(`/chat/${server.id}/${homeChat(rt)}`)} />
+          {child ? null : <Button title="Updates" variant="secondary" style={s.action} icon={<Sparkles size={17} color={t.colors.text} />}
+            onPress={() => router.push(`/chat/${server.id}/home`)} />}
         </View>
 
-        <SectionHeader title="This bot" />
+        <VerifyNotice server={server} />
+
+        {brainRows.length ? <><SectionHeader title="Agent" /><ListGroup>{brainRows}</ListGroup></> : null}
+        {abilityRows.length ? <><SectionHeader title="Abilities" /><ListGroup>{abilityRows}</ListGroup></> : null}
+        {historyRows.length ? <><SectionHeader title="Automation & history" /><ListGroup>{historyRows}</ListGroup></> : null}
+
+        <SectionHeader title="Server" />
         <ListGroup>
-          <ListRow icon={<MessageCircle size={18} color={t.colors.onAccentSoft} />} title="Main chat" onPress={() => router.push(`/chat/${server.id}/${homeChat(rt)}`)} />
-          {child ? null : (
-            <ListRow icon={<Sparkles size={18} color={t.colors.success} />} iconColor={t.colors.success} title="Updates" subtitle="Results from scheduled routines"
-              onPress={() => router.push(`/chat/${server.id}/home`)} />
-          )}
-          <ListRow icon={<Activity size={18} color={t.colors.onAccentSoft} />} title="Connection" value={view.kind === 'online' ? 'Online' : view.title}
+          {control && !child ? <ListRow icon={<HeartPulse />} iconColor={rt.paused ? t.colors.warning : undefined}
+            title="Status" value={rt.paused ? 'Paused' : undefined} onPress={() => router.push('/server')} /> : null}
+          <ListRow icon={<Activity />} title="Connection" value={online ? 'Online' : view.title}
             onPress={() => router.push(`/connection/${server.parent ?? server.id}`)} />
-          <ListRow icon={<Star size={18} color={t.colors.onAccentSoft} />} title="Main bot"
-            subtitle={mainBot?.id === server.id ? 'Home and the app open on this bot' : 'Make Home and the app open on this bot'}
-            value={mainBot?.id === server.id ? 'This bot' : undefined} chevron={mainBot?.id !== server.id}
+          {rt?.info?.features?.config_catalog && owner ? <ListRow icon={<Cpu />} title="Agent configuration" onPress={() => router.push('/advanced-config')} /> : null}
+        </ListGroup>
+
+        <SectionHeader title="Access" />
+        <ListGroup>
+          {!child && rt?.info?.features?.roles ? <ListRow icon={<ShieldCheck />} title="Devices"
+            value={rt.me ? rt.me.role === 'owner' ? 'Owner' : 'Member' : undefined} onPress={() => router.push('/devices')} /> : null}
+          <ListRow icon={<Star />} title="Open the app on this bot" value={mainBot?.id === server.id ? 'Main' : undefined}
+            right={mainBot?.id === server.id ? <Check size={20} color={t.colors.accent} /> : undefined} chevron={false}
             onPress={mainBot?.id === server.id ? undefined : () => setMainBot(server.id)} />
         </ListGroup>
+        {child && parent && owner ? <ManageBot server={server} parent={parent} /> : null}
 
-        <VerifyNotice server={server} />
-        {Platform.OS === 'android' ? <><SectionHeader title="On this phone" /><ListGroup>
-          <ListRow icon={<Smartphone size={18} color={t.colors.onAccentSoft} />} title="Android assistant"
-            subtitle="An optional shortcut to your agents" onPress={() => router.push('/assistant-settings')} />
-          <ListRow icon={<Smartphone size={18} color={t.colors.onAccentSoft} />} title="Wear OS"
-            subtitle="Selected conversations on your watch" onPress={() => router.push('/wear-settings')} />
-        </ListGroup></> : null}
-        {rt?.info?.features?.config_catalog && isOwner(rt) ? (
-          <><SectionHeader title="Advanced" /><ListGroup>
-            <ListRow icon={<Cpu size={18} color={t.colors.onAccentSoft} />} title="Agent configuration"
-              subtitle="Context, memory and execution settings" onPress={() => router.push('/advanced-config')} />
-          </ListGroup></>
-        ) : null}
-
-        {rt?.info?.features?.agent && isOwner(rt) ? (
-          <>
-            <SectionHeader title="Your agent" />
-            <BrainRows server={server} rt={rt} />
-          </>
-        ) : null}
-
-        {rt?.info?.features?.abilities && isOwner(rt) ? (
-          <>
-            <SectionHeader title="Abilities" />
-            <ListGroup>
-              <ListRow icon={<Sparkles size={18} color={t.colors.onAccentSoft} />} title="Skills" subtitle="What it knows how to do"
-                onPress={() => router.push('/skills')} />
-              <ListRow icon={<SquareTerminal size={18} color={t.colors.onAccentSoft} />} title="Tools" subtitle={child ? 'What it can use and approvals' : 'What it can use, approvals and members'}
-                onPress={() => router.push('/tools')} />
-              <ListRow icon={<Plug size={18} color={t.colors.onAccentSoft} />} title="MCP servers" subtitle="Connect other apps and services"
-                onPress={() => router.push('/mcp')} />
-            </ListGroup>
-          </>
-        ) : null}
-
-        {rt?.info?.features?.control && isOwner(rt) && !child ? (
-          <>
-            <SectionHeader title="Server" />
-            <ListGroup>
-              <ListRow icon={<HeartPulse size={18} color={rt.paused ? t.colors.warning : t.colors.onAccentSoft} />}
-                iconColor={rt.paused ? t.colors.warning : undefined} title="Status" subtitle="Health, pause, restart and updates"
-                value={rt.paused ? 'Paused' : undefined} onPress={() => router.push('/server')} />
-              <ListRow icon={<CalendarClock size={18} color={t.colors.onAccentSoft} />} title="Schedule" subtitle="Routines it runs on its own"
-                onPress={() => router.push('/schedule')} />
-              <ListRow icon={<ScrollText size={18} color={t.colors.onAccentSoft} />} title="Logs" onPress={() => router.push('/logs')} />
-              {rt.info?.features?.checkpoints ? (
-                <ListRow icon={<FileDiff size={18} color={t.colors.onAccentSoft} />} title="Checkpoints"
-                  subtitle="Snapshots of the folder it works in" onPress={() => router.push('/checkpoints')} />
-              ) : null}
-              {rt.info?.features?.sessions ? (
-                <ListRow icon={<MessageSquareText size={18} color={t.colors.onAccentSoft} />} title="Sessions"
-                  subtitle="Every conversation, in any app" onPress={() => router.push('/sessions')} />
-              ) : null}
-            </ListGroup>
-          </>
-        ) : null}
-
-        {child && rt?.info?.features?.control && isOwner(rt) ? (
-          <>
-            <SectionHeader title="Routines and history" />
-            <ListGroup>
-              <ListRow icon={<CalendarClock size={18} color={t.colors.onAccentSoft} />} title="Schedule" subtitle="Routines it runs on its own"
-                onPress={() => router.push('/schedule')} />
-              {rt.info?.features?.checkpoints ? (
-                <ListRow icon={<FileDiff size={18} color={t.colors.onAccentSoft} />} title="Checkpoints"
-                  subtitle="Snapshots of the folder it works in" onPress={() => router.push('/checkpoints')} />
-              ) : null}
-              {rt.info?.features?.sessions ? (
-                <ListRow icon={<MessageSquareText size={18} color={t.colors.onAccentSoft} />} title="Sessions"
-                  subtitle="Its conversations, in any app" onPress={() => router.push('/sessions')} />
-              ) : null}
-            </ListGroup>
-          </>
-        ) : null}
-
-        {child && parent && isOwner(rt) ? <ManageBot server={server} parent={parent} /> : null}
-
-        {!child && (rt?.info?.features?.roles || Platform.OS !== 'web') ? <SectionHeader title="Security" /> : null}
-        {child ? null : <SecurityRows rt={rt} />}
-
-        <SectionHeader title="Bots" />
-        <ListGroup>
-          <ListRow icon={<Smartphone size={18} color={t.colors.onAccentSoft} />} title="Your bots" value={String(servers.length)} onPress={() => router.push('/bots')} />
-          <ListRow icon={<Plus size={18} color={t.colors.success} />} iconColor={t.colors.success} title="Add a bot" onPress={addBot.open} />
-        </ListGroup>
-        {addBot.sheet}
-
-        <SectionHeader title="App" />
-        <ListGroup>
-          <ListRow icon={<Palette size={18} color={t.colors.onAccentSoft} />} title="Appearance" value={`${themeLabel} · ${ACCENTS[prefs.accent].label}`} onPress={() => router.push('/appearance')} />
-          <ListRow icon={<Bell size={18} color={t.colors.onAccentSoft} />} title="Notifications" onPress={() => router.push('/notifications')} />
-          <ListRow icon={<Info size={18} color={appUpdate ? t.colors.success : t.colors.onAccentSoft} />} iconColor={appUpdate ? t.colors.success : undefined}
-            title="About & storage" value={appUpdate ? `Update to ${appUpdate.version}` : undefined} onPress={() => router.push('/about')} />
-        </ListGroup>
-        <Text style={s.footer}>Winglet {Constants.expoConfig?.version ?? ''} · open source · not affiliated with Nous Research</Text>
-      </ScrollView>
+        {rt?.info?.version ? <Footnote style={s.version}>Server plugin {rt.info.version}{rt.info.hermes_version ? ` · Hermes ${rt.info.hermes_version}` : ''}</Footnote> : null}
+      </Animated.ScrollView>
+      <HubBar y={y} title={server.bot.title} right={<BotSwitcher />} />
     </View>
   );
 }
 
-/** The agent's model, providers, persona, memory and usage: owners only. */
-function BrainRows({ server, rt }: { server: Server; rt?: ServerState }) {
-  const t = useTheme();
-  const [info, setInfo] = useState<AgentInfo | null>(null);
-  // Each time the tab comes into view, so a model just changed under Default model shows here.
-  const online = rt?.status === 'online';
+/** The agent's configuration (owners only), refreshed when you come back from the model picker. */
+function useAgentInfo(server: Server, enabled: boolean): AgentInfo | null {
+  const [loaded, setLoaded] = useState<{ id: string; info: AgentInfo } | null>(null);
+  const online = useApp((st) => st.runtime[server.id]?.status === 'online');
   useFocusEffect(useCallback(() => {
-    if (!online) return;
-    api<AgentInfo>(server, '/api/agent').then(setInfo).catch(() => undefined);
-  }, [server, online]));
-  return (
-    <ListGroup>
-      <ListRow icon={<Cpu size={18} color={t.colors.onAccentSoft} />} title="Default model"
-        value={info?.configured.model ? modelName(info.configured.model) : undefined} onPress={() => router.push('/model')} />
-      <ListRow icon={<Key size={18} color={t.colors.onAccentSoft} />} title="Providers" onPress={() => router.push('/providers')} />
-      <ListRow icon={<UserRoundPen size={18} color={t.colors.onAccentSoft} />} title="Persona" subtitle="Who it is and how it talks" onPress={() => router.push('/persona')} />
-      {rt?.info?.features?.pets ? (
-        <ListRow icon={<PawPrint size={18} color={t.colors.onAccentSoft} />} title="Pet" subtitle="Its animated face"
-          value={rt.pet?.name} onPress={() => router.push('/pets')} />
-      ) : null}
-      <ListRow icon={<Brain size={18} color={t.colors.onAccentSoft} />} title="Memory" subtitle="What it remembers about you" onPress={() => router.push('/memory')} />
-      <ListRow icon={<BarChart size={18} color={t.colors.onAccentSoft} />} title="Usage" subtitle="Tokens and cost" onPress={() => router.push('/usage')} />
-    </ListGroup>
-  );
-}
-
-/** Devices and roles on this bot, and the optional app lock on this phone. */
-function SecurityRows({ rt }: { rt?: ServerState }) {
-  const t = useTheme();
-  const appLock = usePrefs((st) => st.prefs.appLock);
-  const update = usePrefs((st) => st.update);
-  const [canLock, setCanLock] = useState<boolean | null>(null);
-  useEffect(() => { lockAvailable().then(setCanLock); }, []);
-  const me = rt?.me;
-  if (!rt?.info?.features?.roles && Platform.OS === 'web') return null;
-  return (
-    <ListGroup>
-      {rt?.info?.features?.roles ? (
-        <ListRow icon={<ShieldCheck size={18} color={t.colors.onAccentSoft} />} title="Devices"
-          value={me ? `${me.role === 'owner' ? 'Owner' : 'Member'}${me.verified ? '' : ' · verify'}` : undefined}
-          onPress={() => router.push('/devices')} />
-      ) : null}
-      {Platform.OS !== 'web' ? (
-        <ListRow icon={<Fingerprint size={18} color={t.colors.onAccentSoft} />} title="App lock"
-          subtitle={canLock === false ? 'Set up a fingerprint, face or screen lock on this phone first' : 'Ask for your fingerprint or PIN after a minute away'}
-          right={<Toggle label="App lock" value={appLock} onValueChange={async (on) => {
-            if (!canLock) return;
-            // Turning it on proves the phone's unlock works, so nobody gets locked out.
-            if (on && !(await unlock('Turn on app lock'))) return;
-            update({ appLock: on });
-          }} />} />
-      ) : null}
-    </ListGroup>
-  );
+    if (!enabled || !online) return;
+    api<AgentInfo>(server, '/api/agent').then((info) => setLoaded({ id: server.id, info })).catch(() => undefined);
+  }, [server, online, enabled]));
+  return enabled && loaded?.id === server.id ? loaded.info : null;
 }
 
 const useStyles = makeStyles((t) => ({
   root: { flex: 1, backgroundColor: t.colors.bg },
-  content: { paddingHorizontal: 16, maxWidth: 680, width: '100%', alignSelf: 'center' },
-  topRow: { minHeight: 48, flexDirection: 'row', alignItems: 'center' },
-  profile: { alignItems: 'center', paddingTop: 16, paddingBottom: 6, gap: 6 },
-  name: { ...t.type.title, color: t.colors.text, marginTop: 12 },
-  description: { ...t.type.callout, color: t.colors.textSecondary, textAlign: 'center', maxWidth: 420 },
-  statusChip: {
-    flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 12, paddingVertical: 6, borderRadius: t.radius.pill,
-    backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border, marginTop: 6,
-  },
-  statusDot: { width: 8, height: 8, borderRadius: 4 },
-  statusText: { ...t.type.caption, color: t.colors.text },
-  versions: { ...t.type.caption, color: t.colors.textTertiary, marginTop: 2 },
-  footer: { ...t.type.caption, color: t.colors.textTertiary, textAlign: 'center', marginTop: 24 },
+  content: { paddingHorizontal: t.space.lg, maxWidth: 680, width: '100%', alignSelf: 'center' },
+  profile: { flexDirection: 'row', alignItems: 'center', gap: t.space.lg, paddingHorizontal: 4, marginTop: t.space.xs },
+  identity: { flex: 1, minWidth: 0, gap: 4 },
+  name: { ...t.type.display, color: t.colors.text },
+  meta: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  metaText: { ...t.type.callout, color: t.colors.textSecondary, flexShrink: 1 },
+  dot: { width: 7, height: 7, borderRadius: 4 },
+  actions: { flexDirection: 'row', gap: t.space.sm, marginTop: t.space.xl },
+  action: { flex: 1 },
+  version: { alignItems: 'center', paddingTop: t.space.xl },
 }));

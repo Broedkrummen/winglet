@@ -1,6 +1,6 @@
 """Opt-in, single-phone reads. All pending state/results are memory-only.
 
-Inspired by Herald PhoneToolsBridge/PhoneTool (MIT); see the feature notice.
+Lets the paired agent ask this phone for contacts or location, one approved request at a time.
 """
 from __future__ import annotations
 

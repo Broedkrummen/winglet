@@ -8,7 +8,7 @@ import { makeStyles, useTheme } from '../lib/themeContext';
 import type { BotRow, Server } from '../lib/types';
 import { Pencil, Trash2 } from './icons';
 import { Sheet } from './Sheet';
-import { Button, Field, ListGroup, ListRow, SectionHeader } from './ui';
+import { Button, Field, Footnote, ListGroup, ListRow, SectionHeader } from './ui';
 
 /** Rename or delete one of a server's other bots. Changes go through its server, as Hermes Desktop's do. */
 export function ManageBot({ server, parent }: { server: Server; parent: Server }) {
@@ -56,14 +56,12 @@ export function ManageBot({ server, parent }: { server: Server; parent: Server }
     <>
       <SectionHeader title="This bot" />
       <ListGroup>
-        <ListRow icon={<Pencil size={18} color={t.colors.onAccentSoft} />} title="Rename" value={server.bot.title}
+        <ListRow icon={<Pencil size={18} color={t.colors.textSecondary} />} title="Rename" value={server.bot.title}
           onPress={() => { setTitle(server.bot.title); setSheet('rename'); }} />
         <ListRow icon={<Trash2 size={18} color={t.colors.danger} />} iconColor={t.colors.danger} title={`Delete ${server.bot.title}`} destructive
           onPress={() => setSheet('delete')} />
       </ListGroup>
-      <Text style={s.note}>
-        {server.bot.title} runs on {parent.bot.title}'s server. Its status, updates, devices and security are under {parent.bot.title}.
-      </Text>
+      <Footnote>Server controls and devices are under {parent.bot.title}.</Footnote>
 
       <Sheet visible={sheet === 'rename'} onClose={close} title="Rename">
         <View style={{ gap: 12, paddingHorizontal: 4 }}>
@@ -75,10 +73,7 @@ export function ManageBot({ server, parent }: { server: Server; parent: Server }
       </Sheet>
       <Sheet visible={sheet === 'delete'} onClose={close} title={`Delete ${server.bot.title}?`}>
         <View style={{ gap: 12, paddingHorizontal: 4 }}>
-          <Text style={s.body}>
-            Its Hermes profile is deleted from the server: its persona, memory, skills, schedule and every conversation, here and in
-            any other app. This can't be undone.
-          </Text>
+          <Footnote>Deletes its profile, persona, memory, skills, schedule and all chats in every app. This can't be undone.</Footnote>
           {error ? <Text style={s.error}>{error}</Text> : null}
           <Button title={`Delete ${server.bot.title}`} variant="danger" loading={busy} icon={<Trash2 size={16} color={t.colors.danger} />}
             onPress={remove} />
@@ -91,6 +86,5 @@ export function ManageBot({ server, parent }: { server: Server; parent: Server }
 
 const useStyles = makeStyles((t) => ({
   note: { ...t.type.caption, color: t.colors.textSecondary, marginTop: 10, paddingHorizontal: 4 },
-  body: { ...t.type.callout, color: t.colors.text },
   error: { ...t.type.callout, color: t.colors.danger },
 }));

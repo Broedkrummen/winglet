@@ -15,5 +15,7 @@ export const finite=(value:unknown):value is number=>typeof value==='number'&&Nu
 export const tokenCount=(value:unknown)=>finite(value)?new Intl.NumberFormat(undefined,{maximumFractionDigits:0}).format(value):'Unknown';
 export const contextPercent=(value:ContextAmount)=>finite(value.used)&&finite(value.window)&&value.window>0?Math.min(100,Math.max(0,value.used/value.window*100)):null;
 export function composition(categories:ContextCategory[]){const total=categories.reduce((sum,c)=>sum+(finite(c.tokens)?c.tokens:0),0);return categories.filter(c=>finite(c.tokens)&&c.tokens>0).map(c=>({...c,share:total>0?c.tokens!/total:0}));}
+/** Every category for display, unknown ones included; shares are of the known estimates when some are unknown. */
+export function contextRows(categories:ContextCategory[]){const known=composition(categories);const partial=categories.some(c=>!finite(c.tokens));return categories.map(c=>{const k=known.find(x=>x.id===c.id);return {...c,share:k?k.share:finite(c.tokens)?0:null,partial};});}
 export const sourceLabel=(source:string)=>source==='provider_usage'?'Provider measured':source==='provider_usage_plus_estimate'?'Provider usage + estimate':'Estimated';
 export function costLabel(cost:ContextView['usage']['cost']){if(!finite(cost.value))return 'Unavailable';return `${cost.source==='measured'?'Measured':'Estimated'} ${cost.currency} ${cost.value.toFixed(4)}`;}

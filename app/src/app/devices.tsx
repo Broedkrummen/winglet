@@ -8,7 +8,7 @@ import { QrCode } from '../components/QrCode';
 import { Screen } from '../components/Screen';
 import { withSelectedServer } from '../components/ServerScreen';
 import { Sheet, SheetAction } from '../components/Sheet';
-import { Button, Card, Field, ListGroup, ListRow, LoadError, SectionHeader, Segmented, Skeleton } from '../components/ui';
+import { Button, Card, Field, Footnote, ListGroup, ListRow, LoadError, SectionHeader, Segmented, Skeleton } from '../components/ui';
 import { agoText } from '../lib/agent';
 import { api, ApiError, parsePairLink, signedApi, verifyDevice } from '../lib/api';
 import { haptic } from '../lib/haptics';
@@ -53,21 +53,20 @@ function Devices({ server }: { server: Server }) {
 
   if (!roles) {
     return (
-      <Screen title="Devices" subtitle={`${server.bot.title}'s server needs a Winglet update for devices and roles.`}>
-        <Card><Text style={s.note}>Run `hermes plugins update winglet` on the server, then restart the gateway.</Text></Card>
+      <Screen title="Devices" subtitle={server.bot.title}>
+        <Card><Text style={s.note}>Update the server with `hermes plugins update winglet`, then restart it to enable devices and roles.</Text></Card>
       </Screen>
     );
   }
 
   return (
-    <Screen title="Devices" subtitle={owner ? `Phones and browsers that can talk to ${server.bot.title}, and what each may do.`
-      : `This phone is a member: it chats with ${server.bot.title} in its own chats.`} onRefresh={owner ? load : undefined}>
+    <Screen title="Devices" onRefresh={owner ? load : undefined}>
       <ThisPhone server={server} />
 
       {owner ? (
         <>
           <SectionHeader title="Paired" right={me?.verified ? (
-            <Button size="sm" variant="tonal" title="Add a device" icon={<UserPlus size={15} color={t.colors.onAccentSoft} />} onPress={() => setAdding(true)} />
+            <Button size="sm" variant="tonal" title="Add a device" icon={<UserPlus size={15} color={t.colors.textSecondary} />} onPress={() => setAdding(true)} />
           ) : null} />
           {devices === null ? (error ? <LoadError message={error} onRetry={load} /> : (
             <View style={{ gap: 10 }}>{[0, 1].map((i) => <Skeleton key={i} height={64} radius={18} />)}</View>
@@ -75,9 +74,10 @@ function Devices({ server }: { server: Server }) {
             <ListGroup>
               {devices.map((d) => (
                 <ListRow key={d.id}
-                  icon={d.platform === 'web' ? <Monitor size={18} color={t.colors.onAccentSoft} /> : <Smartphone size={18} color={t.colors.onAccentSoft} />}
+                  icon={d.platform === 'web' ? <Monitor size={18} color={t.colors.textSecondary} /> : <Smartphone size={18} color={t.colors.textSecondary} />}
                   title={d.current ? `${d.name} (this one)` : d.name}
-                  subtitle={`${d.role === 'owner' ? 'Owner' : 'Member'} · ${d.verified ? 'verified' : 'not verified'} · seen ${agoText(d.last_seen)}`}
+                  value={d.role === 'owner' ? 'Owner' : 'Member'}
+                  subtitle={`${d.verified ? 'Verified' : 'Not verified'}, seen ${agoText(d.last_seen)}`}
                   onPress={() => setSelected(d)} />
               ))}
             </ListGroup>
@@ -85,8 +85,8 @@ function Devices({ server }: { server: Server }) {
           {error && devices ? <Text style={[s.note, { color: t.colors.danger, marginTop: 8 }]}>{error}</Text> : null}
           <SectionHeader title="History" />
           <ListGroup>
-            <ListRow icon={<Activity size={18} color={t.colors.onAccentSoft} />} title="Activity"
-              subtitle="Pairings, role changes, approvals and refused requests" onPress={() => router.push('/activity')} />
+            <ListRow icon={<Activity size={18} color={t.colors.textSecondary} />} title="Activity"
+              onPress={() => router.push('/activity')} />
           </ListGroup>
         </>
       ) : null}
@@ -158,19 +158,19 @@ function ThisPhone({ server }: { server: Server }) {
         </View>
         {me?.verified ? (
           <>
-            <Text style={s.note}>Owner actions from this phone are signed with a key that never leaves it, so a copied token alone can't make changes.</Text>
+            <Footnote>Owner actions need this device's signing key, not just its access token.</Footnote>
             <Button title="Replace access token" variant="secondary" size="sm" icon={<RefreshCw size={15} color={t.colors.text} />} loading={busy} onPress={rotate} />
           </>
         ) : (
           <>
             <Text style={s.note}>
-              This phone was paired without checking the server's key, so it can chat but can't make changes. To verify it, run
-              `hermes winglet pair` on the server (or use Add a device on a verified phone) and scan the code{Platform.OS === 'web' ? ', or paste the link here' : ''}.
+              Verify the server key to enable changes: run `hermes winglet pair` or use Add a device on a verified phone.
+              {' '}Scan the code or paste its link here.
             </Text>
             {Platform.OS !== 'web' ? (
               <Button title="Scan a code" icon={<QrIcon size={17} color={t.colors.onAccent} />} onPress={() => router.push('/scan')} />
             ) : null}
-            <Field value={link} onChangeText={setLink} placeholder="https://…/#pair=…&fp=…" autoCapitalize="none" autoCorrect={false} />
+            <Field label="Pairing link" value={link} onChangeText={setLink} placeholder="https://…/#pair=…&fp=…" autoCapitalize="none" autoCorrect={false} />
             <Button title="Verify" variant={Platform.OS === 'web' ? 'primary' : 'secondary'} loading={busy} disabled={!link.trim()} onPress={verify} />
           </>
         )}
@@ -215,7 +215,7 @@ function DeviceSheet({ server, device, canEdit, onClose, onChanged }: {
         <Text style={s.sheetNote}>Verify this phone to rename, change or remove devices.</Text>
       ) : mode === 'menu' ? (
         <>
-          <Text style={s.sheetNote}>{d.role === 'owner' ? 'Owner' : 'Member'} · {d.platform || 'unknown'} · paired {agoText(d.created_at)}</Text>
+          <ListGroup><ListRow title="Role" value={d.role === 'owner' ? 'Owner' : 'Member'} /><ListRow title="Platform" value={d.platform || 'Unknown'} /><ListRow title="Paired" value={agoText(d.created_at)} /></ListGroup>
           <SheetAction label="Rename" onPress={() => { setName(d.name); setMode('rename'); }} />
           <SheetAction label={d.role === 'owner' ? 'Make a member' : 'Make an owner'} onPress={() => setMode('role')} />
           <SheetAction icon={<Trash2 size={20} color={t.colors.danger} />} label={d.current ? 'Remove this phone' : 'Remove'} destructive onPress={() => setMode('remove')} />
@@ -224,7 +224,7 @@ function DeviceSheet({ server, device, canEdit, onClose, onChanged }: {
         <View style={{ gap: 14, paddingHorizontal: 4 }}>
           <Text style={s.sheetNote}>
             {d.role === 'owner'
-              ? `${d.current ? 'This phone' : d.name} will chat in its own chats only, and can't approve commands, see other chats or change settings.${d.current ? " You'll need another owner to undo it." : ''}`
+              ? `${d.current ? 'This phone' : d.name} loses access to approvals, other chats and settings.${d.current ? " Another owner must undo this." : ''}`
               : `${d.name} will see every chat, approve commands and change ${server.bot.title}'s settings.`}
           </Text>
           <Button title={d.role === 'owner' ? 'Make a member' : 'Make an owner'} variant={d.role === 'owner' ? 'danger' : 'primary'} loading={busy}
@@ -287,8 +287,8 @@ function AddDeviceSheet({ server, visible, onClose }: { server: Server; visible:
           <View style={s.qrFrame}><QrCode value={link} size={220} label="Pairing code" /></View>
           <Text style={s.code} selectable>{code.code.slice(0, 4)}-{code.code.slice(4)}</Text>
           <Text style={s.sheetNote}>
-            {left > 0 ? `Works once, for ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} more.` : 'This code has expired.'}
-            {' '}On an iPhone, scan it with the Camera app; on Android, with Winglet.
+            {left > 0 ? `Single use. Expires in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}.` : 'This code has expired.'}
+            {' '}Scan with iPhone Camera or Winglet on Android.
           </Text>
           <View style={{ flexDirection: 'row', gap: 8 }}>
             <Button size="sm" variant="secondary" title="Copy link" icon={<Copy size={15} color={t.colors.text} />} onPress={() => Clipboard.setStringAsync(link)} />
@@ -302,8 +302,8 @@ function AddDeviceSheet({ server, visible, onClose }: { server: Server; visible:
             options={[{ value: 'member', label: 'Member' }, { value: 'owner', label: 'Owner' }]} />
           <Text style={s.sheetNote}>
             {role === 'member'
-              ? `A member chats with ${server.bot.title} in their own chats. They can't approve commands, see your chats, or change settings. ${server.bot.title}'s memory and tools are shared, so only add people you'd trust with your agent.`
-              : `An owner can do everything you can: approve commands, see every chat, and manage devices.`}
+              ? `Members have their own chats, without approvals or settings access. Memory and tools are shared: only add people you trust.`
+              : 'Owners can approve commands, see all chats, change settings and manage devices.'}
           </Text>
           <Button title="Show pairing code" loading={busy} onPress={create} />
         </View>
@@ -318,9 +318,9 @@ const useStyles = makeStyles((t) => ({
   meRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   meName: { ...t.type.bodyStrong, color: t.colors.text },
   badge: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 5, borderRadius: t.radius.pill },
-  badgeText: { fontFamily: t.fonts.semibold, fontSize: 12.5 },
+  badgeText: { ...t.type.caption },
   sheetNote: { ...t.type.callout, color: t.colors.textSecondary, textAlign: 'center', paddingHorizontal: 12, marginBottom: 6 },
   qrWrap: { alignItems: 'center', gap: 12, paddingBottom: 4 },
   qrFrame: { padding: 12, borderRadius: t.radius.lg, backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border },
-  code: { fontFamily: t.fonts.mono, fontSize: 22, letterSpacing: 2, color: t.colors.text },
+  code: { ...t.type.title, fontFamily: t.fonts.mono, letterSpacing: 2, color: t.colors.text },
 }));

@@ -9,9 +9,9 @@ import { ConnectionBanner } from '../../components/ConnectionBanner';
 import { Activity, Bell, Cloud, Copy, Globe, Moon, Pencil, Route, ShieldCheck, Smartphone, SquareTerminal, TriangleAlert } from '../../components/icons';
 import { Screen } from '../../components/Screen';
 import { Sheet } from '../../components/Sheet';
-import { Button, Card, Field, ListGroup, ListRow, SectionHeader, Skeleton } from '../../components/ui';
+import { Button, Card, Field, Footnote, ListGroup, ListRow, SectionHeader, Skeleton } from '../../components/ui';
 import { api, moveServer } from '../../lib/api';
-import { addressKind, checkAddress, connectionView, deliverySummary, diagnosticReport, modeSummary, span, tunnelSummary } from '../../lib/connection';
+import { checkAddress, connectionView, deliverySummary, diagnosticReport, modeSummary, span, tunnelSummary } from '../../lib/connection';
 import { haptic } from '../../lib/haptics';
 import { describeTestPush, sendTestPush } from '../../lib/push';
 import { APP_PROTOCOL, isOwner, useApp, useServerState } from '../../lib/store';
@@ -31,6 +31,7 @@ export default function ConnectionScreen() {
   const [moving, setMoving] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [details, setDetails] = useState(false);
   const [now, setNow] = useState(Date.now());
   const supported = !!rt?.info?.features?.connection_status;
   const online = rt?.status === 'online';
@@ -66,50 +67,52 @@ export default function ConnectionScreen() {
   // Polling stops while the server is unreachable: what's shown is then only the last known state.
   const stale = !!status && !online;
   const offered = status?.url && status.url !== server.url && native ? status.url : null;
+  const statusColor = view.kind === 'online' ? t.colors.success : view.tone === 'error' ? t.colors.danger : t.colors.warning;
 
-  const rows: [string, string][] = [
-    ['Phone network', network ? 'Online' : 'Offline'],
-    ['Last problem', rt?.conn.lastError ?? 'None'],
-    ['Queued messages', String(rt?.outbox.filter((o) => !o.failed).length ?? 0)],
-    ['This app', `${appVersion} (protocol ${APP_PROTOCOL})`],
-    ['Winglet on server', rt?.info?.version ? `${rt.info.version} (protocol ${rt.info.protocol})` : 'Unknown until connected'],
-    ['Hermes', rt?.info?.hermes_version || 'Unknown'],
+  const rows: [string, string, boolean][] = [
+    ['Phone network', network ? 'Online' : 'Offline', false],
+    ['Last problem', rt?.conn.lastError ?? 'None', !!rt?.conn.lastError],
+    ['Queued messages', String(rt?.outbox.filter((o) => !o.failed).length ?? 0), false],
+    ['This app', `${appVersion} (protocol ${APP_PROTOCOL})`, false],
+    ['Winglet on server', rt?.info?.version ? `${rt.info.version} (protocol ${rt.info.protocol})` : 'Unknown until connected', false],
+    ['Hermes', rt?.info?.hermes_version || 'Unknown', false],
   ];
+  const since = status?.mode === 'quick' && status.address_since && !stale
+    ? `This address has worked for ${span(now - status.address_since * 1000)}${status.address_changes
+      ? `. It has changed ${status.address_changes === 1 ? 'once' : `${status.address_changes} times`}` : ''}.`
+    : null;
 
   return (
     <Screen title="Connection" subtitle={server.bot.title}>
       <ConnectionBanner server={server} />
       <SyncStatus serverId={server.id} details />
-      <View style={s.hero}>
-        <View style={[s.dot, { backgroundColor: view.kind === 'online' ? t.colors.success : view.tone === 'error' ? t.colors.danger : t.colors.warning }]} />
-        <View style={{ flex: 1 }}>
-          <Text style={s.heroTitle}>{view.kind === 'online' ? 'Online' : view.title}</Text>
-          <Text style={s.heroDetail}>{status ? `${modeSummary(status.mode).title} · ` : ''}{addressKind(server.url)}</Text>
-        </View>
-      </View>
+      <ListGroup style={{ marginTop: t.space.md }}>
+        <ListRow icon={<View style={[s.dot, { backgroundColor: statusColor }]} />}
+          title={view.kind === 'online' ? 'Online' : view.title}
+          value={status ? modeSummary(status.mode).title : undefined} />
+      </ListGroup>
 
       {supported && online && !status ? (
-        <View style={{ gap: 10, marginTop: 18 }}>{[0, 1].map((i) => <Skeleton key={i} height={64} radius={16} />)}</View>
+        <View style={{ gap: t.space.sm, marginTop: t.space.xl }}>{[0, 1].map((i) => <Skeleton key={i} height={52} radius={16} />)}</View>
       ) : null}
       {status ? (
         <Animated.View entering={FadeIn}>
           <SectionHeader title={`How phones reach ${server.bot.title}`} />
-          {stale ? <Text style={[s.note, { marginTop: 0 }]}>Last known, from before this phone lost {server.bot.title}. It updates when the connection is back.</Text> : null}
+          {stale ? <Footnote>Last known, from before this phone lost {server.bot.title}. Updates when the connection is back.</Footnote> : null}
           <ListGroup>
-            <ListRow icon={status.mode === 'quick' ? <Cloud size={18} color={t.colors.onAccentSoft} /> : <Route size={18} color={t.colors.onAccentSoft} />}
-              title={modeSummary(status.mode).title} subtitle={modeSummary(status.mode).detail} />
             {status.tunnel ? <TunnelRow tunnel={status.tunnel} now={now} checkedAt={stale ? checkedAt : null} /> : null}
-            <ListRow icon={<Globe size={18} color={t.colors.onAccentSoft} />} title="Address it gives out"
-              subtitle={status.url ?? (status.mode === 'quick' ? 'None right now. It gets a new one when the tunnel is back.' : 'Not set. Phones use the address they paired with.')}
+            <ListRow icon={<Globe size={18} color={t.colors.textSecondary} />} title="Address it gives out"
+              subtitle={status.url ?? undefined}
+              value={status.url ? undefined : status.mode === 'quick' ? 'None right now' : 'Not set'}
               right={status.url ? <CopyButton label="Copy the server's address" onPress={() => copy(status.url!)} /> : undefined} />
           </ListGroup>
-          {status.mode === 'quick' && status.address_since && !stale ? (
-            <Text style={s.note}>This address has worked for {span(now - status.address_since * 1000)}
-              {status.address_changes ? `. It has changed ${status.address_changes === 1 ? 'once' : `${status.address_changes} times`}` : ''}.</Text>
+          {status.mode === 'quick' ? (
+            <Footnote>Automatic HTTPS is a free Cloudflare tunnel. Cloudflare can see what passes through it, and the address changes when the tunnel restarts.</Footnote>
           ) : null}
+          {since ? <Footnote>{since}</Footnote> : null}
           {offered ? (
-            <Card style={[s.offer, { marginTop: 12 }]}>
-              <Text style={s.body}>This phone uses a different address from the one {server.bot.title} gives out. Switch if the one above works where you are.</Text>
+            <Card style={{ gap: t.space.sm, marginTop: t.space.md }}>
+              <Text style={s.body}>This phone uses a different address. Switch if the one above works here.</Text>
               <Button size="sm" variant="tonal" title="Use the server's address" onPress={() => setMoving(offered)} />
             </Card>
           ) : null}
@@ -118,11 +121,10 @@ export default function ConnectionScreen() {
 
       <SectionHeader title="This phone" />
       <ListGroup>
-        <ListRow icon={<Smartphone size={18} color={t.colors.onAccentSoft} />} title="Address" subtitle={server.url}
+        <ListRow icon={<Smartphone size={18} color={t.colors.textSecondary} />} title="Address" subtitle={server.url}
           right={<CopyButton label="Copy this phone's address" onPress={() => copy(server.url)} />} />
-        {native ? <ListRow icon={<Pencil size={18} color={t.colors.onAccentSoft} />} title="Change address"
-          subtitle="Moved the server to Tailscale or a new domain? Point this phone at its new address." onPress={() => setMoving('')} /> : null}
-        <ListRow icon={<ShieldCheck size={18} color={t.colors.onAccentSoft} />} title="Address recovery" subtitle={recoveryLine(server, status, now)} />
+        {native ? <ListRow icon={<Pencil size={18} color={t.colors.textSecondary} />} title="Change address" onPress={() => setMoving('')} /> : null}
+        <RecoveryRow server={server} status={status} now={now} />
       </ListGroup>
 
       {status ? <Notifications server={server} status={status} now={now} testing={testing} onTest={async () => {
@@ -139,7 +141,7 @@ export default function ConnectionScreen() {
         <>
           <SectionHeader title="Notifications" />
           <ListGroup>
-            <ListRow icon={<Bell size={18} color={t.colors.onAccentSoft} />} title="Notifications and quiet hours" onPress={() => router.push('/notifications')} />
+            <ListRow icon={<Bell size={18} color={t.colors.textSecondary} />} title="Notifications and quiet hours" onPress={() => router.push('/notifications')} />
           </ListGroup>
         </>
       )}
@@ -149,42 +151,43 @@ export default function ConnectionScreen() {
           <SectionHeader title="On the server" />
           <ListGroup>
             <ListRow title="Listening on" value={status.listen} />
-            <ListRow title="API keys from the web app" value={status.web_keys ? 'Allowed' : 'Off'}
-              subtitle={status.web_keys ? undefined : 'Over automatic HTTPS, add keys from the Android app. WINGLET_ALLOW_WEB_SECRETS=true allows the web app.'} />
+            <ListRow title="API keys from the web app" value={status.web_keys ? 'Allowed' : 'Off'} />
           </ListGroup>
-          <Card style={{ gap: 10, marginTop: 12 }}>
+          {status.web_keys ? null : (
+            <Footnote>Over automatic HTTPS, add keys from the Android app. WINGLET_ALLOW_WEB_SECRETS=true allows the web app.</Footnote>
+          )}
+          <Card style={{ gap: t.space.sm, marginTop: t.space.md }}>
             <View style={s.titleRow}>
               <SquareTerminal size={17} color={t.colors.textSecondary} />
               <Text style={s.cardTitle}>Change how phones connect</Text>
             </View>
-            <Text style={s.body}>Switching changes the address every phone uses, so it's done on the server, where you can pair again if a phone can't follow.</Text>
+            <Text style={s.body}>Changing this changes the address every phone uses. Run these on the server.</Text>
             <Command label="Automatic HTTPS" text="hermes winglet setup --connection quick" onCopy={copy} />
             <Command label="Your own address" text="hermes winglet setup --connection direct --public-url https://…" onCopy={copy} />
           </Card>
         </>
       ) : null}
 
-      <SectionHeader title="Details" />
-      <Card style={{ paddingVertical: 6 }}>
-        {rows.map(([k, v], i) => (
-          <View key={k} style={[s.row, i > 0 && s.rowBorder]}>
-            <Text style={s.key}>{k}</Text>
-            <Text style={s.value} selectable>{v}</Text>
-          </View>
-        ))}
-      </Card>
-      <SectionHeader title="Recent events" />
-      <Card style={{ paddingVertical: 6 }}>
-        {(rt?.conn.history ?? []).slice().reverse().map((h, i) => (
-          <View key={`${h.t}-${i}`} style={[s.row, i > 0 && s.rowBorder]}>
-            <Text style={s.key}>{ago(now - h.t)}</Text>
-            <Text style={s.value}>{h.status}{h.note ? ` · ${h.note}` : ''}</Text>
-          </View>
-        ))}
-        {!rt?.conn.history.length ? <Text style={[s.value, { paddingVertical: 10 }]}>Nothing yet.</Text> : null}
-      </Card>
-      <Text style={s.note}>The report has no passwords, tokens, addresses or messages: only states, times and versions. Paste it when asking for help.</Text>
-      <Button title={copied ? 'Copied' : 'Copy report'} icon={<Copy size={16} color={t.colors.onAccent} />} onPress={async () => {
+      <SectionHeader title="Troubleshooting" />
+      <ListGroup>
+        <ListRow title="Details" value={details ? 'Hide' : 'Show'} onPress={() => setDetails((d) => !d)} />
+      </ListGroup>
+      {details ? (
+        <>
+          <ListGroup style={{ marginTop: t.space.sm }}>
+            {rows.map(([k, v, long]) => <ListRow key={k} title={k} value={long ? undefined : v} subtitle={long ? v : undefined} />)}
+          </ListGroup>
+          <SectionHeader title="Recent events" />
+          <ListGroup>
+            {(rt?.conn.history ?? []).slice().reverse().map((h, i) => (
+              <ListRow key={`${h.t}-${i}`} title={`${h.status}${h.note ? ` · ${h.note}` : ''}`} value={ago(now - h.t)} />
+            ))}
+            {!rt?.conn.history.length ? <ListRow title="Nothing yet." /> : null}
+          </ListGroup>
+        </>
+      ) : null}
+      <Footnote>Contains no passwords, tokens, addresses or messages. Paste it when asking for help.</Footnote>
+      <Button style={{ marginTop: t.space.md }} title={copied ? 'Copied' : 'Copy report'} icon={<Copy size={16} color={t.colors.onAccent} />} onPress={async () => {
         await Clipboard.setStringAsync(report());
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
@@ -195,14 +198,18 @@ export default function ConnectionScreen() {
   );
 }
 
-function recoveryLine(server: Server, status: ConnectionStatus | null, now: number): string {
-  if (status?.mode === 'direct') return "Not needed: a direct address doesn't change on its own.";
-  if (Platform.OS !== 'android') {
-    return "The web app can't follow a new address by itself. When it changes, run hermes winglet pair on the server and open the new one.";
-  }
-  if (!server.recovery || status?.recovery?.enrolled === false) return 'Off for this phone. Pair it again to have it follow address changes.';
+function recoveryState(server: Server, status: ConnectionStatus | null, now: number): { value: string; detail?: string } {
+  if (status?.mode === 'direct') return { value: 'Not needed' };
+  if (Platform.OS !== 'android') return { value: 'Manual', detail: 'Run hermes winglet pair on the server when the address changes.' };
+  if (!server.recovery || status?.recovery?.enrolled === false) return { value: 'Off', detail: 'Pair again to follow address changes.' };
   const last = deliverySummary(status?.recovery?.last ?? null, now);
-  return `On: this phone finds the server's new address by itself${last ? `. ${last.replace('Last one', 'Last update')}` : ''}.`;
+  return { value: 'On', detail: ['Finds the new address by itself.', last?.replace('Last one', 'Last update')].filter(Boolean).join(' ') };
+}
+
+function RecoveryRow({ server, status, now }: { server: Server; status: ConnectionStatus | null; now: number }) {
+  const t = useTheme();
+  const { value, detail } = recoveryState(server, status, now);
+  return <ListRow icon={<ShieldCheck size={18} color={t.colors.textSecondary} />} title="Address recovery" value={value} subtitle={detail} />;
 }
 
 function TunnelRow({ tunnel, now, checkedAt }: { tunnel: NonNullable<ConnectionStatus['tunnel']>; now: number; checkedAt: number | null }) {
@@ -210,9 +217,13 @@ function TunnelRow({ tunnel, now, checkedAt }: { tunnel: NonNullable<ConnectionS
   const s = useStyles();
   const line = tunnelSummary(tunnel, now, checkedAt);
   const color = { ok: t.colors.success, warn: t.colors.warning, info: t.colors.accent, unknown: t.colors.textTertiary }[line.tone];
+  // Long states (last known, or an error) wrap under the title; a short live state sits in the value column.
+  const error = tunnel.error && checkedAt === null ? tunnel.error : null;
+  const wide = checkedAt !== null || !!error;
   return (
-    <ListRow icon={<Activity size={18} color={t.colors.onAccentSoft} />} title="Tunnel"
-      subtitle={tunnel.error && checkedAt === null ? `${line.text}. ${tunnel.error}` : line.text}
+    <ListRow icon={<Activity size={18} color={t.colors.textSecondary} />} title="Tunnel"
+      value={wide ? undefined : line.text}
+      subtitle={wide ? [line.text, error].filter(Boolean).join('. ') : undefined}
       right={<View accessibilityLabel={line.text} style={[s.dot, { backgroundColor: color }]} />} />
   );
 }
@@ -227,12 +238,12 @@ function Notifications({ server, status, now, testing, onTest }: {
     <>
       <SectionHeader title="Notifications" />
       <ListGroup>
-        <ListRow icon={channel ? <Bell size={18} color={t.colors.onAccentSoft} /> : <TriangleAlert size={18} color={t.colors.warning} />}
+        <ListRow icon={channel ? <Bell size={18} color={t.colors.textSecondary} /> : <TriangleAlert size={18} color={t.colors.warning} />}
           iconColor={channel ? undefined : t.colors.warning} title={channel ? `On, through the ${channel}` : 'Not set up on this device'}
-          subtitle={channel ? last ?? 'Nothing sent since the server started.' : `Get a nudge when ${server.bot.title} needs an approval or an answer.`}
+          subtitle={channel ? last ?? 'Nothing sent since the server started.' : undefined}
           right={channel ? <Button size="sm" variant="tonal" title="Test" loading={testing} onPress={onTest} />
             : <Button size="sm" title="Set up" onPress={() => router.push('/notifications')} />} />
-        <ListRow icon={<Moon size={18} color={t.colors.onAccentSoft} />} title="Quiet hours and muted chats" onPress={() => router.push('/notifications')} />
+        <ListRow icon={<Moon size={18} color={t.colors.textSecondary} />} title="Quiet hours and muted chats" onPress={() => router.push('/notifications')} />
       </ListGroup>
     </>
   );
@@ -242,7 +253,7 @@ function Command({ label, text, onCopy }: { label: string; text: string; onCopy:
   const s = useStyles();
   return (
     <View style={{ gap: 6 }}>
-      <Text style={s.key}>{label}</Text>
+      <Text style={s.commandLabel}>{label}</Text>
       <View style={s.command}>
         <Text selectable style={s.mono}>{text}</Text>
         <CopyButton label={`Copy: ${label}`} onPress={() => onCopy(text)} />
@@ -287,11 +298,9 @@ function MoveSheet({ server, initial, onClose }: { server: Server; initial: stri
   };
   return (
     <Sheet visible={initial !== null} onClose={onClose} title="Change address">
-      <View style={{ gap: 14, paddingHorizontal: 4 }}>
+      <View style={{ gap: t.space.md, paddingHorizontal: 4 }}>
         <Text style={s.body}>
-          Use an address {server.bot.title} lists as its own: its automatic HTTPS address, or the one set on the server with
-          hermes winglet setup --public-url. Winglet checks the server signed it, with the key saved when you paired, before
-          sending anything private there.
+          Use the address {server.bot.title} lists as its own. Winglet checks the server signed it before sending anything private there.
         </Text>
         <Field value={text} onChangeText={setText} placeholder="https://hermes.example.ts.net" autoCapitalize="none" autoCorrect={false}
           keyboardType="url" accessibilityLabel="New address" onSubmitEditing={submit} returnKeyType="go" />
@@ -310,20 +319,11 @@ function ago(ms: number) {
 }
 
 const useStyles = makeStyles((t) => ({
-  hero: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 14, padding: 16, borderRadius: t.radius.lg,
-    backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border },
-  heroTitle: { ...t.type.heading, color: t.colors.text },
-  heroDetail: { ...t.type.caption, color: t.colors.textSecondary, marginTop: 2 },
   dot: { width: 10, height: 10, borderRadius: 5 },
-  offer: { gap: 10 },
-  titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  titleRow: { flexDirection: 'row', alignItems: 'center', gap: t.space.sm },
   cardTitle: { ...t.type.callout, fontFamily: t.fonts.semibold, color: t.colors.text },
   body: { ...t.type.callout, color: t.colors.textSecondary },
-  command: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 10, borderRadius: t.radius.md, backgroundColor: t.colors.surfaceSunken },
+  commandLabel: { ...t.type.label, color: t.colors.textSecondary },
+  command: { flexDirection: 'row', alignItems: 'center', gap: t.space.sm, padding: 10, borderRadius: t.radius.md, backgroundColor: t.colors.surfaceSunken },
   mono: { flex: 1, fontFamily: t.fonts.mono, fontSize: 13, color: t.colors.text },
-  row: { flexDirection: 'row', gap: 12, paddingVertical: 10 },
-  rowBorder: { borderTopWidth: 1, borderTopColor: t.colors.border },
-  key: { ...t.type.callout, color: t.colors.textSecondary, width: 140 },
-  value: { ...t.type.callout, color: t.colors.text, flex: 1 },
-  note: { ...t.type.caption, fontFamily: t.fonts.regular, fontSize: 13, color: t.colors.textSecondary, marginVertical: 14, lineHeight: 18 },
 }));

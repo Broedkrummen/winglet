@@ -5,14 +5,13 @@ import { ActivityIndicator, ScrollView, Text, TextInput, useWindowDimensions, Vi
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AgentFace } from '../../components/AgentFace';
 import { BotAvatar } from '../../components/BotAvatar';
-import { NavigationHeader } from '../../components/AppNavigation';
 import { KeyboardViewport } from '../../components/KeyboardViewport';
 import { Markdown } from '../../components/Markdown';
 import { Screen } from '../../components/Screen';
 import { withSelectedServer } from '../../components/ServerScreen';
 import { Sheet } from '../../components/Sheet';
-import { ArrowLeft, ChevronRight, MoreHorizontal, Plus, RefreshCw, Send, Square, Users } from '../../components/icons';
-import { Button, IconButton, Field, Tap } from '../../components/ui';
+import { ArrowLeft, MoreHorizontal, Plus, Send, Square, Users } from '../../components/icons';
+import { Button, Chip, Footnote, IconButton, Field, ListGroup, ListRow, SectionHeader, Tap } from '../../components/ui';
 import { api, ApiError, signedApi } from '../../lib/api';
 import { isOwner, useApp } from '../../lib/store';
 import { makeStyles, useTheme } from '../../lib/themeContext';
@@ -49,17 +48,16 @@ function RoomsScreen() {
   useEffect(() => { setList(null); setError(''); setCreating(false); }, [server?.id, owner]);
   if (!server) return null;
   if (params.room) return <RoomConversation key={`${server.id}:${params.room}`} server={server} roomId={params.room} online={online} owner={owner} />;
-  return <Screen title="Rooms" subtitle="Bring bots on this gateway into one shared conversation. Private chats keep their own history."
+  return <Screen title="Rooms"
     right={online && feature && owner ? <IconButton label="Create room" variant="tonal" onPress={() => setCreating(true)}><Plus size={22} color={t.colors.accent} /></IconButton> : undefined}>
-    {!online ? <Text style={s.notice}>Connect to load rooms. Room actions wait for a live connection.</Text> : !feature ? <Text style={s.notice}>This Hermes cannot host rooms. Update the gateway to use this feature.</Text> : null}
+    {!online ? <Text style={s.notice}>Connect to load rooms.</Text> : !feature ? <Text style={s.notice}>Update this gateway to use rooms.</Text> : null}
     {error ? <View style={s.notice}><Text style={s.error}>{error}</Text><Button title="Reload rooms" variant="secondary" onPress={() => setRefresh(x => x+1)} /></View> : null}
     {online && feature && !list && !error ? <ActivityIndicator color={t.colors.accent} style={{ margin: 30 }} /> : null}
-    {list && !list.rooms.length ? <View style={s.empty}><Users size={34} color={t.colors.textSecondary} /><Text style={s.title}>A place to work together</Text><Text style={s.meta}>{owner ? 'Choose two to six bots, then address the ones you want to hear from.' : 'An owner can invite this device to read a room.'}</Text>{owner ? <Button title="Create a room" onPress={() => setCreating(true)} disabled={!online} /> : null}</View> : null}
-    {(list?.rooms ?? []).map(room => <Tap key={room.id} accessibilityLabel={`${room.title}${room.unread ? ', unread' : ''}${room.archived ? ', archived' : ''}`} style={s.roomRow}
-      onPress={() => router.push({ pathname:'/rooms', params:{ room:room.id } })}>
-      <View style={s.face}><Users size={21} color={t.colors.accent} /></View><View style={s.flex}><Text style={s.title} numberOfLines={2}>{room.title}</Text>
-      <Text style={s.meta} numberOfLines={2}>{room.members.map(m=>m.display_name).join(' · ')}</Text><Text style={s.meta}>{room.archived ? 'Archived' : room.driver.working ? 'Discussion in progress' : 'Ready'}{room.unread ? ' · Unread' : ''}</Text></View><ChevronRight size={19} color={t.colors.textSecondary} />
-    </Tap>)}
+    {list && !list.rooms.length ? <View style={s.empty}><Users size={34} color={t.colors.textSecondary} /><Text style={s.title}>No rooms yet</Text><Text style={s.meta}>{owner ? 'Create a room with two to six bots.' : 'Ask an owner to invite you to a room.'}</Text>{owner ? <Button title="Create a room" onPress={() => setCreating(true)} disabled={!online} /> : null}</View> : null}
+    {list?.rooms.length ? <><SectionHeader title="Conversations" /><ListGroup>{list.rooms.map(room => <ListRow key={room.id}
+      icon={<Users />} title={room.title} subtitle={room.members.map(m=>m.display_name).join(', ')}
+      value={room.archived ? 'Archived' : room.driver.working ? 'Working' : room.unread ? 'Unread' : 'Ready'}
+      onPress={() => router.push({ pathname:'/rooms', params:{ room:room.id } })} />)}</ListGroup></> : null}
     {creating ? <RoomManage server={server} bots={list?.bots ?? []} onClose={() => setCreating(false)} onSaved={id => { setCreating(false); router.push({ pathname:'/rooms', params:{ room:id } }); }} /> : null}
   </Screen>;
 }
@@ -114,18 +112,22 @@ function RoomConversation({ server, roomId, online, owner }: { server: Server; r
   const loadEarlier=async()=>{if(!older || !online) return;setHistory(true);setBusy(true);try {const page=await api<RoomPage>(server,`${pathOf(roomId)}/log?epoch=${older[0]}&after=${older[1]}`);if(alive.current){setEvents(old=>mergeRoomEvents(old,page.events).slice(0,1000));setOlder(page.older);}} catch(e){if(alive.current)setError((e as Error).message);}finally{if(alive.current)setBusy(false);}};
   const addressed=room ? recipients(text,room.members):[]; const query=mentionQuery(text);
   return <KeyboardViewport>{()=> <View style={s.root}>
-    <NavigationHeader title={room?.title ?? 'Room'} right={<><IconButton label="All rooms" onPress={()=>router.setParams({room:undefined})}><ArrowLeft size={22} color={t.colors.text} /></IconButton>{room?.can_manage ? <IconButton label="Room settings" onPress={()=>setManage(true)}><MoreHorizontal size={23} color={t.colors.text} /></IconButton>:null}</>} />
+    <View style={[s.roomHeader,{paddingTop:insets.top+t.space.xs}]}><View style={s.roomHeaderInner}>
+      <IconButton label="All rooms" onPress={()=>router.setParams({room:undefined})}><ArrowLeft size={22} color={t.colors.text} /></IconButton>
+      <Text style={[s.title,s.flex]} accessibilityRole="header" numberOfLines={1}>{room?.title ?? 'Room'}</Text>
+      {room?.can_manage ? <IconButton label="Room settings" onPress={()=>setManage(true)}><MoreHorizontal size={23} color={t.colors.text} /></IconButton>:null}
+    </View></View>
     <View style={s.column}>
-    {!online ? <Text style={s.notice}>Offline. Your draft stays here; sending and room controls need a connection.</Text> : null}
+    {!online ? <Text style={s.notice}>Offline. Your draft is saved.</Text> : null}
     {error ? <View style={s.notice}><Text style={s.error}>{error}</Text><Button title="Reload room" variant="secondary" onPress={()=>{cursor.current=null;setRefresh(x=>x+1);}} /></View>:null}
-    {room ? <View style={s.participants}><View style={s.wrap}>{room.members.map(m=><Tap key={m.member_id} accessibilityLabel={`Mention ${m.display_name}`} disabled={!room.can_send} onPress={()=>updateText(`${textRef.current}${textRef.current && !textRef.current.endsWith(' ') ? ' ':''}@${m.handle} `)} style={s.chip}><Text style={s.chipText}>@{m.handle}</Text></Tap>)}</View>
+    {room ? <View style={s.participants}><View style={s.wrap}>{room.members.map(m=><View key={m.member_id} pointerEvents={room.can_send ? 'auto' : 'none'}><Chip label={`@${m.handle}`} accessibilityLabel={`Mention ${m.display_name}`} onPress={()=>{if(room.can_send)updateText(`${textRef.current}${textRef.current && !textRef.current.endsWith(' ') ? ' ':''}@${m.handle} `);}} /></View>)}</View>
       <Text style={s.meta}>{room.archived ? 'Archived room' : room.driver.working ? `${room.driver.turns?.map(turn=>`${room.members.find(m=>m.profile===turn.profile)?.display_name??turn.profile}: ${turn.status}`).join(' · ')||'Bots are taking turns'} · maximum 3 rounds, 10 replies` : room.driver.blocked ? 'Discussion needs attention' : 'Address a bot to start a turn'}{room.epoch_count>1 ? ` · Roster ${room.epoch_count}`:''}</Text></View>:!error&&online?<ActivityIndicator color={t.colors.accent} style={{margin:24}}/>:null}
     <FlashList ref={scroll} data={events} keyExtractor={event=>event.id} style={s.transcript} contentContainerStyle={s.messages}
       ItemSeparatorComponent={()=> <View style={{height:12}}/>}
       keyboardShouldPersistTaps="handled" onContentSizeChange={()=>{if(follow)scroll.current?.scrollToEnd({animated:false});}}
-      ListHeaderComponent={<>{history?<Text style={s.meta}>Reading earlier messages. Follow latest replies to return to live updates.</Text>:null}{events.length>=1000?<Text style={s.meta}>Showing up to 1,000 loaded events.</Text>:null}
+      ListHeaderComponent={<>{history?<Text style={s.meta}>Reading earlier messages. Follow latest replies for live updates.</Text>:null}{events.length>=1000?<Text style={s.meta}>Showing up to 1,000 loaded events.</Text>:null}
       {older ? <Button title="Earlier messages" variant="ghost" onPress={()=>{setFollow(false);void loadEarlier();}} disabled={busy||!online}/>:null}
-      {room && !events.some(e=>e.kind.startsWith('message.')) ? <View style={s.empty}><Users size={32} color={t.colors.accent}/><Text style={s.title}>Start a shared conversation</Text><Text style={s.meta}>Tap a participant or type @ to choose who replies. This room has its own bot history.</Text></View>:null}
+      {room && !events.some(e=>e.kind.startsWith('message.')) ? <View style={s.empty}><Users size={32} color={t.colors.accent}/><Text style={s.title}>Mention a bot to start</Text><Text style={s.meta}>Tap a participant or type @.</Text></View>:null}
       </>}
       renderItem={({item:event,index})=>{
         const line=roomLine(event);
@@ -136,7 +138,7 @@ function RoomConversation({ server, roomId, online, owner }: { server: Server; r
         const previous=events[index-1];
         const speaker=event.payload.display_name??bot?.display_name??event.payload.member_id??'Bot';
         return <View style={[s.message,human&&s.human,!message&&s.system]}>
-          {previous && previous.epoch!==event.epoch ? <Text style={s.meta}>Participant roster changed · a new room context begins</Text>:null}
+          {previous && previous.epoch!==event.epoch ? <Text style={s.meta}>Participants changed. New room context.</Text>:null}
           {message?<View style={s.speaker}>
             {human?<View style={s.avatar}><Text style={s.meta}>{event.actor.id==='winglet:'+server.deviceId?'You':(event.actor.label??'Participant').slice(0,2)}</Text></View>:<RoomBotFace server={server} profile={event.payload.member_id} name={speaker}/>}
             <Text style={s.speakerName}>{human?(event.actor.id==='winglet:'+server.deviceId?'You':event.actor.label??'Participant'):speaker}</Text>
@@ -157,7 +159,7 @@ function RoomConversation({ server, roomId, online, owner }: { server: Server; r
       {events.length>0?<Button title={follow?'Pause following replies':'Follow latest replies'} variant="ghost" onPress={()=>{if(history){setHistory(false);cursor.current=null;setEvents([]);setFollow(true);setRefresh(x=>x+1);}else{setFollow(x=>!x);if(!follow)scroll.current?.scrollToEnd({animated:false});}}}/>:null}
     </View>}
     </View>
-    <Sheet visible={confirm} title="Stop this room?" onClose={()=>setConfirm(false)}><View style={s.sheetBody}><Text style={s.body}>Ask Hermes to stop queued and active bot turns in this room. The result appears after the worker acknowledges cancellation.</Text><Button title="Stop room" variant="danger" loading={busy} disabled={!online||!owner||revoked} onPress={()=>void action('stop')}/><Button title="Keep working" variant="secondary" onPress={()=>setConfirm(false)}/></View></Sheet>
+    <Sheet visible={confirm} title="Stop room" onClose={()=>setConfirm(false)}><View style={s.sheetBody}><Footnote>Stops queued and active turns after the worker acknowledges cancellation.</Footnote><Button title="Stop room" variant="danger" loading={busy} disabled={!online||!owner||revoked} onPress={()=>void action('stop')}/><Button title="Keep working" variant="secondary" onPress={()=>setConfirm(false)}/></View></Sheet>
     {manage && room ? <RoomManage server={server} room={room} bots={room.available_profiles} onClose={()=>setManage(false)} onSaved={()=>{setManage(false);setRefresh(x=>x+1);}}/>:null}
   </View>}</KeyboardViewport>;
 }
@@ -182,23 +184,24 @@ function RoomManage({server,room,bots,onClose,onSaved}:{server:Server;room?:Room
     try{const result=await signedApi<{id?:string}>(server,'POST',room?`${pathOf(room.id)}/update`:'/api/rooms',pending.current.body);if(live.current)onSaved(room?.id??result.id!);}catch(e){if(live.current)setError((e as Error).message);}finally{if(live.current)setBusy(false);}};
   return <Sheet visible title={room?'Room settings':'Create a room'} onClose={onClose}><View style={[s.sheetBody,{height:Math.max(180,Math.min(580,height-180))}]}><ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{gap:14,paddingBottom:16}}>
     <Field accessibilityLabel="Room title" placeholder="Room title" value={title} onChangeText={setTitle} maxLength={80}/>
-    <Text style={s.body}>Bots on this gateway · choose 2–6</Text>{bots.map(bot=><Tap key={bot.name} accessibilityRole="checkbox" accessibilityState={{checked:selected.includes(bot.name),disabled:!bot.served&&!selected.includes(bot.name)}} disabled={!bot.served&&!selected.includes(bot.name)} style={s.choice} onPress={()=>setSelected(old=>old.includes(bot.name)?old.filter(x=>x!==bot.name):[...old,bot.name])}><Text style={[s.body,s.flex]}>{bot.title}{!bot.served?' · Unavailable':''}</Text><Text style={{color:t.colors.accent}}>{selected.includes(bot.name)?'Selected':'Add'}</Text></Tap>)}
-    {room?<><Text style={s.meta}>Changing bots stops this discussion and opens a fresh room context. Earlier messages remain readable.</Text><Text style={s.body}>Devices with read access</Text><Text style={s.meta}>Owners can manage all rooms. Members can read when explicitly invited; this Hermes cannot enforce their tool limits during room turns.</Text>{devices.map(device=><Tap key={device.id} accessibilityRole="checkbox" accessibilityState={{checked:readers.includes(device.id)}} style={s.choice} onPress={()=>setReaders(old=>old.includes(device.id)?old.filter(x=>x!==device.id):[...old,device.id])}><Text style={[s.body,s.flex]}>{device.name}</Text><Text style={s.chipText}>{readers.includes(device.id)?'Can read':'Invite'}</Text></Tap>)}<Button title={archived?'Restore room':'Archive room'} variant="secondary" onPress={()=>setArchived(x=>!x)}/><Text style={s.meta}>{archived?'Will be archived after Save. Pending work must stop first.':'Active room'}</Text></>:null}
+    <SectionHeader title="Bots" right={<Text style={s.meta}>{selected.length} of 2–6</Text>} />{bots.map(bot=><Tap key={bot.name} accessibilityRole="checkbox" accessibilityState={{checked:selected.includes(bot.name),disabled:!bot.served&&!selected.includes(bot.name)}} disabled={!bot.served&&!selected.includes(bot.name)} style={s.choice} onPress={()=>setSelected(old=>old.includes(bot.name)?old.filter(x=>x!==bot.name):[...old,bot.name])}><Text style={[s.body,s.flex]}>{bot.title}{!bot.served?' · Unavailable':''}</Text><Text style={{color:t.colors.accent}}>{selected.includes(bot.name)?'Selected':'Add'}</Text></Tap>)}
+    {room?<><Text style={s.meta}>Changing bots stops the discussion; earlier messages stay readable.</Text><Text style={s.body}>Devices with read access</Text><Text style={s.meta}>Owners manage all rooms. Invited members have read-only access.</Text>{devices.map(device=><Tap key={device.id} accessibilityRole="checkbox" accessibilityState={{checked:readers.includes(device.id)}} style={s.choice} onPress={()=>setReaders(old=>old.includes(device.id)?old.filter(x=>x!==device.id):[...old,device.id])}><Text style={[s.body,s.flex]}>{device.name}</Text><Text style={s.chipText}>{readers.includes(device.id)?'Can read':'Invite'}</Text></Tap>)}<Button title={archived?'Restore room':'Archive room'} variant="secondary" onPress={()=>setArchived(x=>!x)}/><Text style={s.meta}>{archived?'Will be archived after Save. Pending work must stop first.':'Active room'}</Text></>:null}
     {error?<Text style={s.error}>{error}</Text>:null}
     </ScrollView><Button title={room?'Save changes':'Create room'} loading={busy} disabled={!online||!owner||!title.trim()||selected.length<2||selected.length>6} onPress={()=>void save()}/></View></Sheet>;
 }
 
 const useStyles=makeStyles(t=>({
-  root:{flex:1,backgroundColor:t.colors.bg},column:{flex:1,minHeight:0,width:'100%',maxWidth:900,alignSelf:'center'},flex:{flex:1,minWidth:0},
+  root:{flex:1,backgroundColor:t.colors.bg},column:{flex:1,minHeight:0,width:'100%',maxWidth:680,alignSelf:'center'},flex:{flex:1,minWidth:0},
+  roomHeader:{backgroundColor:t.colors.bg,borderBottomWidth:1,borderBottomColor:t.colors.border},roomHeaderInner:{flexDirection:'row',alignItems:'center',gap:t.space.sm,minHeight:52,paddingHorizontal:t.space.sm,maxWidth:696,width:'100%',alignSelf:'center'},
   roomRow:{flexDirection:'row',alignItems:'center',gap:12,paddingVertical:18,borderBottomWidth:1,borderBottomColor:t.colors.border},
-  face:{width:46,height:46,borderRadius:17,backgroundColor:t.colors.accentSoft,alignItems:'center',justifyContent:'center'},
+  face:{width:46,height:46,borderRadius:17,backgroundColor:t.colors.surfaceSunken,alignItems:'center',justifyContent:'center'},
   title:{...t.type.heading,color:t.colors.text},body:{...t.type.body,color:t.colors.text},meta:{...t.type.caption,color:t.colors.textSecondary},error:{...t.type.callout,color:t.colors.danger},
-  notice:{padding:14,gap:10,backgroundColor:t.colors.surfaceSunken,borderRadius:14,margin:10},empty:{alignItems:'center',gap:14,padding:28},
+  notice:{...t.type.callout,color:t.colors.textSecondary,padding:t.space.lg,gap:t.space.sm,backgroundColor:t.colors.surface,borderRadius:t.radius.lg,marginVertical:t.space.md},empty:{alignItems:'center',gap:14,padding:28},
   participants:{paddingHorizontal:16,paddingVertical:10,gap:9,borderBottomWidth:1,borderBottomColor:t.colors.border},wrap:{flexDirection:'row',flexWrap:'wrap',gap:8},
-  chip:{paddingHorizontal:13,minHeight:44,borderRadius:18,backgroundColor:t.colors.accentSoft,justifyContent:'center'},chipText:{...t.type.caption,color:t.colors.onAccentSoft},
+  chip:{paddingHorizontal:13,minHeight:44,borderRadius:18,backgroundColor:t.colors.accentSoft,justifyContent:'center'},chipText:{...t.type.caption,color:t.colors.textSecondary},
   transcript:{flex:1,minHeight:0},messages:{padding:16,gap:16},message:{gap:9,padding:12,borderRadius:18,backgroundColor:t.colors.surfaceRaised},
   human:{backgroundColor:t.colors.surfaceSunken},system:{paddingVertical:5,backgroundColor:'transparent'},speaker:{flexDirection:'row',alignItems:'center',gap:8},speakerName:{...t.type.caption,color:t.colors.text,flex:1},
   avatar:{width:30,height:30,borderRadius:12,alignItems:'center',justifyContent:'center'},composer:{paddingHorizontal:14,paddingTop:10,gap:8,borderTopWidth:1,borderTopColor:t.colors.border},
   composeRow:{flexDirection:'row',alignItems:'flex-end',gap:8},input:{...t.type.body,color:t.colors.text,backgroundColor:t.colors.surfaceSunken,borderRadius:18,paddingHorizontal:14,paddingVertical:12,minHeight:48,maxHeight:140,flex:1,minWidth:0},
-  statusRow:{flexDirection:'row',alignItems:'center',gap:8},sheetBody:{paddingHorizontal:18,paddingBottom:18,gap:14},choice:{minHeight:48,flexDirection:'row',gap:12,alignItems:'center',padding:10,borderRadius:12,backgroundColor:t.colors.surfaceSunken},
+  statusRow:{flexDirection:'row',alignItems:'center',gap:8},sheetBody:{paddingBottom:t.space.lg,gap:t.space.md},choice:{minHeight:52,flexDirection:'row',gap:t.space.md,alignItems:'center',padding:t.space.md,borderBottomWidth:1,borderBottomColor:t.colors.border},
 }));

@@ -2,12 +2,12 @@ import { router } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import { Sheet } from '../../components/Sheet';
-import { Button } from '../../components/ui';
+import { Button, Card, Footnote, ListGroup, ListRow, SectionHeader } from '../../components/ui';
 import { api, ApiError, signedApi } from '../../lib/api';
 import { isOwner, useApp } from '../../lib/store';
 import { makeStyles, useTheme } from '../../lib/themeContext';
 import type { Server } from '../../lib/types';
-import { composition, compressionRetryRequest, contextPercent, costLabel, sourceLabel, tokenCount, type AccountView, type CompressionRequest, type ContextOperation, type ContextView } from './model';
+import { compressionRetryRequest, contextRows, contextPercent, costLabel, sourceLabel, tokenCount, type AccountView, type CompressionRequest, type ContextOperation, type ContextView } from './model';
 
 const stamp=(seconds?:number|null)=>seconds?new Date(seconds*1000).toLocaleString():'Unknown';
 
@@ -52,32 +52,67 @@ export function ContextSheet({server,chatId,visible,onClose}:{server:Server;chat
     catch(e){if(pending.current===request)pending.current=compressionRetryRequest(request,e instanceof ApiError?e.status:undefined);if(current===generation.current)setError((e as Error).message);}
     finally{setStarting(false);}
   };
-  const segments=data?composition(data.context.categories):[];const percent=data?contextPercent(data.context):null;
-  const palette=[t.colors.accent,'#4C9FBA','#A47BBB','#BD8752','#5E9D79','#AE718C'];
+  const segments=data?contextRows(data.context.categories):[];const percent=data?contextPercent(data.context):null;
   return <Sheet visible={visible} title="Context and usage" onClose={onClose}><View style={{height:Math.max(180,Math.min(720,height-170))}}><ScrollView contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
     {!owner?<Text style={s.note}>An owner can inspect context and provider usage.</Text>:<>
-    {!online?<Text style={s.warning}>Offline. Cached numbers may be stale; controls need a live connection.</Text>:null}
+    {!online?<Text style={s.warning}>Offline. Cached values may be stale.</Text>:null}
     {error?<Text accessibilityRole="alert" style={s.error}>{error}</Text>:null}
     <Button title={loading?'Refreshing…':'Refresh context'} variant="secondary" disabled={!online||loading} onPress={()=>setRefresh(x=>x+1)}/>
     {!data&&loading?<ActivityIndicator color={t.colors.accent}/>:null}
     {data?<>
-      <View style={s.header}><Text style={s.label}>CURRENT CHAT</Text><Text selectable style={s.title}>{data.model||'Model not reported'}</Text><Text style={s.note}>{data.provider||'Provider not reported'} · {sourceLabel(data.context.source)}</Text></View>
-      <View style={s.metric}><Text style={s.number}>{tokenCount(data.context.used)}</Text><Text style={s.note}>tokens in context{data.context.window?` of ${tokenCount(data.context.window)}`:' · window unknown'}</Text>{percent!==null?<Text style={s.note}>{percent.toFixed(1)}% of this model’s reported window</Text>:null}</View>
-      <Text accessibilityRole="header" style={s.heading}>Estimated composition</Text>
-      {segments.length?<View accessible accessibilityLabel={segments.map(c=>`${c.label}: approximately ${tokenCount(c.tokens)} tokens`).join('; ')} style={s.bar}>{segments.map((c,i)=><View key={c.id} style={{flexGrow:c.share,flexBasis:0,backgroundColor:palette[i%palette.length]}}/>)}</View>:<Text style={s.note}>A detailed breakdown becomes available when Hermes retains a resident agent.</Text>}
-      {data.context.categories.map((c,i)=><View key={c.id} style={s.row}><View style={[s.dot,{backgroundColor:palette[i%palette.length]}]}/><Text style={[s.body,s.flex]}>{c.label}</Text><Text selectable style={s.note}>~{tokenCount(c.tokens)} tokens</Text></View>)}
-      <Text style={s.note}>{data.warning}</Text>
-      <Text accessibilityRole="header" style={s.heading}>Session throughput and cost</Text>
-      {(['input_tokens','output_tokens','cache_read_tokens','cache_write_tokens','reasoning_tokens','api_call_count'] as const).map(key=><View key={key} style={s.row}><Text style={[s.body,s.flex]}>{({input_tokens:'Input',output_tokens:'Output',cache_read_tokens:'Cache read',cache_write_tokens:'Cache write',reasoning_tokens:'Reasoning',api_call_count:'API calls'})[key]}</Text><Text selectable style={s.note}>{tokenCount(data.usage[key])}{key==='api_call_count'?'':' tokens'}</Text></View>)}
-      <Text selectable style={s.body}>{costLabel(data.usage.cost)}</Text><Text style={s.note}>Sampled {stamp(data.sampled_at)}{typing?' · A reply is running; refresh after it finishes.':''}</Text>
-      {data.details.toolsets.length||data.details.skills.length?<><Text accessibilityRole="header" style={s.heading}>Tools and skills</Text>{data.details.toolsets.map(x=><Text key={x.name} selectable style={s.note}>{x.name}: ~{tokenCount(x.tokens)} schema tokens · {tokenCount(x.tools)} tools</Text>)}{data.details.skills.map(x=><Text key={x.name} selectable style={s.note}>{x.name}: ~{tokenCount(x.index_tokens)} index tokens{ x.file_tokens!==null?` · ~${tokenCount(x.file_tokens)} file tokens`:''}</Text>)}</>:null}
-      <Text accessibilityRole="header" style={s.heading}>Provider limits</Text><Text style={s.note}>Response-header limits and account balances are separate from chat context. Missing limits are unknown.</Text>
-      {data.rate_limits.map(x=><Text key={x.label} selectable style={s.note}>{x.label}: {tokenCount(x.remaining)} remaining of {tokenCount(x.limit)} · observed {stamp(x.captured_at)} · reset {stamp(x.resets_at)}</Text>)}
+      <SectionHeader title="Current chat"/>
+      <ListGroup>
+        <ListRow title="Model" value={data.model||'Not reported'}/>
+        <ListRow title="Provider" value={data.provider||'Not reported'}/>
+        <ListRow title="Measurement" value={sourceLabel(data.context.source)}/>
+        <ListRow title="Context used" value={`${tokenCount(data.context.used)} tokens`}/>
+        <ListRow title="Model window" value={data.context.window?`${tokenCount(data.context.window)} tokens`:'Unknown'}/>
+        {percent!==null?<ListRow title="Window used" value={`${percent.toFixed(1)}%`}/>:null}
+      </ListGroup>
+      <SectionHeader title="Estimated composition"/>
+      {segments.length?<ListGroup>{segments.map(c=><ListRow key={c.id} title={c.label}
+        value={c.share===null?'Unknown':`~${tokenCount(c.tokens)} tokens`}
+        subtitle={c.share===null?undefined:`${(c.share*100).toFixed(1)}% of ${c.partial?'known estimates':'estimated context'}`}/>)}</ListGroup>
+        :<Footnote>A breakdown is available when Hermes retains a resident agent.</Footnote>}
+      {data.warning?<Footnote>{data.warning}</Footnote>:null}
+      <SectionHeader title="Session usage"/>
+      <ListGroup>
+        {(['input_tokens','output_tokens','cache_read_tokens','cache_write_tokens','reasoning_tokens','api_call_count'] as const).map(key=><ListRow key={key}
+          title={({input_tokens:'Input',output_tokens:'Output',cache_read_tokens:'Cache read',cache_write_tokens:'Cache write',reasoning_tokens:'Reasoning',api_call_count:'API calls'})[key]}
+          value={`${tokenCount(data.usage[key])}${key==='api_call_count'?'':' tokens'}`}/>)}
+        <ListRow title="Cost" value={costLabel(data.usage.cost)}/>
+      </ListGroup>
+      <Footnote>Sampled {stamp(data.sampled_at)}{typing?'. Reply in progress; refresh when it finishes.':''}</Footnote>
+      {data.details.toolsets.length||data.details.skills.length?<>
+        <SectionHeader title="Tools and skills"/>
+        <ListGroup>
+          {data.details.toolsets.map(x=><ListRow key={x.name} title={x.name} value={`${tokenCount(x.tools)} tools`} subtitle={`~${tokenCount(x.tokens)} schema tokens`}/>)}
+          {data.details.skills.map(x=><ListRow key={x.name} title={x.name} value={`~${tokenCount(x.index_tokens)} index tokens`}
+            subtitle={x.file_tokens!==null?`~${tokenCount(x.file_tokens)} file tokens`:undefined}/>)}
+        </ListGroup>
+      </>:null}
+      <SectionHeader title="Provider limits"/>
+      {data.rate_limits.length?<ListGroup>{data.rate_limits.map(x=><ListRow key={x.label} title={x.label}
+        value={`${tokenCount(x.remaining)} of ${tokenCount(x.limit)}`} subtitle={`Observed ${stamp(x.captured_at)}; resets ${stamp(x.resets_at)}`}/>)}</ListGroup>:null}
+      <Footnote>Account balances and response-header limits are separate from chat context. Missing limits are unknown.</Footnote>
       <Button title={accountLoading?'Querying account…':account?'Refresh account limits':'Load account limits'} variant="secondary" onPress={()=>void loadLimits()} disabled={!online||accountLoading}/>
-      {account?<View style={s.account}><Text style={s.body}>{account.provider} · {account.kind==='credits'?'Credits and monetary quota':'Account windows'}</Text><Text style={s.note}>{account.reason||`Fetched ${stamp(account.fetched_at)}${account.cached?' · cached':''}`}</Text>{account.windows.map((x,i)=><View key={`${x.label}:${i}`} style={{gap:4}}><Text style={s.body}>{x.label}: {x.used_percent===null?'Unknown':`${x.used_percent.toFixed(1)}% used`}</Text>{x.detail?<Text selectable style={s.note}>{x.detail}</Text>:null}{x.resets_at?<Text style={s.note}>Resets {stamp(x.resets_at)}</Text>:null}</View>)}{account.details.map((x,i)=><Text selectable key={i} style={s.note}>{x}</Text>)}</View>:null}
-      <Text accessibilityRole="header" style={s.heading}>Compress model context</Text><Text style={s.note}>Hermes summarizes the model’s context using your configured provider. This may incur usage. Your readable chat and unsent draft stay available.</Text>
-      {operation?<View style={s.account}><Text style={s.body}>{operation.status==='running'?'Hermes is processing…':operation.status==='completed'?'Context updated':operation.status==='unchanged'?'Context unchanged':operation.status==='refused'?'Request refused':'Outcome needs review'}</Text><Text selectable style={s.note}>{operation.outcome}</Text>{operation.before&&operation.after?<Text style={s.note}>Before {tokenCount(operation.before.used)} → after {tokenCount(operation.after.used)} tokens. Values retain their original measurement or estimate source.</Text>:null}</View>:null}
-      {confirm?<View style={{gap:12}}><Text style={s.warning}>Compress the freshly reviewed context now?</Text><Button title="Compress now" onPress={()=>void compress()} loading={starting} disabled={!online||data.busy||typing||operation?.status==='running'}/><Button title="Keep context" variant="ghost" onPress={()=>setConfirm(false)} disabled={starting}/></View>:<Button title="Review compression" variant="secondary" onPress={()=>setConfirm(true)} disabled={!online||!data.can_compress||data.busy||typing||operation?.status==='running'}/>}
+      {account?<>
+        <ListGroup>
+          <ListRow title={account.provider} value={account.kind==='credits'?'Credits and quota':'Account windows'}/>
+          {account.windows.map((x,i)=><ListRow key={`${x.label}:${i}`} title={x.label} value={x.used_percent===null?'Unknown':`${x.used_percent.toFixed(1)}% used`}
+            subtitle={[x.detail,x.resets_at?`Resets ${stamp(x.resets_at)}`:null].filter(Boolean).join(' · ')}/>)}
+        </ListGroup>
+        <Footnote>{account.reason||`Fetched ${stamp(account.fetched_at)}${account.cached?' (cached)':''}`}</Footnote>
+        {account.details.map((x,i)=><Text selectable key={i} style={s.note}>{x}</Text>)}
+      </>:null}
+      <SectionHeader title="Compress context"/>
+      <Footnote>Uses your provider and may incur usage. Readable chat and unsent drafts stay unchanged.</Footnote>
+      {operation?<Card style={s.account}>
+        <Text style={s.body}>{operation.status==='running'?'Hermes is processing…':operation.status==='completed'?'Context updated':operation.status==='unchanged'?'Context unchanged':operation.status==='refused'?'Request refused':'Outcome needs review'}</Text>
+        <Text selectable style={s.note}>{operation.outcome}</Text>
+        {operation.before&&operation.after?<Text style={s.note}>{tokenCount(operation.before.used)} → {tokenCount(operation.after.used)} tokens. Original measurement sources retained.</Text>:null}
+      </Card>:null}
+      {confirm?<View style={{gap:t.space.md}}><Text style={s.warning}>Compress the reviewed context?</Text><Button title="Compress now" onPress={()=>void compress()} loading={starting} disabled={!online||data.busy||typing||operation?.status==='running'}/><Button title="Keep context" variant="ghost" onPress={()=>setConfirm(false)} disabled={starting}/></View>:<Button title="Review compression" variant="secondary" onPress={()=>setConfirm(true)} disabled={!online||!data.can_compress||data.busy||typing||operation?.status==='running'}/>}
       <Button title="Open usage history" variant="ghost" onPress={()=>{onClose();router.push('/usage');}}/>
     </>:!loading&&!error?<Text style={s.note}>Refresh to inspect this chat’s model context.</Text>:null}
     </>}
@@ -85,12 +120,12 @@ export function ContextSheet({server,chatId,visible,onClose}:{server:Server;chat
 }
 
 const useStyles=makeStyles(t=>({
-  content:{gap:14,padding:4,paddingBottom:24},header:{gap:6},
+  content:{gap:t.space.md,paddingBottom:t.space.xl},header:{gap:6},
   title:{...t.type.title,color:t.colors.text},label:{...t.type.caption,color:t.colors.textSecondary},
   heading:{...t.type.heading,color:t.colors.text,marginTop:10},body:{...t.type.body,color:t.colors.text},
-  note:{...t.type.callout,color:t.colors.textSecondary},metric:{gap:4,paddingVertical:10},
+  note:{...t.type.footnote,color:t.colors.textSecondary},metric:{gap:4,paddingVertical:10},
   number:{...t.type.display,color:t.colors.text},row:{flexDirection:'row',alignItems:'center',gap:10,minHeight:38},
   flex:{flex:1},dot:{width:8,height:8,borderRadius:4},bar:{height:12,borderRadius:6,overflow:'hidden',flexDirection:'row'},
-  account:{gap:10,padding:14,borderRadius:16,backgroundColor:t.colors.surface},
+  account:{gap:t.space.sm},
   error:{...t.type.callout,color:t.colors.danger},warning:{...t.type.callout,color:t.colors.textSecondary},
 }));

@@ -2,9 +2,9 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Text, View } from 'react-native';
 import {
   Ban, Check, CheckCircle2, ChevronDown, ChevronRight, Circle, CircleDashed, CircleHelp, CircleSlash,
-  Clock, ListChecks, Square, Wrench, XCircle,
+  Clock, Square, XCircle,
 } from '../../components/icons';
-import { Tap } from '../../components/ui';
+import { Button, Tap } from '../../components/ui';
 import type { Theme } from '../../lib/theme';
 import { makeStyles, useTheme } from '../../lib/themeContext';
 import {
@@ -46,42 +46,61 @@ const subagentTone = (t: Theme, state: SubagentSnapshot['status']) => ({
   unknown: t.colors.textSecondary,
 }[state]);
 
-function SubagentDisc({ state }: { state: SubagentSnapshot['status'] }) {
+const toolTone = (t: Theme, state: ToolSnapshot['status']) => ({
+  completed: t.colors.success, failed: t.colors.danger, running: t.colors.accent, unknown: t.colors.textSecondary,
+}[state]);
+
+/**
+ * The status mark at the start of a row: small and coloured. Its word is the accessible label; on screen the
+ * icon and colour carry it, so the word is only printed where the icon alone would not say enough.
+ */
+function Mark({ label, children }: { label: string; children: ReactNode }) {
+  const s = useStyles();
+  return <View accessible accessibilityLabel={label} style={s.mark}>{children}</View>;
+}
+
+function SubagentMark({ state }: { state: SubagentSnapshot['status'] }) {
   const t = useTheme();
   const color = subagentTone(t, state);
-  const fill = state === 'running' ? t.colors.accentSoft : state === 'completed' ? t.colors.successSoft
-    : state === 'failed' ? t.colors.dangerSoft : t.colors.surfaceSunken;
   return (
-    <View style={[discBase, { backgroundColor: fill }]} accessibilityElementsHidden importantForAccessibility="no">
+    <Mark label={subagentStateLabel(state)}>
       {state === 'running' ? <ActivityIndicator size="small" color={color} />
-        : state === 'completed' ? <Check size={13} color={color} />
-          : state === 'failed' ? <XCircle size={13} color={color} />
-            : state === 'cancelled' ? <Ban size={13} color={color} />
-              : state === 'queued' ? <Clock size={13} color={color} />
-                : <CircleDashed size={13} color={color} />}
-    </View>
+        : state === 'completed' ? <Check size={16} color={color} />
+          : state === 'failed' ? <XCircle size={16} color={color} />
+            : state === 'cancelled' ? <Ban size={16} color={color} />
+              : state === 'queued' ? <Clock size={16} color={color} />
+                : <CircleDashed size={16} color={color} />}
+    </Mark>
   );
 }
-const discBase = { width: 26, height: 26, borderRadius: 13, alignItems: 'center' as const, justifyContent: 'center' as const };
+
+function ToolMark({ status }: { status: ToolSnapshot['status'] }) {
+  const t = useTheme();
+  const color = toolTone(t, status);
+  return (
+    <Mark label={toolStateLabel(status)}>
+      {status === 'running' ? <ActivityIndicator size="small" color={color} />
+        : status === 'completed' ? <Check size={16} color={color} />
+          : status === 'failed' ? <XCircle size={16} color={color} />
+            : <CircleHelp size={16} color={color} />}
+    </Mark>
+  );
+}
 
 function PlanRow({ content, status, depth, live }: { content: string; status: PlanItemState; depth: number; live: boolean }) {
   const t = useTheme();
   const s = useStyles();
   const color = status === 'completed' ? t.colors.success : status === 'in_progress' && live ? t.colors.accent : t.colors.textTertiary;
+  const mark = status === 'in_progress' && live ? <ActivityIndicator size="small" color={color} />
+    : status === 'in_progress' ? <CircleDashed size={16} color={color} />
+      : status === 'completed' ? <Check size={16} color={color} />
+        : status === 'cancelled' ? <CircleSlash size={16} color={color} />
+          : <Circle size={16} color={color} />;
   return (
-    <View style={[s.planRow, { paddingLeft: depth * 16 }]}>
-      <View style={s.planMark} accessibilityElementsHidden importantForAccessibility="no">
-        {status === 'in_progress' && live ? <ActivityIndicator size="small" color={color} />
-          : status === 'in_progress' ? <CircleDashed size={14} color={color} />
-            : status === 'completed' ? <Check size={14} color={color} />
-              : status === 'cancelled' ? <CircleSlash size={14} color={color} />
-                : <Circle size={14} color={color} />}
-      </View>
-      <Text selectable style={[s.planText, status === 'cancelled' && s.strikethrough,
-        status === 'completed' && { color: t.colors.textSecondary }]}>
-        {content}
-      </Text>
-      <Text style={[s.rowState, { color }]}>{planStateLabel(status, live)}</Text>
+    <View style={[s.row, { paddingLeft: depth * t.space.lg }]}>
+      <Mark label={planStateLabel(status, live)}>{mark}</Mark>
+      <Text selectable style={[s.rowText, status === 'completed' && s.done, status === 'cancelled' && s.struck]}>{content}</Text>
+      {status === 'in_progress' && !live ? <Text style={s.rowNote}>{planStateLabel(status, live)}</Text> : null}
     </View>
   );
 }
@@ -89,23 +108,19 @@ function PlanRow({ content, status, depth, live }: { content: string; status: Pl
 function ToolRow({ tool }: { tool: ToolSnapshot }) {
   const t = useTheme();
   const s = useStyles();
-  const color = tool.status === 'completed' ? t.colors.success : tool.status === 'failed' ? t.colors.danger
-    : tool.status === 'running' ? t.colors.accent : t.colors.textSecondary;
   const duration = durationLabel(tool.duration_ms);
+  // Running and done are plain from the icon; only the states the icon can't say get a word.
+  const quiet = tool.status === 'running' || tool.status === 'completed';
   return (
-    <View style={s.toolRow}>
-      <View style={s.planMark} accessibilityElementsHidden importantForAccessibility="no">
-        {tool.status === 'running' ? <ActivityIndicator size="small" color={color} />
-          : tool.status === 'completed' ? <Check size={14} color={color} />
-            : tool.status === 'failed' ? <XCircle size={14} color={color} />
-              : <CircleHelp size={14} color={color} />}
-      </View>
+    <View style={s.row}>
+      <ToolMark status={tool.status} />
       <View style={{ flex: 1, minWidth: 0 }}>
-        <View style={s.toolTitle}>
-          <Text style={s.toolName} numberOfLines={1}>{tool.name}</Text>
-          <Text style={[s.rowState, { color }]}>{toolStateLabel(tool.status)}{duration ? ` · ${duration}` : ''}</Text>
+        <View style={s.titleLine}>
+          <Text style={[s.rowTitle, { flexShrink: 1 }]} numberOfLines={1}>{tool.name}</Text>
+          {quiet ? null : <Text style={[s.caption, { color: toolTone(t, tool.status) }]}>{toolStateLabel(tool.status)}</Text>}
+          {duration ? <Text style={s.mono}>{duration}</Text> : null}
         </View>
-        {tool.preview ? <Text style={s.toolPreview} numberOfLines={2}>{tool.preview}</Text> : null}
+        {tool.preview ? <Text style={s.preview} numberOfLines={2}>{tool.preview}</Text> : null}
         {!tool.started_known ? <Text style={s.note}>Started before this app connected.</Text> : null}
         {tool.error ? <Text selectable style={s.error}>{tool.error}</Text> : null}
       </View>
@@ -121,35 +136,39 @@ function SubagentRow({ sub, all, depth, capabilities }: {
   const [open, setOpen] = useState(false);
   const children = subagentChildren(all, sub.id, depth);
   const live = isSubagentLive(sub.status);
-  const color = subagentTone(t, sub.status);
   const duration = durationLabel(sub.duration_ms);
-  const meta = [sub.role && sub.role !== 'leaf' ? sub.role : null, subagentStateLabel(sub.status), duration,
-    sub.tool_count ? `${sub.tool_count} ${sub.tool_count === 1 ? 'tool' : 'tools'}` : null].filter(Boolean).join(' · ');
+  const showState = sub.status !== 'running' && sub.status !== 'completed';
+  const details = [
+    sub.role && sub.role !== 'leaf' ? sub.role : null,
+    showState ? subagentStateLabel(sub.status) : null,
+    sub.tool_count ? `${sub.tool_count} ${sub.tool_count === 1 ? 'tool' : 'tools'}` : null,
+  ].filter(Boolean).join(' · ');
   const detail = live ? sub.activity.at(-1)?.name ?? null : sub.summary ?? sub.activity.at(-1)?.name ?? null;
   const expandable = sub.activity.length > 0 || !!sub.summary || children.length > 0;
   return (
-    <View style={depth ? s.childWrap : undefined}>
+    <View>
       <Tap
         disabled={!expandable}
         accessibilityRole={expandable ? 'button' : undefined}
-        accessibilityLabel={`${sub.goal || 'Subagent'}. ${meta}${detail ? `. ${detail}` : ''}`}
+        accessibilityLabel={`${sub.goal || 'Subagent'}. ${[showState ? null : subagentStateLabel(sub.status), details, duration].filter(Boolean).join(' · ')}${detail ? `. ${detail}` : ''}`}
         accessibilityState={expandable ? { expanded: open } : undefined}
         onPress={() => setOpen((value) => !value)}
-        style={s.subRow}
+        style={s.row}
       >
-        <SubagentDisc state={sub.status} />
+        <SubagentMark state={sub.status} />
         <View style={{ flex: 1, minWidth: 0 }}>
-          <Text style={s.subGoal} numberOfLines={open ? undefined : 2}>{sub.goal || 'Delegated task'}</Text>
-          <Text style={[s.subMeta, { color: sub.status === 'failed' ? t.colors.danger : t.colors.textTertiary }]} numberOfLines={1}>{meta}</Text>
-          {!open && detail ? <Text style={s.subDetail} numberOfLines={1}>{detail}</Text> : null}
+          <Text style={s.rowTitle} numberOfLines={open ? undefined : 2}>{sub.goal || 'Delegated task'}</Text>
+          {details ? <Text style={[s.caption, sub.status === 'failed' && { color: t.colors.danger }]} numberOfLines={1}>{details}</Text> : null}
+          {!open && detail ? <Text style={s.detail} numberOfLines={1}>{detail}</Text> : null}
         </View>
+        {duration ? <Text style={s.mono}>{duration}</Text> : null}
         {expandable ? (open ? <ChevronDown size={16} color={t.colors.textTertiary} />
           : <ChevronRight size={16} color={t.colors.textTertiary} />) : null}
       </Tap>
       {open ? (
         <View style={s.subBody}>
           {sub.activity.length ? (
-            <View style={{ gap: 3 }}>
+            <View style={s.stack}>
               <Text style={s.eyebrow}>Activity</Text>
               {sub.activity.map((line, i) => (
                 <Text key={`${line.name}-${i}`} selectable style={s.activityLine} numberOfLines={3}>
@@ -159,7 +178,7 @@ function SubagentRow({ sub, all, depth, capabilities }: {
             </View>
           ) : null}
           {sub.summary ? (
-            <View style={{ gap: 3 }}>
+            <View style={s.stack}>
               <Text style={s.eyebrow}>{sub.status === 'failed' ? 'What went wrong' : 'Result'}</Text>
               <Text selectable style={[s.subSummary, sub.status === 'failed' && { color: t.colors.danger }]}>{sub.summary}</Text>
             </View>
@@ -178,12 +197,11 @@ function SubagentRow({ sub, all, depth, capabilities }: {
   );
 }
 
-function Section({ title, meta, icon, children }: { title: string; meta?: string; icon?: React.ReactNode; children: React.ReactNode }) {
+function Section({ title, meta, children }: { title: string; meta?: string; children: ReactNode }) {
   const s = useStyles();
   return (
     <View style={s.section}>
       <View style={s.sectionHead}>
-        {icon}
         <Text style={s.sectionTitle} accessibilityRole="header">{title}</Text>
         {meta ? <Text style={s.sectionMeta}>{meta}</Text> : null}
       </View>
@@ -218,21 +236,17 @@ export function TaskDetail({ snapshot, capabilities, legacy, busy, online, now }
   const live = state === 'running';
 
   return (
-    <View style={{ gap: 18 }}>
+    <View style={s.root}>
       {snapshot && snapshot.turn_index > 0 ? (
-        <View style={s.headRow} accessibilityLiveRegion="polite">
-          <View style={[s.statePill, { borderColor: color }]}>
-            <StateIcon state={state} size={16} color={color} />
-            <Text style={[s.stateText, { color }]}>{stateLabel(state)}</Text>
-          </View>
+        <View style={s.head} accessibilityLiveRegion="polite">
+          <StateIcon state={state} size={16} color={color} />
+          <Text style={[s.stateText, { color }]}>{stateLabel(state)}</Text>
           {elapsed ? <Text style={s.elapsed}>{elapsed}</Text> : null}
-          {!online ? <Text style={s.offline}>Not updating</Text> : null}
         </View>
       ) : null}
 
       {plan && plan.items.length ? (
-        <Section title={plan.live ? 'Plan' : 'Last plan'} meta={`${progress.done} of ${progress.total} done`}
-          icon={<ListChecks size={16} color={t.colors.textSecondary} />}>
+        <Section title={plan.live ? 'Plan' : 'Last plan'} meta={`${progress.done} of ${progress.total} done`}>
           <View style={s.barTrack} accessibilityRole="progressbar"
             accessibilityValue={{ min: 0, max: Math.max(1, progress.total), now: progress.done,
               text: `${progress.done} of ${progress.total} steps done` }}
@@ -252,8 +266,7 @@ export function TaskDetail({ snapshot, capabilities, legacy, busy, online, now }
           meta={[`${allSubagents.filter((sub) => isSubagentLive(sub.status)).length} working`,
             `${allSubagents.filter((sub) => sub.status === 'completed').length} done`,
             allSubagents.some((sub) => sub.status === 'failed')
-              ? `${allSubagents.filter((sub) => sub.status === 'failed').length} failed` : null].filter(Boolean).join(' · ')}
-          icon={<CircleDashed size={16} color={t.colors.textSecondary} />}>
+              ? `${allSubagents.filter((sub) => sub.status === 'failed').length} failed` : null].filter(Boolean).join(' · ')}>
           {subagents.map((sub) => (
             <SubagentRow key={sub.id} sub={sub} all={allSubagents} depth={0} capabilities={capabilities} />
           ))}
@@ -261,53 +274,45 @@ export function TaskDetail({ snapshot, capabilities, legacy, busy, online, now }
       ) : null}
 
       {running.length || finished.length ? (
-        <Section title="Tools" meta={`${tools.length} ${tools.length === 1 ? 'call' : 'calls'}`}
-          icon={<Wrench size={16} color={t.colors.textSecondary} />}>
+        <Section title="Tools" meta={`${tools.length} ${tools.length === 1 ? 'call' : 'calls'}`}>
           {running.map((tool) => <ToolRow key={tool.id} tool={tool} />)}
           {finished.length ? (
-            <Tap accessibilityRole="button" accessibilityState={{ expanded: showFinished }}
+            <Button variant="ghost" size="sm" style={s.alignStart}
               accessibilityLabel={`${showFinished ? 'Hide' : 'Show'} ${finished.length} finished tool ${finished.length === 1 ? 'call' : 'calls'}`}
-              onPress={() => setShowFinished((value) => !value)} style={s.finishedToggle}>
-              <Text style={s.finishedText}>{showFinished ? 'Hide finished' : `${finished.length} finished`}</Text>
-              {showFinished ? <ChevronDown size={15} color={t.colors.textTertiary} />
-                : <ChevronRight size={15} color={t.colors.textTertiary} />}
-            </Tap>
+              title={showFinished ? 'Hide finished' : `${finished.length} finished`}
+              icon={showFinished ? <ChevronDown size={15} color={t.colors.accent} /> : <ChevronRight size={15} color={t.colors.accent} />}
+              onPress={() => setShowFinished((value) => !value)} />
           ) : null}
           {showFinished ? finished.map((tool) => <ToolRow key={tool.id} tool={tool} />) : null}
         </Section>
       ) : null}
 
       {snapshot && state && state !== 'running' ? (
-        <Section title="Outcome" icon={<StateIcon state={state} size={16} color={color} />}>
-          <Text style={[s.outcome, { color: state === 'failed' ? t.colors.danger : t.colors.text }]}>
+        <Section title="Outcome">
+          <Text selectable style={[s.outcome, { color: state === 'failed' ? t.colors.danger : t.colors.text }]}>
             {state === 'completed' ? 'The agent finished this turn.'
               : state === 'cancelled' ? 'You stopped this task.'
                 : state === 'failed' ? 'This task failed.'
                   : "The server didn't report how this ended."}
           </Text>
-          {snapshot.reason ? <Text selectable style={s.outcomeDetail}>{snapshot.reason}</Text> : null}
-          {snapshot.outcome?.summary ? <Text selectable style={s.outcomeDetail}>{snapshot.outcome.summary}</Text> : null}
+          {snapshot.reason ? <Text selectable style={s.caption}>{snapshot.reason}</Text> : null}
+          {snapshot.outcome?.summary ? <Text selectable style={s.caption}>{snapshot.outcome.summary}</Text> : null}
         </Section>
       ) : null}
 
       {legacy.length ? (
-        <Section title="Activity" icon={<Clock size={16} color={t.colors.textSecondary} />}>
+        <Section title="Activity">
           <Text style={s.note}>
             {snapshot && snapshot.turn_index > 0
-              ? "Hermes's progress notes for this turn, as they arrived."
-              : 'This server does not report structured task details. These are its progress notes.'}
+              ? 'Progress notes for this turn.'
+              : 'This server sends progress notes only.'}
           </Text>
           {legacy.map((line) => <Text key={line.id} selectable style={s.activityLine}>{line.text}</Text>)}
         </Section>
       ) : null}
 
       {!snapshot && !legacy.length ? (
-        <View style={s.emptyState}>
-          <CircleDashed size={20} color={t.colors.textTertiary} />
-          <Text style={s.emptyText}>{busy
-            ? 'Details appear when Hermes reports a tool, a plan step or a delegated task.'
-            : 'No structured activity from the last turn.'}</Text>
-        </View>
+        <Text style={s.caption}>{busy ? 'Tools, plan steps and subagents appear here.' : 'No activity from the last turn.'}</Text>
       ) : null}
 
       {!online ? <Text style={s.note}>Not updating. Reconnect to follow this task.</Text> : null}
@@ -320,59 +325,45 @@ export function TaskStopButton({ onStop, online, stopping, busy, label = 'Stop t
   onStop: () => void; online: boolean; stopping: boolean; busy: boolean; label?: string;
 }) {
   const t = useTheme();
-  const s = useStyles();
   if (!busy) return null;
   return (
-    <Tap accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled: !online || stopping, busy: stopping }}
-      disabled={!online || stopping} onPress={onStop} style={[s.stopButton, (!online || stopping) && { opacity: 0.5 }]}>
-      {stopping ? <ActivityIndicator size="small" color={t.colors.text} /> : <Square size={13} color={online ? t.colors.text : t.colors.textTertiary} />}
-      <Text style={s.stopText}>{online ? label : 'Reconnect to stop'}</Text>
-    </Tap>
+    <Button variant="secondary" accessibilityLabel={label} title={online ? label : 'Reconnect to stop'}
+      loading={stopping} disabled={!online || stopping} onPress={onStop}
+      icon={<Square size={14} color={online ? t.colors.text : t.colors.textTertiary} />} />
   );
 }
 
 const useStyles = makeStyles((t) => ({
-  headRow: { flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
-  statePill: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderRadius: t.radius.pill,
-    paddingHorizontal: 10, paddingVertical: 5, backgroundColor: t.colors.surface },
-  stateText: { ...t.type.caption, fontFamily: t.fonts.semibold },
+  root: { gap: t.space.xl },
+  head: { flexDirection: 'row', alignItems: 'center', gap: t.space.sm },
+  stateText: { ...t.type.callout, fontFamily: t.fonts.semibold },
   elapsed: { ...t.type.caption, fontFamily: t.fonts.mono, color: t.colors.textSecondary },
-  offline: { ...t.type.caption, color: t.colors.warning },
-  section: { gap: 8 },
-  sectionHead: { flexDirection: 'row', alignItems: 'center', gap: 7 },
-  sectionTitle: { ...t.type.heading, color: t.colors.text, flexShrink: 1 },
-  sectionMeta: { ...t.type.caption, color: t.colors.textSecondary, marginLeft: 'auto' },
-  barTrack: { height: 5, borderRadius: 3, backgroundColor: t.colors.surfaceSunken, overflow: 'hidden' },
-  barFill: { height: '100%', borderRadius: 3, backgroundColor: t.colors.accent },
-  planRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, paddingVertical: 5, minHeight: 34 },
-  planMark: { width: 18, alignItems: 'center', paddingTop: 1 },
-  planText: { ...t.type.callout, color: t.colors.text, flex: 1, minWidth: 0 },
-  strikethrough: { textDecorationLine: 'line-through', color: t.colors.textTertiary },
-  rowState: { ...t.type.caption, fontSize: 11.5, marginLeft: 6 },
-  toolRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, paddingVertical: 6 },
-  toolTitle: { flexDirection: 'row', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' },
-  toolName: { ...t.type.callout, fontFamily: t.fonts.semibold, color: t.colors.text, flexShrink: 1 },
-  toolPreview: { ...t.type.caption, fontFamily: t.fonts.mono, color: t.colors.textSecondary, marginTop: 1 },
+  section: { gap: t.space.xs },
+  sectionHead: { flexDirection: 'row', alignItems: 'baseline', gap: t.space.sm, marginBottom: t.space.xs },
+  sectionTitle: { ...t.type.label, color: t.colors.textSecondary },
+  sectionMeta: { ...t.type.caption, color: t.colors.textTertiary, marginLeft: 'auto' },
+  barTrack: { height: 4, borderRadius: 2, backgroundColor: t.colors.surfaceSunken, overflow: 'hidden', marginBottom: t.space.sm },
+  barFill: { height: '100%', borderRadius: 2, backgroundColor: t.colors.accent },
+  mark: { width: 20, height: 20, alignItems: 'center', justifyContent: 'center' },
+  row: { flexDirection: 'row', alignItems: 'flex-start', gap: t.space.sm, minHeight: 40, paddingVertical: 8 },
+  rowTitle: { ...t.type.callout, fontFamily: t.fonts.medium, color: t.colors.text },
+  rowText: { ...t.type.callout, color: t.colors.text, flex: 1, minWidth: 0 },
+  rowNote: { ...t.type.caption, color: t.colors.textTertiary, marginTop: 2 },
+  done: { color: t.colors.textSecondary },
+  struck: { textDecorationLine: 'line-through', color: t.colors.textTertiary },
+  titleLine: { flexDirection: 'row', alignItems: 'center', gap: t.space.sm, flexWrap: 'wrap' },
+  caption: { ...t.type.caption, color: t.colors.textSecondary },
+  detail: { ...t.type.caption, color: t.colors.textSecondary, marginTop: 2 },
+  mono: { ...t.type.caption, fontFamily: t.fonts.mono, color: t.colors.textTertiary },
+  preview: { ...t.type.caption, fontFamily: t.fonts.mono, color: t.colors.textSecondary, marginTop: 2 },
   error: { ...t.type.caption, color: t.colors.danger, marginTop: 2 },
-  note: { ...t.type.caption, fontFamily: t.fonts.regular, color: t.colors.textTertiary },
-  subRow: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 48, paddingVertical: 6, paddingRight: 4,
-    borderRadius: t.radius.sm },
-  subGoal: { ...t.type.callout, fontFamily: t.fonts.medium, color: t.colors.text },
-  subMeta: { ...t.type.caption, fontSize: 11.5, marginTop: 1 },
-  subDetail: { ...t.type.caption, fontFamily: t.fonts.regular, color: t.colors.textSecondary, marginTop: 2 },
-  subBody: { paddingLeft: 36, paddingBottom: 6, gap: 10 },
+  note: { ...t.type.caption, color: t.colors.textTertiary },
+  stack: { gap: 2 },
+  subBody: { paddingLeft: 28, paddingBottom: t.space.sm, gap: t.space.sm },
+  eyebrow: { ...t.type.label, color: t.colors.textTertiary },
+  activityLine: { ...t.type.caption, fontFamily: t.fonts.mono, color: t.colors.textSecondary },
   subSummary: { ...t.type.callout, color: t.colors.textSecondary },
-  eyebrow: { ...t.type.label, color: t.colors.textTertiary, fontSize: 10.5 },
-  activityLine: { ...t.type.caption, fontFamily: t.fonts.mono, fontSize: 12, color: t.colors.textSecondary },
-  children: { marginLeft: 12, paddingLeft: 12, borderLeftWidth: 1, borderLeftColor: t.colors.borderStrong, gap: 2 },
-  childWrap: { gap: 2 },
-  finishedToggle: { flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 40, alignSelf: 'flex-start' },
-  finishedText: { ...t.type.caption, color: t.colors.textSecondary },
+  children: { marginLeft: 10, paddingLeft: 18, borderLeftWidth: 1, borderLeftColor: t.colors.borderStrong },
+  alignStart: { alignSelf: 'flex-start' },
   outcome: { ...t.type.callout, fontFamily: t.fonts.medium },
-  outcomeDetail: { ...t.type.caption, fontFamily: t.fonts.regular, color: t.colors.textSecondary },
-  emptyState: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12 },
-  emptyText: { ...t.type.caption, fontFamily: t.fonts.regular, color: t.colors.textSecondary, flex: 1, minWidth: 0 },
-  stopButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, minHeight: 46,
-    borderRadius: t.radius.pill, borderWidth: 1, borderColor: t.colors.borderStrong, backgroundColor: t.colors.surface },
-  stopText: { ...t.type.callout, fontFamily: t.fonts.semibold, color: t.colors.text },
 }));

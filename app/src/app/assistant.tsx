@@ -3,7 +3,7 @@ import {router,useLocalSearchParams} from 'expo-router';
 import {Text,View} from 'react-native';
 import {Screen} from '../components/Screen';
 import {Sheet} from '../components/Sheet';
-import {Button,Card,Field,ListGroup,ListRow,SectionHeader,Toggle} from '../components/ui';
+import {Button,Field,Footnote,ListGroup,ListRow,SectionHeader,Toggle} from '../components/ui';
 import {useLock} from '../lib/appLock';
 import {homeChat,useApp,useServerState} from '../lib/store';
 import {makeStyles} from '../lib/themeContext';
@@ -48,7 +48,7 @@ function AssistantPanel({id}:{id:string|null}){
   },[id]);
   useEffect(()=>{
     const native=assistantNative;
-    if(!id || !native){setError('Invoke Winglet using the Android assistant gesture. External links cannot supply screen context.');return;}
+    if(!id || !native){setError('Open Winglet with the Android assistant gesture; links cannot provide screen text.');return;}
     let active=true;
     native.protect(id).then(()=>native.peek(id)).then(value=>{
       if(!active)return;
@@ -63,7 +63,7 @@ function AssistantPanel({id}:{id:string|null}){
   },[id]);
   useEffect(()=>{
     if(!invocation)return;
-    const clear=()=>{if(id)assistantNative?.discard(id);request.current.clear();setInvocation(null);setQuestion('');setInclude(false);setError('Assistant context expired or was closed. Invoke Winglet again.');};
+    const clear=()=>{if(id)assistantNative?.discard(id);request.current.clear();setInvocation(null);setQuestion('');setInclude(false);setError('Screen context expired. Open the assistant again.');};
     if(!foreground || locked){clear();return;}
     const timer=setInterval(()=>{if(Date.now()>=deadline.current)clear();},1000);
     return ()=>clearInterval(timer);
@@ -85,26 +85,26 @@ function AssistantPanel({id}:{id:string|null}){
     useApp.getState().select(server.id,chat.id);if(id)assistantNative?.discard(id);
     router.replace(`/chat/${server.id}/${chat.id}`);
   };
-  return <Screen title="Ask Winglet" subtitle="Review the destination and your question before sending.">
-    <Card style={s.card}>
-      {invocation||sent?<>
-        <ListRow title="Bot" subtitle={server?.bot.title ?? 'Choose a paired bot'} onPress={bound?undefined:()=>setPick('bot')}/>
-        <ListRow title="Conversation" subtitle={chat?.title ?? 'Choose a conversation'} onPress={bound?undefined:()=>setPick('chat')}/>
-      </>:null}
+  return <Screen title="Ask Winglet">
+    <View style={s.card}>
+      {invocation||sent?<ListGroup>
+        <ListRow title="Bot" value={server?.bot.title ?? 'Choose a bot'} onPress={bound?undefined:()=>setPick('bot')}/>
+        <ListRow title="Conversation" value={chat?.title ?? 'Choose a chat'} onPress={bound?undefined:()=>setPick('chat')}/>
+      </ListGroup>:null}
       {invocation?<Field label="Your question" value={question} onChangeText={setQuestion} multiline maxLength={4000} editable={!bound&&!busy} placeholder="What would you like to ask?"/>:null}
       {invocation?.context?<View style={{gap:12}}>
-        <SectionHeader title="Screen text available"/>
+        <SectionHeader title="Screen text"/>
         <Text selectable style={s.context}>{invocation.context}</Text>
-        <Toggle label="Include this screen text with my question" value={include} onValueChange={value=>{if(!bound&&!busy)setInclude(value);}}/>
-        <Text style={s.note}>Include only if you want this exact text sent to {server?.bot.title ?? 'your agent'}. It expires when you leave this panel.</Text>
-      </View>:invocation?<Text style={s.note}>No screen context was provided. You can ask with text alone.</Text>:null}
-      {!online && invocation?<Text style={s.note}>Reconnect to this bot before sending. Assistant requests are never queued for later.</Text>:null}
+        <ListGroup><ListRow title="Include screen text" right={<Toggle label="Include this screen text with my question" value={include} onValueChange={value=>{if(!bound&&!busy)setInclude(value);}}/>}/></ListGroup>
+        <Footnote>Only this text is sent to {server?.bot.title ?? 'your agent'}; it expires when you leave.</Footnote>
+      </View>:invocation?<Text style={s.note}>No screen text available.</Text>:null}
+      {!online && invocation?<Text style={s.note}>Reconnect to send. Assistant requests are never queued.</Text>:null}
       {error?<Text style={s.error} accessibilityLiveRegion="polite">{error}</Text>:null}
-      {sent?<Text style={s.note} accessibilityLiveRegion="polite">Sent. Follow the reply in your conversation.</Text>:
+      {sent?<Text style={s.note} accessibilityLiveRegion="polite">Sent. Follow the reply in your chat.</Text>:
         invocation?<Button title={bound?'Retry the same question':'Send question'} loading={busy} disabled={!online||!chat||!question.trim()||busy} onPress={send}/>:null}
       {invocation||sent?<Button title="Open full chat" variant="tonal" disabled={!server||!chat} onPress={open}/>:null}
       <Button title="Dismiss" variant="ghost" onPress={()=>{if(id)assistantNative?.discard(id);router.back();}}/>
-    </Card>
+    </View>
     <Sheet visible={pick!==null} onClose={()=>setPick(null)} title={pick==='bot'?'Choose a bot':'Choose a conversation'} scrollable>
       <ListGroup>{pick==='bot'?servers.map(item=><ListRow key={item.id} title={item.bot.title} onPress={()=>{
         setTarget({serverId:item.id,chatId:homeChat(useApp.getState().runtime[item.id])});setPick(null);

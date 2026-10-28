@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Modal, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Glass } from '../../components/Glass';
-import { CheckCircle2, ChevronRight, CircleAlert, FileText, ShieldCheck, TriangleAlert, X } from '../../components/icons';
-import { Button, Card, IconButton, Toggle, Tap } from '../../components/ui';
+import { CheckCircle2, CircleAlert, FileText, ShieldCheck, TriangleAlert, X } from '../../components/icons';
+import { Button, Card, Chip, IconButton, ListGroup, ListRow, SectionHeader, Toggle, Tap } from '../../components/ui';
 import { ApiError } from '../../lib/api';
 import { useLock } from '../../lib/appLock';
 import { haptic } from '../../lib/haptics';
@@ -146,7 +146,7 @@ export function CheckpointSheet({ server, checkpoint, visible, online, busy, onC
             <View style={s.heading}>
               <View style={{ flex: 1, minWidth: 0 }}>
                 <Text style={s.headingTitle} accessibilityRole="header" numberOfLines={2}>
-                  {step === 'confirm' ? 'Restore this checkpoint?' : step === 'result' ? (result?.ok ? 'Restored' : "Couldn't restore") : shown.label}
+                  {step === 'confirm' ? 'Restore checkpoint' : step === 'result' ? (result?.ok ? 'Restored' : "Couldn't restore") : shown.label}
                 </Text>
                 <Text style={s.headingMeta} numberOfLines={1}>
                   {[dayLabel(shown.at), clockTime(shown.at), shown.short].filter(Boolean).join(' · ')}
@@ -160,7 +160,7 @@ export function CheckpointSheet({ server, checkpoint, visible, online, busy, onC
                 <ActivityIndicator color={t.colors.accent} />
                 <Text style={s.runningTitle}>Restoring the folder…</Text>
                 <Text style={s.runningBody}>
-                  Hermes is putting the files back and saving a safety snapshot first. This can take a moment.
+                  Saving a safety snapshot, then restoring files.
                 </Text>
               </View>
             ) : step === 'result' && result ? (
@@ -234,16 +234,16 @@ function PreviewBody({ preview, current, selected, onSelect, wide, diffHeight, f
       <View style={s.center}>
         <CheckCircle2 size={26} color={t.colors.success} />
         <Text style={s.centerTitle}>Nothing has changed</Text>
-        <Text style={s.centerText}>The folder is the same as at this snapshot, so there is nothing to restore.</Text>
+        <Text style={s.centerText}>The folder matches this snapshot.</Text>
       </View>
     );
   }
   return (
     <View style={{ flex: 1, minHeight: 0, paddingTop: 10 }}>
       <View style={s.coverage}>
-        <ShieldCheck size={15} color={t.colors.onAccentSoft} />
+        <ShieldCheck size={15} color={t.colors.textSecondary} />
         <Text style={s.coverageText} numberOfLines={2}>
-          Files only. This snapshot has no chat messages; restoring never changes your conversations.
+          Files only; conversations stay unchanged.
         </Text>
       </View>
       <View style={s.summaryRow}>
@@ -268,7 +268,7 @@ function PreviewBody({ preview, current, selected, onSelect, wide, diffHeight, f
       </View>
       {preview.diff.truncated ? (
         <Text style={s.note}>
-          This preview stops after {preview.shown_files} of {preview.files.length} files. Every changed file is still listed with its counts.
+          Previewing {preview.shown_files} of {preview.files.length} files. All counts are listed.
         </Text>
       ) : null}
     </View>
@@ -278,14 +278,10 @@ function PreviewBody({ preview, current, selected, onSelect, wide, diffHeight, f
 function FileChip({ file, selected, onPress }: { file: CheckpointFile; selected: boolean; onPress: () => void }) {
   const t = useTheme();
   const s = useStyles();
-  return (
-    <Tap feedback="selection" onPress={onPress} accessibilityRole="button" accessibilityState={{ selected }} hitSlop={4}
-      accessibilityLabel={`${file.path}, ${file.status}, ${file.insertions} added, ${file.deletions} removed`}
-      style={[s.chip, selected && { backgroundColor: t.colors.accentSoft, borderColor: 'transparent' }]}>
-      <Text style={[s.mark, { color: markColor(t, file) }]}>{fileMark(file)}</Text>
-      <Text style={[s.chipText, selected && { color: t.colors.onAccentSoft }]} numberOfLines={1}>{file.path}</Text>
-    </Tap>
-  );
+  return <Chip label={file.path} selected={selected} onPress={onPress}
+    icon={<Text style={[s.mark, {color:markColor(t,file)}]}>{fileMark(file)}</Text>}
+    accessibilityLabel={`${file.path}, ${file.status}, ${file.insertions} added, ${file.deletions} removed`} />;
+
 }
 
 function FileRow({ file, selected, onPress }: { file: CheckpointFile; selected: boolean; onPress: () => void }) {
@@ -325,12 +321,12 @@ function DiffPane({ preview, file, height, fill, showAll, onShowAll }: {
         {file.binary ? (
           <View style={s.center}>
             <FileText size={22} color={t.colors.textTertiary} />
-            <Text style={s.centerText}>This is a binary file. Hermes records that it changed, not its contents.</Text>
+            <Text style={s.centerText}>Binary file; contents are not previewed.</Text>
           </View>
         ) : !file.shown ? (
           <View style={s.center}>
             <TriangleAlert size={20} color={t.colors.warning} />
-            <Text style={s.centerText}>This change is too large to show in the preview. The file and its counts are still listed.</Text>
+            <Text style={s.centerText}>Change too large to preview; counts are still available.</Text>
           </View>
         ) : (
           <ScrollView horizontal showsHorizontalScrollIndicator style={{ flex: 1 }} contentContainerStyle={{ minWidth: '100%' }}>
@@ -339,11 +335,8 @@ function DiffPane({ preview, file, height, fill, showAll, onShowAll }: {
                 <Text key={index} selectable style={[s.diffLine, { color: toneColor(t, diffTone(line)) }]}>{line || ' '}</Text>
               ))}
               {limit < lines.length ? (
-                <Tap feedback="selection" onPress={onShowAll} accessibilityRole="button" accessibilityLabel={`Show the other ${lines.length - limit} lines`}
-                  style={s.moreLines}>
-                  <Text style={s.moreText}>Show {lines.length - limit} more lines</Text>
-                  <ChevronRight size={14} color={t.colors.accent} />
-                </Tap>
+                <Button title={`Show ${lines.length - limit} more lines`} variant="ghost" onPress={onShowAll}
+                  accessibilityLabel={`Show the other ${lines.length - limit} lines`} />
               ) : null}
             </ScrollView>
           </ScrollView>
@@ -368,7 +361,7 @@ function ConfirmBody({ preview, safe, onSafe, error }: {
         <Text style={s.scopeNote}>Every chat with this bot shares this folder.</Text>
       </Card>
       <View style={{ gap: 6 }}>
-        <Text style={s.sectionLabel}>What happens</Text>
+        <SectionHeader title="What happens" />
         {lines.map((line) => (
           <View key={line} style={s.bullet}>
             <View style={[s.bulletDot, { backgroundColor: t.colors.accent }]} />
@@ -376,22 +369,13 @@ function ConfirmBody({ preview, safe, onSafe, error }: {
           </View>
         ))}
       </View>
-      <View style={s.safeRow}>
-        <View style={{ flex: 1, gap: 3 }}>
-          <Text style={s.safeTitle}>Also revert files I edited myself</Text>
-          <Text style={s.safeBody}>
-            {safe
-              ? 'Off: Hermes leaves files you changed after it wrote them alone.'
-              : 'On: files you edited since are overwritten too. This cannot be undone except from the safety snapshot.'}
-          </Text>
-        </View>
-        <Toggle label="Also revert files I edited myself" value={!safe} onValueChange={(value) => onSafe(!value)} />
-      </View>
+      <ListGroup><ListRow title="Also revert files I edited myself"
+        subtitle={safe?'Your later edits are kept.':'Your later edits are overwritten; recover them from the safety snapshot.'}
+        right={<Toggle label="Also revert files I edited myself" value={!safe} onValueChange={(value) => onSafe(!value)} />} /></ListGroup>
       <View style={s.assurance}>
         <ShieldCheck size={16} color={t.colors.success} />
         <Text style={s.assuranceText}>
-          Hermes saves a safety snapshot just before restoring, so you can undo this restore from the top of the list.
-          Your chats, memory and skills are not changed.
+          Undo from the safety snapshot. Chats, memory and skills stay unchanged.
         </Text>
       </View>
       {error ? <Text style={s.error} accessibilityLiveRegion="assertive">{error}</Text> : null}
@@ -428,15 +412,8 @@ function ResultBody({ result, onUndo }: { result: RestoreOutcome; onUndo: (hash:
         </View>
       ) : null}
       {safety ? (
-        <Tap feedback="selection" onPress={() => onUndo(safety.hash)} accessibilityRole="button"
-          accessibilityLabel={`Undo this restore with the safety snapshot ${safety.short}`} style={s.undoRow}>
-          <ShieldCheck size={16} color={t.colors.onAccentSoft} />
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text style={s.undoTitle}>Undo this restore</Text>
-            <Text style={s.undoBody}>Open the safety snapshot Hermes took just before restoring.</Text>
-          </View>
-          <ChevronRight size={17} color={t.colors.textTertiary} />
-        </Tap>
+        <ListGroup><ListRow icon={<ShieldCheck />} title="Undo this restore" value={safety.short}
+          onPress={() => onUndo(safety.hash)} /></ListGroup>
       ) : null}
     </View>
   );
@@ -449,15 +426,12 @@ function ResultList({ group }: { group: ResultGroup }) {
   const shown = all ? group.files : group.files.slice(0, 5);
   return (
     <View style={{ gap: 4 }}>
-      <Text style={s.sectionLabel}>{group.title} · {group.files.length}</Text>
+      <SectionHeader title={group.title} right={<Text style={s.note}>{group.files.length}</Text>} />
       {shown.map((file) => (
         <Text key={file} style={s.resultFile} numberOfLines={2}>{file}</Text>
       ))}
       {group.files.length > shown.length ? (
-        <Tap feedback="selection" onPress={() => setAll(true)} accessibilityRole="button" accessibilityLabel={`Show ${group.files.length - shown.length} more files`} style={s.moreLines}>
-          <Text style={s.moreText}>Show {group.files.length - shown.length} more</Text>
-          <ChevronRight size={14} color={t.colors.accent} />
-        </Tap>
+        <Button title={`Show ${group.files.length - shown.length} more files`} variant="ghost" onPress={() => setAll(true)} />
       ) : null}
     </View>
   );
@@ -483,46 +457,46 @@ const useStyles = makeStyles((t) => ({
   hostWide: { justifyContent: 'center', alignItems: 'center', padding: 24 },
   backdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: t.colors.overlay },
   panel: { width: '100%', maxHeight: '100%' },
-  panelPhone: { paddingHorizontal: 8, paddingBottom: 0 },
+  panelPhone: { paddingBottom: 0 },
   panelWide: { maxWidth: 820, paddingHorizontal: 12 },
   glass: {
-    borderTopLeftRadius: t.radius.xl, borderTopRightRadius: t.radius.xl, paddingHorizontal: 14, paddingTop: 12,
+    borderTopLeftRadius: t.radius.xl, borderTopRightRadius: t.radius.xl, paddingHorizontal: t.space.lg, paddingTop: t.space.md,
     overflow: 'hidden',
   },
-  heading: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, paddingBottom: 8 },
+  heading: { flexDirection: 'row', alignItems: 'center', gap: t.space.md, paddingLeft: t.space.xs, paddingBottom: t.space.sm },
   headingTitle: { ...t.type.heading, color: t.colors.text },
-  headingMeta: { ...t.type.caption, fontFamily: t.fonts.mono, color: t.colors.textTertiary, marginTop: 4 },
+  headingMeta: { ...t.type.caption, color: t.colors.textTertiary, marginTop: 4 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, paddingHorizontal: 24, minHeight: 160 },
   centerTitle: { ...t.type.heading, color: t.colors.text, textAlign: 'center' },
   centerText: { ...t.type.callout, color: t.colors.textSecondary, textAlign: 'center', maxWidth: 420 },
   scrollBody: { paddingBottom: 10, gap: 14 },
   coverage: {
     flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 10, paddingVertical: 8,
-    borderRadius: t.radius.sm, backgroundColor: t.colors.accentSoft,
+    borderRadius: t.radius.sm, backgroundColor: t.colors.surfaceSunken,
   },
-  coverageText: { ...t.type.caption, fontFamily: t.fonts.regular, color: t.colors.onAccentSoft, flex: 1, lineHeight: 17 },
+  coverageText: { ...t.type.footnote, color: t.colors.textSecondary, flex: 1 },
   summaryRow: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, marginTop: 10 },
   summary: { ...t.type.caption, fontFamily: t.fonts.semibold, color: t.colors.text },
-  summaryHash: { ...t.type.caption, fontFamily: t.fonts.mono, fontSize: 11, color: t.colors.textTertiary, flexShrink: 1, textAlign: 'right' },
+  summaryHash: { ...t.type.caption, fontFamily: t.fonts.mono, color: t.colors.textTertiary, flexShrink: 1, textAlign: 'right' },
   chips: { gap: 8, paddingVertical: 2, paddingHorizontal: 2 },
   chip: {
     flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 38, paddingHorizontal: 12, borderRadius: t.radius.pill,
     borderWidth: 1, borderColor: t.colors.border, backgroundColor: t.colors.surface, maxWidth: 230,
   },
   chipText: { ...t.type.caption, color: t.colors.text, flexShrink: 1 },
-  mark: { fontFamily: t.fonts.bold, fontSize: 11 },
+  mark: { ...t.type.caption },
   fileColumn: { width: 232, flexGrow: 0 },
   fileRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 8, paddingVertical: 7, borderRadius: t.radius.sm, minHeight: 42 },
-  filePath: { ...t.type.caption, fontFamily: t.fonts.mono, fontSize: 11.5, color: t.colors.text },
-  fileMeta: { ...t.type.caption, fontSize: 10.5, color: t.colors.textTertiary, marginTop: 2 },
+  filePath: { ...t.type.caption, fontFamily: t.fonts.mono, color: t.colors.text },
+  fileMeta: { ...t.type.caption, color: t.colors.textTertiary, marginTop: 2 },
   diffHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   diffPath: { ...t.type.caption, fontFamily: t.fonts.mono, color: t.colors.textSecondary, flex: 1 },
-  diffCounts: { ...t.type.caption, fontFamily: t.fonts.mono, fontSize: 11, color: t.colors.textTertiary },
+  diffCounts: { ...t.type.caption, fontFamily: t.fonts.mono, color: t.colors.textTertiary },
   diffBox: {
     borderRadius: t.radius.md, backgroundColor: t.colors.codeBg, borderWidth: 1, borderColor: t.colors.border, overflow: 'hidden',
   },
   diffEmpty: { borderRadius: t.radius.md, backgroundColor: t.colors.codeBg, alignItems: 'center', justifyContent: 'center' },
-  diffLine: { fontFamily: t.fonts.mono, fontSize: 11.5, lineHeight: 18 },
+  diffLine: { ...t.type.footnote, fontFamily: t.fonts.mono },
   moreLines: { flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 40, paddingHorizontal: 8 },
   moreText: { ...t.type.caption, color: t.colors.accent, fontFamily: t.fonts.semibold },
   note: { ...t.type.caption, fontFamily: t.fonts.regular, color: t.colors.textTertiary, lineHeight: 17, marginTop: 6 },
@@ -533,7 +507,7 @@ const useStyles = makeStyles((t) => ({
   runningBody: { ...t.type.callout, color: t.colors.textSecondary, textAlign: 'center', maxWidth: 420 },
   scopeCard: { gap: 4 },
   scopeLabel: { ...t.type.label, color: t.colors.textSecondary },
-  scopePath: { ...t.type.caption, fontFamily: t.fonts.mono, fontSize: 12.5, color: t.colors.text },
+  scopePath: { ...t.type.caption, fontFamily: t.fonts.mono, color: t.colors.text },
   scopeNote: { ...t.type.caption, color: t.colors.textTertiary, marginTop: 2 },
   sectionLabel: { ...t.type.label, color: t.colors.textSecondary },
   bullet: { flexDirection: 'row', alignItems: 'flex-start', gap: 9 },
@@ -551,7 +525,7 @@ const useStyles = makeStyles((t) => ({
   resultHead: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
   resultTitle: { ...t.type.heading, color: t.colors.text },
   resultMessage: { ...t.type.callout, color: t.colors.textSecondary, marginTop: 4, lineHeight: 21 },
-  resultFile: { ...t.type.caption, fontFamily: t.fonts.mono, fontSize: 11.5, color: t.colors.text, lineHeight: 18 },
+  resultFile: { ...t.type.caption, fontFamily: t.fonts.mono, color: t.colors.text, lineHeight: 18 },
   recovery: { flexDirection: 'row', alignItems: 'flex-start', gap: 9, padding: 12, borderRadius: t.radius.md, backgroundColor: t.colors.warningSoft },
   recoveryText: { ...t.type.caption, fontFamily: t.fonts.regular, color: t.colors.text, flex: 1, lineHeight: 18 },
   undoRow: {

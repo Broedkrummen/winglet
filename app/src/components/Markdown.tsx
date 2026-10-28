@@ -278,7 +278,7 @@ const useStyles = makeStyles((t) => ({
   fold: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', marginTop: 8, paddingVertical: 4 },
   foldText: { fontFamily: t.fonts.semibold, fontSize: 12.5, color: t.colors.accent },
   quote: { flexDirection: 'row', gap: 10 },
-  quoteBar: { width: 3, borderRadius: 3, backgroundColor: t.colors.borderStrong },
+  quoteBar: { width: 3, borderRadius: 3, backgroundColor: t.colors.accent },
   list: { gap: 4 },
   li: { flexDirection: 'row', gap: 8, paddingRight: 8 },
   bullet: { ...t.type.body, color: t.colors.textSecondary, minWidth: 14 },

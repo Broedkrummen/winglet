@@ -1,6 +1,8 @@
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, Text, View } from 'react-native';
+import Animated, { FadeIn } from 'react-native-reanimated';
+import { spring, useReducedMotion } from '../lib/motion';
 import { stopTask } from '../lib/actions';
 import { currentTaskActivity } from '../lib/messages';
 import { isOwner, useApp } from '../lib/store';
@@ -10,7 +12,7 @@ import type { Server } from '../lib/types';
 import { TaskDetail, TaskStopButton, useTaskClock } from '../features/execution/TaskDetail';
 import { planProgress, stripVisible, taskState } from '../features/execution/model';
 import { Ban, CheckCircle2, ChevronDown, CircleHelp, ShieldQuestion, Square, XCircle } from './icons';
-import { Sheet } from './Sheet';
+import { FloatingPill, Sheet } from './Sheet';
 import { Button, Tap } from './ui';
 
 const EMPTY: never[] = [];
@@ -21,6 +23,7 @@ const LINGER_MS = 60_000;
 export function TaskProgress({ server, chatId, busy }: { server: Server; chatId: string; busy: boolean }) {
   const t = useTheme();
   const s = useStyles();
+  const reduced = useReducedMotion();
   const online = useApp((st) => st.network && st.runtime[server.id]?.status === 'online');
   const owner = useApp((st) => isOwner(st.runtime[server.id]));
   const messages = useApp((st) => st.runtime[server.id]?.messages[chatId] ?? EMPTY);
@@ -95,23 +98,32 @@ export function TaskProgress({ server, chatId, busy }: { server: Server; chatId:
     try { await stopTask(server, chatId); } finally { setStopping(false); }
   };
   return <>
-    <View style={s.strip} accessibilityLiveRegion="polite">
-      <Tap accessibilityLabel={`${title}. ${detail.replace(/[.!?]$/, '')}. ${pending ? 'Open request' : 'Show activity'}`}
-        accessibilityState={{ expanded: open }} style={s.summary} onPress={() => {
-          if (pending) openRequest();
-          else setOpen(true);
-        }}>
-        {pending ? pending.kind === 'approval' ? <ShieldQuestion size={19} color={t.colors.warning} /> : <CircleHelp size={19} color={t.colors.warning} />
-          : terminalIcon ?? <ActivityIndicator size="small" color={t.colors.accent} />}
-        <View style={s.text}><Text style={[s.title, pending && { color: t.colors.warning }]} numberOfLines={1}>{title}</Text>
-          <Text style={s.detail} numberOfLines={1}>{detail}</Text></View>
-        <ChevronDown size={15} color={t.colors.textTertiary} />
-      </Tap>
-      {busy && !pending ? <Tap accessibilityLabel="Stop this task" accessibilityState={{ disabled: !online || stopping, busy: stopping }}
-        disabled={!online || stopping} style={s.stop} onPress={stop}>
-        {stopping ? <ActivityIndicator size="small" color={t.colors.textSecondary} /> : <Square size={14} color={online ? t.colors.text : t.colors.textTertiary} />}
-      </Tap> : null}
-    </View>
+    <Animated.View entering={reduced ? undefined : FadeIn.duration(180)}
+      style={s.float} accessibilityLiveRegion="polite">
+      <FloatingPill style={s.strip}>
+        <Tap accessibilityLabel={`${title}. ${detail.replace(/[.!?]$/, '')}. ${pending ? 'Open request' : 'Show activity'}`}
+          accessibilityState={{ expanded: open }} scaleTo={0.98} style={s.summary} onPress={() => {
+            if (pending) openRequest();
+            else setOpen(true);
+          }}>
+          <View style={[s.badge, { backgroundColor: pending ? t.colors.warningSoft : t.colors.surfaceSunken }]}>
+            {pending ? pending.kind === 'approval' ? <ShieldQuestion size={17} color={t.colors.warning} /> : <CircleHelp size={17} color={t.colors.warning} />
+              : terminalIcon ?? <ActivityIndicator size="small" color={t.colors.accent} />}
+          </View>
+          <View style={s.text}><Text style={[s.title, pending && { color: t.colors.warning }]} numberOfLines={1}>{title}</Text>
+            <Text style={s.detail} numberOfLines={1}>{detail}</Text></View>
+          <ChevronDown size={15} color={t.colors.textTertiary} />
+        </Tap>
+        {busy && !pending ? <Tap accessibilityLabel="Stop this task" accessibilityState={{ disabled: !online || stopping, busy: stopping }}
+          disabled={!online || stopping} hitSlop={4} scaleTo={0.9} style={s.stop} onPress={stop}>
+          {stopping ? <ActivityIndicator size="small" color={t.colors.textSecondary} /> : <Square size={13} color={online ? t.colors.text : t.colors.textTertiary} fill={online ? t.colors.text : t.colors.textTertiary} />}
+        </Tap> : null}
+        {/* How far through its plan it is, as a thin accent line along the bottom of the pill. */}
+        {!pending && progress.total > 0 && snapshot?.plan?.live !== false ? <View pointerEvents="none" style={s.track}>
+          <View style={[s.bar, { width: `${Math.round(Math.max(0.04, progress.fraction) * 100)}%` }]} />
+        </View> : null}
+      </FloatingPill>
+    </Animated.View>
     <Sheet visible={open} onClose={() => setOpen(false)} title={pending ? title : busy ? 'Current activity' : 'Task details'}>
       <ScrollView style={{ maxHeight: 440 }} contentContainerStyle={{ gap: 16, paddingHorizontal: 8, paddingBottom: 20 }}>
         {pending ? <><Text style={s.title}>{pending.title}</Text><Text selectable style={s.activity}>{pending.body}</Text><Button title="Open request" onPress={openRequest} /></> : <>
@@ -127,12 +139,18 @@ export function TaskProgress({ server, chatId, busy }: { server: Server; chatId:
 }
 
 const useStyles = makeStyles((t) => ({
-  strip: { flexDirection: 'row', alignItems: 'center', paddingRight: 6, borderRadius: 16, backgroundColor: t.colors.surface,
-    borderWidth: 1, borderColor: t.colors.borderStrong, marginBottom: 8 },
-  summary: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, minHeight: 64 },
-  text: { flex: 1, minWidth: 0, gap: 3 },
+  float: { alignSelf: 'center', width: '100%', maxWidth: 560, marginBottom: t.space.sm },
+  strip: { paddingRight: 6, gap: 0 },
+  summary: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 10, paddingLeft: 6, paddingRight: t.space.sm, paddingVertical: 6, minHeight: 48 },
+  badge: { width: 34, height: 34, borderRadius: t.radius.pill, alignItems: 'center', justifyContent: 'center' },
+  text: { flex: 1, minWidth: 0, gap: 1 },
   title: { ...t.type.caption, fontFamily: t.fonts.semibold, color: t.colors.text },
   detail: { ...t.type.caption, color: t.colors.textSecondary, fontSize: 12 },
-  stop: { height: 44, width: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: t.colors.surfaceSunken },
+  stop: {
+    height: 36, width: 36, alignItems: 'center', justifyContent: 'center', borderRadius: t.radius.pill,
+    backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border,
+  },
+  track: { position: 'absolute', left: 22, right: 22, bottom: 0, height: 2, borderRadius: t.radius.pill, backgroundColor: t.colors.border, overflow: 'hidden' },
+  bar: { height: 2, borderRadius: t.radius.pill, backgroundColor: t.colors.accent },
   activity: { ...t.type.callout, color: t.colors.textSecondary },
 }));

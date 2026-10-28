@@ -18,7 +18,7 @@ function harness() {
       useState: (value: any) => { const i = cursor++; if (!(i in hooks)) hooks[i] = value; return [hooks[i], (next: any) => { hooks[i] = typeof next === 'function' ? next(hooks[i]) : next; }]; },
       useRef: (value: any) => { const i = cursor++; return hooks[i] ??= { current: value }; } },
     'react/jsx-runtime': { jsx, jsxs: jsx },
-    'react-native': { Platform: { OS: 'web' }, View: 'View' },
+    'react-native': { Platform: { OS: 'web' }, View: 'View', StyleSheet: { absoluteFill: {}, hairlineWidth: 1 } },
     'react-native-safe-area-context': { useSafeAreaInsets: () => ({ top: 0, bottom: 0 }) },
     '../lib/themeContext': { makeStyles: () => () => fallback, useTheme: () => fallback },
     '../lib/motion': { useReducedMotion: () => true },

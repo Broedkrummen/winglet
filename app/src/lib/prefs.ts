@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { getJSON, setJSON } from './storage';
-import type { AccentName } from './theme';
+import type { AccentName, DarkTone } from './theme';
 import type { SavedModel } from './modelOptions';
 
 export type Prefs = {
@@ -8,6 +8,8 @@ export type Prefs = {
   voiceSpeakWith: 'server' | 'device';
   theme: 'system' | 'light' | 'dark';
   accent: AccentName;
+  /** How dark the dark theme is: charcoal (default), graphite, or true black for OLED screens. */
+  darkTone: DarkTone;
   /** Bubbles: your messages in accent bubbles, replies unboxed. Compact: everything left-aligned. */
   layout: 'bubbles' | 'compact';
   /** "system" follows the phone's accessibility setting. */
@@ -36,7 +38,7 @@ export type Prefs = {
 
 export const DEFAULT_PREFS: Prefs = {
   voiceListenWith: 'server', voiceSpeakWith: 'server',
-  theme: 'system', accent: 'iris', layout: 'bubbles', motion: 'system', transparency: 'system', haptics: true, sounds: true, busyMode: 'steer', appLock: false, updateCheck: true, mainBot: '', sidebar: 'auto', pinnedChats: [], archivedChats: [], favoriteModels: [], recentModels: [],
+  theme: 'system', accent: 'iris', darkTone: 'charcoal', layout: 'bubbles', motion: 'system', transparency: 'system', haptics: true, sounds: true, busyMode: 'steer', appLock: false, updateCheck: true, mainBot: '', sidebar: 'auto', pinnedChats: [], archivedChats: [], favoriteModels: [], recentModels: [],
 };
 
 const KEY = 'winglet.prefs';
@@ -48,7 +50,9 @@ export const usePrefs = create<PrefsState>((set, get) => ({
   prefs: DEFAULT_PREFS,
   loaded: false,
   load: async () => {
-    const saved = await getJSON<Partial<Prefs>>(KEY, {});
+    const { pureBlack, ...saved } = await getJSON<Partial<Prefs> & { pureBlack?: boolean }>(KEY, {});
+    // The old "Pure black" switch becomes the black tone.
+    if (pureBlack && !saved.darkTone) saved.darkTone = 'black';
     set({ prefs: { ...DEFAULT_PREFS, ...saved }, loaded: true });
   },
   update: (patch) => {

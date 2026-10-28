@@ -1,7 +1,7 @@
 import { Image } from 'expo-image';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, ScrollView, Text, View } from 'react-native';
-import Animated, { FadeIn } from 'react-native-reanimated';
+import Animated, { cancelAnimation, Easing, FadeIn, useAnimatedStyle, useSharedValue, withRepeat, withTiming, type SharedValue } from 'react-native-reanimated';
 import { BotAvatar } from '../components/BotAvatar';
 import { Check, Download, PawPrint, Search, Trash2 } from '../components/icons';
 import { JobSheet } from '../components/JobSheet';
@@ -9,16 +9,17 @@ import { PetSprite } from '../components/PetSprite';
 import { Screen } from '../components/Screen';
 import { withSelectedServer } from '../components/ServerScreen';
 import { Sheet } from '../components/Sheet';
-import { Button, Card, Chip, ConfirmButton, Field, ListGroup, ListRow, SectionHeader, Skeleton, Tap, Toggle } from '../components/ui';
+import { Button, Card, Chip, ConfirmButton, Footnote, SearchField, ListGroup, ListRow, SectionHeader, Skeleton, Tap, Toggle } from '../components/ui';
 import { api, ApiError, mediaUrl, signedApi } from '../lib/api';
 import { idempotencyKey } from '../lib/control';
 import { haptic } from '../lib/haptics';
+import { spring, useReducedMotion } from '../lib/motion';
 import { PET_STATES, type PetState } from '../lib/pets';
 import { useApp } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
 import type { CatalogPet, InstalledPet, Job, PetList, Server } from '../lib/types';
 
-const TILE_GAP = 10;
+const TILE_GAP = 12;
 
 type Picked = { pet: InstalledPet | CatalogPet; installed: boolean };
 
@@ -41,6 +42,7 @@ function PetsScreen() {
   const [busy, setBusy] = useState(false);
   const [job, setJob] = useState<Job | null>(null);
   const [width, setWidth] = useState(0);
+  const reduced = useReducedMotion();
 
   const loadMine = useCallback(() => {
     if (!server) return;
@@ -133,18 +135,18 @@ function PetsScreen() {
   const tile = width ? Math.floor((width - TILE_GAP * (columns - 1)) / columns) : 0;
   const installed = mine?.pets ?? [];
   return (
-    <Screen title="Pet" subtitle="Your agent's animated face. It shows what the agent is doing, on every phone paired with this bot.">
+    <Screen title="Pet">
       <View onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
         <Card style={s.stage}>
           {current ? (
-            <Animated.View entering={FadeIn} style={{ alignItems: 'center', gap: 6 }}>
-              <PetSprite sheet={current} uri={mediaUrl(server, current.sheet_url)} height={170} state={preview} />
+            <Animated.View entering={reduced ? undefined : FadeIn} style={{ alignItems: 'center', gap: 6 }}>
+              <PetSprite sheet={current} uri={mediaUrl(server, current.sheet_url)} height={160} state={preview} />
               <Text style={s.petName}>{current.name}</Text>
             </Animated.View>
           ) : (
             <View style={{ alignItems: 'center', gap: 10 }}>
-              <BotAvatar name={server.bot.name} size={88} animated glow />
-              <Text style={s.note}>{mine && installed.length ? 'The pet is off. The orb shows instead.' : 'No pet yet. Pick one from the gallery below.'}</Text>
+              <BotAvatar name={server.bot.name} size={80} animated />
+              <Text style={s.note}>{mine && installed.length ? 'Pet display is off.' : 'Pick a pet from the gallery.'}</Text>
             </View>
           )}
           {current ? (
@@ -157,16 +159,16 @@ function PetsScreen() {
 
         {installed.length ? (
           <ListGroup style={{ marginTop: 14 }}>
-            <ListRow icon={<PawPrint size={18} color={t.colors.onAccentSoft} />} title="Show the pet" subtitle="Off shows the orb instead"
+            <ListRow icon={<PawPrint />} title="Show the pet" subtitle="Off shows the orb instead"
               right={<Toggle label="Show the pet" value={!!mine?.enabled} onValueChange={show} />} />
           </ListGroup>
         ) : null}
 
         {installed.length ? (
           <>
-            <SectionHeader title={`On your server · ${installed.length}`} />
+            <SectionHeader title="On your server" right={<Text style={s.credit}>{installed.length}</Text>} />
             <View style={s.grid}>
-              {installed.map((p) => (
+              {installed.map((p, i) => (
                 <PetTile key={p.slug} server={server} name={p.name} thumb={p.thumb_url} size={tile}
                   active={!!mine?.enabled && mine.active === p.slug} onPress={() => setPicked({ pet: p, installed: true })} />
               ))}
@@ -175,34 +177,33 @@ function PetsScreen() {
         ) : null}
 
         <SectionHeader title="Gallery" right={<Text style={s.credit}>petdex.dev</Text>} />
-        <Field value={query} onChangeText={setQuery} placeholder="Search pets" autoCapitalize="none" autoCorrect={false}
-          accessibilityLabel="Search the pet gallery" />
+        <SearchField value={query} onChangeText={setQuery} placeholder="Search the pet gallery" />
         {galleryError ? <Text style={s.error}>{galleryError}</Text> : null}
         {!gallery ? (
           <View style={{ marginTop: 12, gap: 10 }}>
-            <Text style={s.caption}>Getting pets from petdex.dev. The first time can take a few seconds.</Text>
-            <View style={s.grid}>{[0, 1, 2, 3, 4, 5].map((i) => <Skeleton key={i} width={tile || 96} height={(tile || 96) + 24} radius={16} />)}</View>
+            <Text style={s.caption}>Loading the gallery…</Text>
+            <View style={s.grid}>{[0, 1, 2, 3, 4, 5].map((i) => <Skeleton key={i} width={tile || 96} height={(tile || 96) + 28} radius={t.radius.lg} />)}</View>
           </View>
         ) : gallery.pets.length ? (
-          <Animated.View entering={FadeIn}>
+          <View>
             <View style={[s.grid, { marginTop: 12 }]}>
-              {gallery.pets.map((p) => (
+              {gallery.pets.map((p, i) => (
                 <PetTile key={p.slug} server={server} name={p.name} thumb={p.thumb_url} size={tile} installed={p.installed}
                   active={!!mine?.enabled && mine.active === p.slug} onPress={() => setPicked({ pet: p, installed: p.installed })} />
               ))}
             </View>
             {gallery.pets.length < gallery.total ? (
-              <Button title={`Show more · ${gallery.total - gallery.pets.length} left`} variant="secondary" loading={more} style={{ marginTop: 14 }}
+              <Button title={`Show more (${gallery.total - gallery.pets.length} left)`} variant="secondary" loading={more} style={{ marginTop: 14 }}
                 onPress={async () => { setMore(true); await loadGallery(query.trim(), gallery.pets.length); setMore(false); }} />
             ) : null}
-          </Animated.View>
+          </View>
         ) : !galleryError ? (
           <View style={s.empty}>
             <Search size={22} color={t.colors.textTertiary} />
             <Text style={s.note}>{query ? `No pets match "${query}".` : 'The gallery is empty.'}</Text>
           </View>
         ) : null}
-        <Text style={s.footnote}>Pets come from petdex.dev, a public gallery made by its community. Your server downloads the one you pick.</Text>
+        <Footnote>Community pets from petdex.dev download to your server.</Footnote>
       </View>
 
       <PetSheet server={server} picked={picked} busy={busy} active={!!mine?.enabled && mine.active === picked?.pet.slug}
@@ -213,6 +214,7 @@ function PetsScreen() {
   );
 }
 
+/** A pet in a tile; the one showing now is outlined and ticked. */
 function PetTile({ server, name, thumb, size, active, installed, onPress }: {
   server: Server; name: string; thumb: string; size: number; active?: boolean; installed?: boolean; onPress: () => void;
 }) {
@@ -220,13 +222,14 @@ function PetTile({ server, name, thumb, size, active, installed, onPress }: {
   const s = useStyles();
   if (!size) return null;
   return (
-    <Tap feedback="selection" onPress={onPress} accessibilityLabel={`${name}${active ? ', showing now' : installed ? ', on your server' : ''}`}
-      style={{ width: size, gap: 6 }}>
-      <View style={[s.thumb, { height: size }, active && { borderColor: t.colors.accent, borderWidth: 2 }]}>
-        <PawPrint size={size / 4} color={t.colors.textTertiary} style={{ position: 'absolute' }} />
-        <Image source={{ uri: mediaUrl(server, thumb) }} style={{ width: '82%', height: '82%' }} contentFit="contain" cachePolicy="disk"
-          transition={150} accessibilityIgnoresInvertColors />
-        {active ? <View style={s.check}><Check size={12} color={t.colors.onAccent} /></View> : null}
+    <Tap feedback="selection" scaleTo={0.97} onPress={onPress} accessibilityLabel={`${name}${active ? ', showing now' : installed ? ', on your server' : ''}`}
+      style={({ hovered }) => [s.tile, { width: size }, hovered && { borderColor: t.colors.borderStrong }, active && { borderColor: t.colors.text }]}>
+      <View style={[s.tileArt, { height: size - 16 }]}>
+        <View style={{ width: '84%', height: '84%' }}>
+          <Image source={{ uri: mediaUrl(server, thumb) }} style={{ width: '100%', height: '100%' }} contentFit="contain" cachePolicy="disk"
+            transition={150} accessibilityIgnoresInvertColors />
+        </View>
+        {active ? <View style={s.check}><Check size={12} color={t.colors.onInk} strokeWidth={3} /></View> : null}
       </View>
       <Text style={s.tileName} numberOfLines={1}>{name}</Text>
     </Tap>
@@ -253,15 +256,16 @@ function PetSheet({ server, picked, busy, active, onClose, onAdopt, onRemove }: 
         <View style={[s.thumb, { height: 150, alignSelf: 'center', width: 150 }]}>
           <Image source={{ uri: mediaUrl(server, pet.thumb_url) }} style={{ width: '86%', height: '86%' }} contentFit="contain" cachePolicy="disk" />
         </View>
-        {by || about ? <Text style={s.note}>{[about, by].filter(Boolean).join(' · ')}</Text> : null}
+        {about ? <Text style={s.note}>{about}</Text> : null}
+        {by ? <Text style={s.caption}>{by}</Text> : null}
         {active ? (
-          <Text style={[s.note, { color: t.colors.success }]}>This is your agent's pet now.</Text>
+          <Text style={[s.note, { color: t.colors.success }]}>Selected pet</Text>
         ) : (
           <Button title={x.installed ? 'Make it the pet' : 'Adopt'} loading={busy}
             icon={x.installed ? <PawPrint size={16} color={t.colors.onAccent} /> : <Download size={16} color={t.colors.onAccent} />}
             onPress={() => onAdopt(pet.slug)} />
         )}
-        {!x.installed ? <Text style={s.caption}>Your server downloads it from petdex.dev. Everyone paired with this bot sees it.</Text> : null}
+        {!x.installed ? <Text style={s.caption}>Downloads to your server and appears on every paired device.</Text> : null}
         {x.installed ? (
           <ConfirmButton title="Remove from server" loading={busy} icon={<Trash2 size={16} color={t.colors.danger} />}
             onConfirm={() => onRemove(pet.slug)} accessibilityLabel={`Remove ${pet.name} from the server`} />
@@ -273,18 +277,22 @@ function PetSheet({ server, picked, busy, active, onClose, onAdopt, onRemove }: 
 }
 
 const useStyles = makeStyles((t) => ({
-  stage: { marginTop: 18, gap: 14, paddingVertical: 20, alignItems: 'stretch' },
-  petName: { ...t.type.bodyStrong, color: t.colors.text },
+  stage: { marginTop: t.space.lg, gap: 14, paddingVertical: t.space.xl, alignItems: 'stretch', overflow: 'hidden' },
+  petName: { ...t.type.title, color: t.colors.text },
   note: { ...t.type.callout, color: t.colors.textSecondary, textAlign: 'center' },
   caption: { ...t.type.caption, color: t.colors.textSecondary, textAlign: 'center' },
   credit: { ...t.type.caption, color: t.colors.textTertiary },
   error: { ...t.type.callout, color: t.colors.danger, marginTop: 10 },
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: TILE_GAP },
-  thumb: { borderRadius: 16, backgroundColor: t.colors.surfaceSunken, alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
-    borderWidth: 2, borderColor: 'transparent' },
-  check: { position: 'absolute', top: 6, right: 6, width: 20, height: 20, borderRadius: 10, backgroundColor: t.colors.accentFill,
+  thumb: { borderRadius: t.radius.xl, backgroundColor: t.colors.surface, alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+    borderWidth: 1, borderColor: t.colors.border },
+  tile: {
+    padding: t.space.sm, paddingBottom: t.space.md, gap: t.space.xs, borderRadius: t.radius.lg, backgroundColor: t.colors.surface,
+    borderWidth: 1, borderColor: t.colors.border,
+  },
+  tileArt: { alignItems: 'center', justifyContent: 'center' },
+  check: { position: 'absolute', top: 0, right: 0, width: 22, height: 22, borderRadius: t.radius.pill, backgroundColor: t.colors.ink,
     alignItems: 'center', justifyContent: 'center' },
   tileName: { ...t.type.caption, color: t.colors.text, textAlign: 'center' },
   empty: { alignItems: 'center', gap: 8, paddingVertical: 28 },
-  footnote: { ...t.type.caption, color: t.colors.textTertiary, marginTop: 18, paddingHorizontal: 4 },
 }));

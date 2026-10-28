@@ -4,7 +4,7 @@ import { CheckCircle2, Key, Plug } from '../components/icons';
 import { Screen } from '../components/Screen';
 import { withSelectedServer } from '../components/ServerScreen';
 import { Sheet } from '../components/Sheet';
-import { Button, ConfirmButton, Field, ListGroup, ListRow, LoadError, SectionHeader, Skeleton } from '../components/ui';
+import { Button, ConfirmButton, Field, Footnote, ListGroup, ListRow, LoadError, SectionHeader, Skeleton } from '../components/ui';
 import { api, serverKey, signedApi } from '../lib/api';
 import { seal } from '../lib/crypto';
 import { haptic } from '../lib/haptics';
@@ -38,7 +38,7 @@ function ProvidersScreen() {
   const other = (providers ?? []).filter((p) => !p.authenticated && !(p.auth_type === 'api_key' && p.key_env));
 
   return (
-    <Screen title="Providers" subtitle="Model providers your agent can use. Keys are encrypted on this phone for your server alone and never shown again."
+    <Screen title="Providers"
       onRefresh={load}>
       {error && providers ? <Text style={s.error}>{error}</Text> : null}
       {!providers ? (error ? <LoadError message={error} onRetry={load} /> : (
@@ -49,16 +49,16 @@ function ProvidersScreen() {
           <ListGroup>
             {ready.length ? ready.map((p) => (
               <ListRow key={p.slug} icon={<CheckCircle2 size={18} color={t.colors.success} />} iconColor={t.colors.success} title={p.name}
-                subtitle={`${p.total_models} model${p.total_models === 1 ? '' : 's'}${p.is_current ? ' · in use' : ''}`}
+                subtitle={p.is_current ? 'In use' : undefined} value={`${p.total_models} models`}
                 onPress={p.key_env ? () => setEditing(p) : undefined} chevron={!!p.key_env} />
-            )) : <ListRow title="None yet" subtitle="Add a key below to start." />}
+            )) : <ListRow title="No providers ready" />}
           </ListGroup>
           {keyed.length ? (
             <>
               <SectionHeader title="Add with an API key" />
               <ListGroup>
                 {keyed.map((p) => (
-                  <ListRow key={p.slug} icon={<Key size={18} color={t.colors.onAccentSoft} />} title={p.name} subtitle={p.key_env} onPress={() => setEditing(p)} />
+                  <ListRow key={p.slug} icon={<Key size={18} color={t.colors.textSecondary} />} title={p.name} value={p.key_env} onPress={() => setEditing(p)} />
                 ))}
               </ListGroup>
             </>
@@ -66,11 +66,11 @@ function ProvidersScreen() {
           {other.length ? (
             <>
               <SectionHeader title="Set up on the server" />
-              <Text style={[s.note, { marginBottom: 8 }]}>These sign in through a browser. Run `hermes model` on the server to connect them.</Text>
               <ListGroup>
                 {(allOthers ? other : other.slice(0, 20)).map((p) => <ListRow key={p.slug} icon={<Plug size={18} color={t.colors.textSecondary} />} title={p.name} />)}
                 {other.length > 20 && !allOthers ? <ListRow title={`Show all ${other.length}`} onPress={() => setAllOthers(true)} /> : null}
               </ListGroup>
+              <Footnote>Run `hermes model` on the server to sign in.</Footnote>
             </>
           ) : null}
         </>
@@ -133,7 +133,8 @@ function KeySheet({ provider, onClose, onSaved }: { provider: Provider | null; o
     <Sheet visible={!!provider} onClose={close} title={p.name} scrollable>
       <View style={{ gap: 14, paddingHorizontal: 4 }}>
         <Field value={value} onChangeText={setValue} placeholder={p.authenticated ? 'Paste a new key to replace it' : `Paste your ${p.name} API key`}
-          secureTextEntry autoCapitalize="none" autoCorrect={false} hint={`Saved on your server as ${p.key_env}. It's checked with ${p.name} first.`} />
+          secureTextEntry autoCapitalize="none" autoCorrect={false} hint={`Saved as ${p.key_env} after validation.`} />
+        <Footnote>Keys are encrypted for this server and never shown again.</Footnote>
         <Button title={p.authenticated ? 'Replace key' : 'Save key'} loading={busy} disabled={!value.trim()} onPress={save} />
         {p.authenticated ? <ConfirmButton title="Remove key" loading={busy} onConfirm={remove} accessibilityLabel={`Remove the ${p.name} key`} /> : null}
         {error ? <Text style={[s.note, { color: t.colors.danger, textAlign: 'center' }]}>{error}</Text> : null}

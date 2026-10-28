@@ -153,7 +153,7 @@ def _plan_at(visible: List[Dict[str, Any]], rows: List[Dict[str, Any]], message_
         raise BranchRefused("unsupported", "Only an assistant reply can be regenerated.", 400)
 
     # The user message that anchors this turn. Editing/regenerating a reply always anchors on
-    # the prompt it answered; this is the prompt Herald's rewind targets too.
+    # the prompt it answered, which is where a rewind should land.
     if target_role == "user":
         prompt_index = index
     else:

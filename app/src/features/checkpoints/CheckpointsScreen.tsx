@@ -4,7 +4,7 @@ import { ActivityIndicator, Text, View } from 'react-native';
 import { ChevronRight, FileDiff, RefreshCw, ShieldCheck, TriangleAlert } from '../../components/icons';
 import { Screen } from '../../components/Screen';
 import { withSelectedServer } from '../../components/ServerScreen';
-import { Card, IconButton, LoadError, SectionHeader, Skeleton, Tap } from '../../components/ui';
+import { Card, Footnote, IconButton, ListGroup, ListRow, LoadError, SectionHeader, Skeleton, Tap } from '../../components/ui';
 import { haptic } from '../../lib/haptics';
 import { isOwner, useApp, useServerState } from '../../lib/store';
 import { makeStyles, useTheme } from '../../lib/themeContext';
@@ -75,14 +75,14 @@ function CheckpointsScreen() {
   };
 
   const body = () => {
-    if (!owner) return <Notice icon="shield" title="Owners only" body="Checkpoints name files on the server and restoring changes them, so only an owner can use this." />;
+    if (!owner) return <Notice icon="shield" title="Owners only" body="Only owners can inspect and restore server files." />;
     if (!rt?.info) {
       return online ? <TimelineSkeleton />
         : <Notice icon="alert" title="Offline" body="Connect to your server to see the folder it snapshots." />;
     }
     if (!supported) {
       return <Notice icon="alert" title="Not available on this server"
-        body="This version of Winglet on your server doesn't offer workspace checkpoints. Update the server, then try again." />;
+        body="Update this server to enable workspace checkpoints." />;
     }
     if (loading && !data) return <TimelineSkeleton />;
     if (error && !data) return <LoadError message={error} onRetry={reload} />;
@@ -98,7 +98,7 @@ function CheckpointsScreen() {
     }
     if (!data.checkpoints.length) {
       return <Notice icon="clock" title="No snapshots yet"
-        body="Hermes takes one just before it first changes a file in this folder. Snapshots cover files, not your chats." />;
+        body="Snapshots appear before Hermes changes a file." />;
     }
     const days: { label: string; rows: CheckpointSummary[] }[] = [];
     for (const row of data.checkpoints) {
@@ -117,7 +117,7 @@ function CheckpointsScreen() {
         ) : null}
         {days.map((group) => (
           <View key={group.label}>
-            <Text style={s.dayLabel} accessibilityRole="header">{group.label}</Text>
+            <SectionHeader title={group.label} />
             <View style={s.timeline}>
               {group.rows.map((row, index) => (
                 <TimelineRow key={row.hash} checkpoint={row} first={group === days[0] && index === 0}
@@ -132,29 +132,17 @@ function CheckpointsScreen() {
   };
 
   return (
-    <Screen title="Checkpoints" subtitle={data?.workspace?.path
-      ? `Snapshots of ${data.workspace.path}, taken just before Hermes changes a file there. Files only — your chats are never rolled back.`
-      : 'Snapshots Hermes takes of the folder it works in, just before it changes a file there. Files only — never your chats.'}
+    <Screen title="Checkpoints" subtitle={data?.workspace?.path || undefined}
       onRefresh={load} right={<IconButton label="Refresh checkpoints" variant="filled" onPress={reload}>
         {loading && data ? <ActivityIndicator size="small" color={t.colors.text} /> : <RefreshCw size={19} color={t.colors.text} />}
       </IconButton>}>
       <View style={s.body}>
         {data?.supported && data.enabled && data.checkpoints.length ? (
-          <View style={s.scopeRow}>
-            <View style={s.scopeTile}><FileDiff size={18} color={t.colors.onAccentSoft} /></View>
-            <View style={{ flex: 1, minWidth: 0 }}>
-              <Text style={s.scopeLabel}>Workspace</Text>
-              <Text style={s.scopePath} numberOfLines={2}>{data.workspace.path || data.workspace.name || 'The server folder'}</Text>
-            </View>
-            <Text style={s.scopeCount}>{data.checkpoints.length === 1 ? '1 snapshot' : `${data.checkpoints.length} snapshots`}</Text>
-          </View>
+          <ListGroup><ListRow icon={<FileDiff />} title="Snapshots" value={String(data.checkpoints.length)} /></ListGroup>
         ) : null}
         {body()}
         {data?.supported && data.enabled && data.can_restore && data.checkpoints.length ? (
-          <Text style={s.footnote}>
-            Restoring puts the folder back as it was at that snapshot. Hermes keeps a safety snapshot first,
-            so an undo is another checkpoint. A snapshot covers files only; chat messages, memory and skills stay as they are.
-          </Text>
+          <Footnote>Restoring changes files only. Chats, memory and skills stay unchanged; a safety snapshot lets you undo.</Footnote>
         ) : null}
       </View>
       <CheckpointSheet server={server} checkpoint={open} visible={!!open} online={online}
@@ -171,7 +159,7 @@ function TimelineRow({ checkpoint, first, last, onPress }: {
   const t = useTheme();
   const s = useStyles();
   const counts = countsLabel(checkpoint);
-  const meta = [clockTime(checkpoint.at), counts, checkpoint.short].filter(Boolean).join(' · ');
+  const meta = [clockTime(checkpoint.at), counts, checkpoint.short].filter(Boolean).join(', ');
   return (
     <Tap feedback="selection" scaleTo={0.99} onPress={onPress} accessibilityRole="button"
       accessibilityLabel={`${checkpoint.label}, ${meta}${checkpoint.safety ? ', safety snapshot' : ''}`}
@@ -184,11 +172,11 @@ function TimelineRow({ checkpoint, first, last, onPress }: {
       <View style={{ flex: 1, minWidth: 0 }}>
         <View style={s.titleRow}>
           <Text style={s.label} numberOfLines={2}>{checkpoint.label}</Text>
-          {checkpoint.safety ? <View style={s.safetyChip}><ShieldCheck size={11} color={t.colors.onAccentSoft} /><Text style={s.safetyText}>Safety</Text></View> : null}
+          {checkpoint.safety ? <View style={s.safetyChip}><ShieldCheck size={11} color={t.colors.textSecondary} /><Text style={s.safetyText}>Safety</Text></View> : null}
         </View>
-        <Text style={s.meta} numberOfLines={2}>{meta}</Text>
+        <Text style={s.meta} numberOfLines={2}>{counts || checkpoint.short}</Text>
       </View>
-      <ChevronRight size={18} color={t.colors.textTertiary} />
+      <Text style={s.time}>{clockTime(checkpoint.at)}</Text><ChevronRight size={18} color={t.colors.textTertiary} />
     </Tap>
   );
 }
@@ -207,13 +195,13 @@ function TimelineSkeleton() {
 function Notice({ icon, title, body, testID }: { icon: 'alert' | 'shield' | 'clock'; title: string; body: string; testID?: string }) {
   const t = useTheme();
   const s = useStyles();
-  const glyph = icon === 'shield' ? <ShieldCheck size={20} color={t.colors.onAccentSoft} />
-    : icon === 'clock' ? <FileDiff size={20} color={t.colors.onAccentSoft} />
+  const glyph = icon === 'shield' ? <ShieldCheck size={20} color={t.colors.textSecondary} />
+    : icon === 'clock' ? <FileDiff size={20} color={t.colors.textSecondary} />
       : <TriangleAlert size={20} color={t.colors.warning} />;
   return (
     <Card style={s.notice} accessibilityLabel={`${title}. ${body}`}>
       <View testID={testID} style={{ flex: 1, gap: 10 }}>
-        <View style={[s.noticeIcon, icon === 'alert' && { backgroundColor: t.colors.warningSoft }]}>{glyph}</View>
+        <View style={s.noticeIcon}>{glyph}</View>
         <Text style={s.noticeTitle} accessibilityRole="header">{title}</Text>
         <Text style={s.noticeBody}>{body}</Text>
       </View>
@@ -227,7 +215,7 @@ const useStyles = makeStyles((t) => ({
     flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, borderRadius: t.radius.lg,
     backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border, marginBottom: 6,
   },
-  scopeTile: { width: 34, height: 34, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: t.colors.accentSoft },
+  scopeTile: { width: 34, height: 34, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: t.colors.surfaceSunken },
   scopeLabel: { ...t.type.label, color: t.colors.textSecondary },
   scopePath: { ...t.type.caption, fontFamily: t.fonts.mono, color: t.colors.text, marginTop: 3 },
   scopeCount: { ...t.type.caption, color: t.colors.textTertiary },
@@ -241,10 +229,11 @@ const useStyles = makeStyles((t) => ({
   label: { ...t.type.bodyStrong, color: t.colors.text, flexShrink: 1 },
   safetyChip: {
     flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: 7, paddingVertical: 2, borderRadius: t.radius.pill,
-    backgroundColor: t.colors.accentSoft,
+    backgroundColor: t.colors.surfaceSunken,
   },
-  safetyText: { ...t.type.caption, fontSize: 10.5, fontFamily: t.fonts.semibold, color: t.colors.onAccentSoft },
-  meta: { ...t.type.caption, fontFamily: t.fonts.mono, fontSize: 11.5, color: t.colors.textTertiary, marginTop: 5 },
+  safetyText: { ...t.type.caption, color: t.colors.textSecondary },
+  meta: { ...t.type.footnote, color: t.colors.textSecondary, marginTop: t.space.xs },
+  time: { ...t.type.caption, color: t.colors.textSecondary, alignSelf: 'center' },
   busyNote: {
     flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, marginTop: 10, borderRadius: t.radius.md,
     backgroundColor: t.colors.warningSoft,
@@ -254,7 +243,7 @@ const useStyles = makeStyles((t) => ({
   loading: { ...t.type.caption, color: t.colors.textTertiary, textAlign: 'center', marginTop: 4 },
   footnote: { ...t.type.caption, fontFamily: t.fonts.regular, color: t.colors.textTertiary, lineHeight: 18, marginTop: 16, paddingHorizontal: 4 },
   notice: { alignItems: 'center', marginTop: 14 },
-  noticeIcon: { width: 40, height: 40, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: t.colors.accentSoft },
+  noticeIcon: { alignItems: 'flex-start' },
   noticeTitle: { ...t.type.heading, color: t.colors.text, marginTop: 2 },
   noticeBody: { ...t.type.callout, color: t.colors.textSecondary, lineHeight: 21 },
 }));

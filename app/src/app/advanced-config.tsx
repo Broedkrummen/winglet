@@ -3,7 +3,7 @@ import { Text, View } from 'react-native';
 import { Screen } from '../components/Screen';
 import { Sheet } from '../components/Sheet';
 import { withSelectedServer } from '../components/ServerScreen';
-import { Button, Card, ConfirmButton, Field, ListGroup, ListRow, LoadError, SearchField, SectionHeader, Skeleton, Toggle } from '../components/ui';
+import { Button, Card, ConfirmButton, Field, Footnote, ListGroup, ListRow, LoadError, SearchField, SectionHeader, Skeleton, Toggle } from '../components/ui';
 import { api, signedApi } from '../lib/api';
 import { isOwner, useApp, useServerState } from '../lib/store';
 import { makeStyles } from '../lib/themeContext';
@@ -69,22 +69,22 @@ function AdvancedConfig() {
       const result = await signedApi<ConfigCatalog>(server, 'POST', '/api/config/apply', {revision: preview.revision, changes});
       if (ticket === generation.current) {
         keepDraft(key); setChanges({}); setCatalog(result); setPreview(null);
-        setMessage('Saved for this bot. Start a new chat for memory and file settings; context and turn limits apply next turn.');
+        setMessage('Saved. Memory and file settings apply to new chats; context and turn limits apply next turn.');
       }
     } catch(e) { if (ticket === generation.current) { setPreview(null); setError((e as Error).message); } }
     finally { if (ticket === generation.current) setBusy(false); }
   };
   const discard = () => { generation.current++; keepDraft(key); setChanges({}); setPreview(null); setBusy(false); setError(''); };
   const visible = matchingFields(catalog?.fields ?? [], query);
-  return <Screen title="Agent configuration" subtitle="Context, memory and execution. Review changes before saving to this bot." onRefresh={!count ? load : undefined}>
+  return <Screen title="Agent configuration" onRefresh={!count ? load : undefined}>
     {!isOwner(rt) ? <Text style={s.note}>Only an owner can manage these settings.</Text> : <>
-      {!live ? <Text style={s.note}>Offline. Loaded settings and unsaved changes stay here; reconnect to review or save.</Text> : null}
+      {!live ? <Text style={s.note}>Offline. Reconnect to review or save; your draft is kept.</Text> : null}
       {error ? count ? <Text style={s.error} accessibilityLiveRegion="polite">{error}</Text> : <LoadError message={error} onRetry={load} /> : null}
       {!catalog ? <Skeleton height={260} /> : <>
         <SearchField value={query} onChangeText={setQuery} placeholder="Search agent settings" style={{marginTop: 16}} />
         {count ? <Card style={s.pending}>
           <Text style={s.title}>{count} unsaved {count === 1 ? 'change' : 'changes'}</Text>
-          <Text style={s.note}>Kept while you navigate or switch bots in this app session.</Text>
+          <Footnote>Draft kept for this app session.</Footnote>
           <Button title="Review changes" onPress={review} disabled={!live || busy} loading={busy} />
           <ConfirmButton title="Discard changes and reload" onConfirm={() => {discard(); setCatalog(null);}} />
         </Card> : null}
@@ -95,7 +95,7 @@ function AdvancedConfig() {
               const changed = Object.prototype.hasOwnProperty.call(changes, field.key);
               const value = changed ? changes[field.key] ?? field.default : field.value;
               return <ListRow key={field.key} title={field.label}
-                subtitle={`${changed ? 'Unsaved · ' : ''}${field.source === 'managed' ? 'Managed by your server' : changed && changes[field.key] === null ? 'Reset to inherited' : field.source === 'override' ? 'Custom for this bot' : 'Inherited from Hermes'}`}
+                subtitle={changed ? changes[field.key] === null ? 'Unsaved reset to inherited' : 'Unsaved change' : field.source === 'managed' ? 'Managed by your server' : field.source === 'override' ? 'Custom for this bot' : 'Inherited from Hermes'}
                 value={valueLabel(value)} onPress={busy || !field.writable ? undefined : () => {setInput(value === null ? '' : String(value)); setEditing(field); setError('');}} />;
             })}
           </ListGroup></View> : null;
@@ -107,8 +107,12 @@ function AdvancedConfig() {
     <Sheet visible={!!editing} title={editing?.label} onClose={() => setEditing(null)} scrollable>
       {editing ? <View style={s.sheet}>
         <Text style={s.note}>{editing.description}</Text>
-        <Text style={s.note}>Hermes default: {valueLabel(editing.default)} · {editing.applies === 'new_session' ? 'Start a new chat after saving' : 'Applies next turn'}</Text>
-        {editing.type === 'boolean' ? <Toggle label={editing.label} value={input === 'true'} onValueChange={v => setInput(String(v))} /> :
+        <ListGroup>
+          <ListRow title="Hermes default" value={valueLabel(editing.default)} />
+          <ListRow title="Applies to" value={editing.applies === 'new_session' ? 'New chats' : 'Next turn'} />
+        </ListGroup>
+        {editing.type === 'boolean' ? <ListGroup><ListRow title={editing.label}
+          right={<Toggle label={editing.label} value={input === 'true'} onValueChange={v => setInput(String(v))} />} /></ListGroup> :
           <Field label={editing.label} value={input} onChangeText={setInput} keyboardType="decimal-pad"
             hint={`From ${editing.minimum} to ${editing.maximum}`} autoCorrect={false} />}
         <Button title="Keep change" onPress={() => { try { edit(editing, editing.type === 'boolean' ? input === 'true' : parseConfigValue(editing, input)); setEditing(null); } catch(e) {setError((e as Error).message);} }} />
@@ -118,11 +122,10 @@ function AdvancedConfig() {
     </Sheet>
     <Sheet visible={!!preview} title="Review configuration" onClose={() => {if (!busy) setPreview(null);}} scrollable>
       <View style={s.sheet}>
-        {preview?.changes.map(change => <View key={change.key} style={s.change}>
-          <Text style={s.title}>{change.label}</Text>
-          <Text style={s.note}>{valueLabel(change.before)} → {valueLabel(change.after)}{change.reset ? ' · Inherited' : ''} · {change.applies === 'new_session' ? 'New chats' : 'Next turn'}</Text>
-        </View>)}
-        <Text style={s.note}>Only this bot changes. Existing turns continue; the server will not restart.</Text>
+        <ListGroup>{preview?.changes.map(change => <ListRow key={change.key} title={change.label}
+          value={`${valueLabel(change.before)} → ${valueLabel(change.after)}`}
+          subtitle={`${change.reset ? 'Reset to inherited. ' : ''}${change.applies === 'new_session' ? 'New chats' : 'Next turn'}`} />)}</ListGroup>
+        <Footnote>Only this bot changes; no restart.</Footnote>
         <Button title="Apply reviewed changes" onPress={apply} loading={busy} disabled={!live || busy} />
       </View>
     </Sheet>
@@ -133,7 +136,6 @@ const useStyles = makeStyles(t => ({
   title: {...t.type.callout, color: t.colors.text, fontFamily: t.fonts.semibold},
   error: {...t.type.callout, color: t.colors.danger},
   sheet: {paddingHorizontal: 8, gap: 14},
-  pending: {marginTop: 14, gap: 8, borderColor: t.colors.accent},
-  change: {paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: t.colors.border},
+  pending: {marginTop: t.space.lg, gap: t.space.sm},
 }));
 

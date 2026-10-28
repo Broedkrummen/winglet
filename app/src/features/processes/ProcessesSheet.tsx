@@ -3,8 +3,8 @@ import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Sheet } from '../../components/Sheet';
-import { ArrowDown, ChevronLeft, ChevronRight, Copy, Cpu, RefreshCw, Square } from '../../components/icons';
-import { Button, IconButton, Tap } from '../../components/ui';
+import { ArrowDown, ChevronLeft, Copy, Cpu, RefreshCw, Square } from '../../components/icons';
+import { Button, IconButton, ListGroup, ListRow } from '../../components/ui';
 import { api, ApiError, signedApi } from '../../lib/api';
 import { isOwner, useApp } from '../../lib/store';
 import { makeStyles, useTheme } from '../../lib/themeContext';
@@ -112,9 +112,9 @@ export function ProcessesSheet({ server, chatId, visible, onClose }: {
   const active = row?.stop?.status === 'stopping';
   const color = (item: ProcessRow) => item.status === 'running' ? t.colors.accent : item.exit_code ? t.colors.warning : t.colors.success;
 
-  return <Sheet visible={visible} onClose={onClose} title={confirm ? 'Stop this process?' : selected ? 'Process output' : 'Background processes'}>
+  return <Sheet visible={visible} onClose={onClose} title={confirm ? 'Stop process' : selected ? 'Process output' : 'Processes'}>
     <View style={{ height: Math.max(180, Math.min(560, height - insets.top - insets.bottom - 160)), gap: 12 }}>
-      {!online ? <Text style={s.notice} accessibilityLiveRegion="polite">Connection lost. Reconnect to refresh output or stop a process.</Text> : null}
+      {!online ? <Text style={s.notice} accessibilityLiveRegion="polite">Offline. Reconnect to refresh or stop processes.</Text> : null}
       {!owner ? <Text style={s.notice}>Only an owner can inspect or stop server processes.</Text> : null}
       {error ? <View style={s.errorBox}><Text style={s.error} accessibilityLiveRegion="polite">{error}</Text>
         <Button title="Reload list" size="sm" variant="secondary" onPress={() => { back(); setRefresh(x => x + 1); }} /></View> : null}
@@ -128,9 +128,9 @@ export function ProcessesSheet({ server, chatId, visible, onClose }: {
           <Text style={s.meta}>Started {row.started_at ? new Date(row.started_at * 1000).toLocaleString() : 'time not reported'}</Text></View>
         {confirm ? <>
           <ScrollView style={s.flex} contentContainerStyle={{ gap: 14 }}>
-            <Text style={s.body}>This ends the background job running in this chat. Any unsaved work in that process may be lost.</Text>
-            <Text style={s.body}>Hermes stops the process using its server backend. Windows uses forceful tree termination; other backends may also force remaining processes to stop.</Text>
-            <Text style={s.meta}>Closing this sheet does not cancel a Stop request that has already started.</Text>
+            <Text style={s.body}>Stops this background job. Unsaved work may be lost.</Text>
+            <Text style={s.body}>Hermes may force the process tree to stop, including on Windows.</Text>
+            <Text style={s.meta}>Closing does not cancel a stop already requested.</Text>
           </ScrollView>
           <View style={s.actions}><Button title="Keep running" variant="secondary" style={s.flex} onPress={() => setConfirm(false)} />
             <Button title="Stop process" variant="danger" style={s.flex} disabled={!online || active || stale} loading={stopping} onPress={stop} /></View>
@@ -153,22 +153,18 @@ export function ProcessesSheet({ server, chatId, visible, onClose }: {
             icon={<Square size={15} color={t.colors.danger} />} onPress={() => { operation.current = ''; setConfirm(true); }} /> : null}
         </>}
       </> : <>
-        <View style={s.detailHead}><Text style={[s.meta, s.flex]}>Only jobs started by this chat's current session are shown.</Text>
+        <View style={s.detailHead}><Text style={[s.meta, s.flex]}>Jobs from this chat’s current session.</Text>
           <Button title="Refresh" size="sm" variant="ghost" disabled={!online} icon={<RefreshCw size={18} color={t.colors.text} />}
             onPress={() => setRefresh(x => x + 1)} /></View>
         {loading && !listing ? <ActivityIndicator style={{ margin: 24 }} color={t.colors.accent} /> : null}
         {listing?.supported === false ? <Text style={s.body}>This Hermes version can't report background processes. Update it on the server.</Text> : null}
         <ScrollView style={s.flex} contentContainerStyle={{ gap: 4 }}>
-          {listing?.processes.map(item => <Tap key={item.handle} style={s.row} accessibilityLabel={`${item.command}. ${processLabel(item)}. Show output.`}
-            onPress={() => { setRow(item); setSelected(item.handle); }}>
-            <Cpu size={20} color={color(item)} /><View style={s.flex}>
-              <Text style={s.command} numberOfLines={2}>{item.command || 'Background process'}</Text>
-              <Text style={[s.state, { color: color(item) }]}>{processLabel(item)}</Text>
-              <Text style={s.meta} numberOfLines={1}>{item.workspace || 'Workspace not reported'}</Text>
-            </View><ChevronRight size={18} color={t.colors.textTertiary} />
-          </Tap>)}
+          {listing?.processes.length ? <ListGroup>{listing.processes.map(item => <ListRow key={item.handle}
+            icon={<Cpu />} iconColor={color(item)} title={item.command || 'Background process'}
+            value={processLabel(item)} subtitle={item.workspace || 'Workspace not reported'}
+            onPress={() => { setRow(item); setSelected(item.handle); }} />)}</ListGroup> : null}
           {listing?.supported && listing.processes.length === 0 ? <View style={s.empty}><Cpu size={34} color={t.colors.textTertiary} />
-            <Text style={s.emptyTitle}>No background processes</Text><Text style={s.meta}>Builds, watchers and servers started by this chat will appear here.</Text></View> : null}
+            <Text style={s.emptyTitle}>No background processes</Text><Text style={s.meta}>Jobs started by this chat appear here.</Text></View> : null}
           {listing?.truncated ? <Text style={s.meta}>Showing the newest 80 processes.</Text> : null}
         </ScrollView>
       </>}
@@ -190,7 +186,7 @@ const useStyles = makeStyles(t => ({
   errorBox: { gap: 6 },
   error: { ...t.type.caption, color: t.colors.danger, lineHeight: 19 },
   output: { flex: 1, minHeight: 80, borderRadius: t.radius.md, backgroundColor: t.colors.codeBg, borderWidth: 1, borderColor: t.colors.border },
-  outputText: { fontFamily: t.fonts.mono, fontSize: 12, lineHeight: 19, color: t.colors.text, flexWrap: 'wrap' },
+  outputText: { ...t.type.footnote, fontFamily: t.fonts.mono, color: t.colors.codeText, flexWrap: 'wrap' },
   empty: { alignItems: 'center', gap: 14, paddingVertical: 40, paddingHorizontal: 16 },
   emptyTitle: { ...t.type.heading, color: t.colors.text },
 }));

@@ -61,15 +61,15 @@ export function FilesSheet({ server, chatId, visible, onClose, onJump }: {
                 </View>
               ) : <Text style={s.empty}>No photos in this chat yet.</Text>
             ) : others.length ? (
-              <View style={{ gap: 8 }}>
+              <View style={{ gap: t.space.sm }}>
                 {others.map((f, i) => (
                   <Tap key={`${f.url}-${i}`} feedback="selection" onPress={() => openFile(f)} onLongPress={() => { onClose(); onJump(f.message_id); }}
                     accessibilityLabel={`${f.name}, ${bytes(f.size)}. Open. Long-press to find it in the chat`}
-                    style={({ hovered }) => [s.file, hovered && { borderColor: t.colors.borderStrong }]}>
+                    scaleTo={0.98} style={({ hovered, pressed }) => [s.file, (hovered || pressed) && { borderColor: t.colors.borderStrong }]}>
                     <View style={s.fileIcon}>
-                      {f.kind === 'video' ? <Video size={18} color={t.colors.onAccentSoft} />
-                        : f.kind === 'voice' || f.kind === 'audio' ? <Mic size={18} color={t.colors.onAccentSoft} />
-                          : <FileText size={18} color={t.colors.onAccentSoft} />}
+                      {f.kind === 'video' ? <Video size={18} color={t.colors.textSecondary} />
+                        : f.kind === 'voice' || f.kind === 'audio' ? <Mic size={18} color={t.colors.textSecondary} />
+                          : <FileText size={18} color={t.colors.textSecondary} />}
                     </View>
                     <View style={{ flex: 1, minWidth: 0 }}>
                       <Text style={s.fileName} numberOfLines={1}>{f.kind === 'voice' ? 'Voice message' : f.name}</Text>
@@ -89,13 +89,13 @@ export function FilesSheet({ server, chatId, visible, onClose, onJump }: {
 
 const useStyles = makeStyles((t) => ({
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  cell: { borderRadius: t.radius.sm, overflow: 'hidden', backgroundColor: t.colors.surfaceSunken },
+  cell: { borderRadius: t.radius.md, overflow: 'hidden', backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border },
   empty: { ...t.type.callout, color: t.colors.textSecondary, textAlign: 'center', marginVertical: 28 },
   file: {
-    flexDirection: 'row', alignItems: 'center', gap: 12, padding: 12, borderRadius: t.radius.md, backgroundColor: t.colors.surface,
+    flexDirection: 'row', alignItems: 'center', gap: 12, padding: t.space.md, minHeight: 64, borderRadius: t.radius.lg, backgroundColor: t.colors.surface,
     borderWidth: 1, borderColor: t.colors.border,
   },
-  fileIcon: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: t.colors.accentSoft },
+  fileIcon: { width: 40, height: 40, borderRadius: t.radius.pill, alignItems: 'center', justifyContent: 'center', backgroundColor: t.colors.surfaceSunken },
   fileName: { ...t.type.callout, fontFamily: t.fonts.semibold, color: t.colors.text },
   fileMeta: { ...t.type.caption, color: t.colors.textSecondary, marginTop: 2 },
 }));

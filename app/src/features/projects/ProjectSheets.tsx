@@ -2,15 +2,15 @@ import { useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import { ArrowDown, ArrowUp, Archive, ArchiveRestore, Folder, Pencil, Trash2 } from '../../components/icons';
 import { Sheet, SheetAction } from '../../components/Sheet';
-import { Button, Field } from '../../components/ui';
+import { Button, Field, Footnote, ListGroup } from '../../components/ui';
 import { movedOrder, reorderableIds } from './logic';
 import { isOwner, useApp } from '../../lib/store';
 import { makeStyles, useTheme } from '../../lib/themeContext';
 import type { Server } from '../../lib/types';
 
 const useStyles = makeStyles((t) => ({
-  form: { gap: 14, paddingHorizontal: 4, paddingBottom: 6 },
-  note: { ...t.type.callout, color: t.colors.textSecondary, textAlign: 'center' },
+  form: { gap: t.space.md, paddingBottom: t.space.sm },
+  note: { ...t.type.callout, color: t.colors.textSecondary },
   error: { ...t.type.callout, color: t.colors.danger, textAlign: 'center' },
   tip: { ...t.type.caption, fontFamily: t.fonts.regular, color: t.colors.textTertiary, paddingHorizontal: 8 },
 }));
@@ -50,10 +50,9 @@ export function ProjectCreateSheet({ server, visible, onClose, onCreated }: {
   return (
     <Sheet visible={visible} onClose={onClose} title="New project">
       <View style={s.form}>
-        <Text style={s.note}>Group chats by topic. The project is saved on your server, so every device sees it.</Text>
         <Field label="Name" value={name} onChangeText={setName} placeholder="For example, Launch" autoFocus
           returnKeyType="done" onSubmitEditing={create} editable={!busy} maxLength={80} />
-        <Text style={s.tip}>Chats keep their own messages, draft and Hermes session. Moving a chat only changes where it is listed.</Text>
+        <Footnote>Moving chats only changes their listing, not messages, drafts or sessions.</Footnote>
         {error ? <Text style={s.error} accessibilityLiveRegion="polite">{error}</Text> : null}
         <Button title="Create project" onPress={create} loading={busy} disabled={!name.trim()} />
       </View>
@@ -112,15 +111,15 @@ export function ProjectMenuSheet({ server, projectId, visible, onClose, onDelete
       {!project ? <Text style={s.note}>This project is no longer here.</Text>
         : mode === 'rename' ? (
           <View style={s.form}>
-            <Field value={name} onChangeText={setName} placeholder="Project name" autoFocus returnKeyType="done"
+            <Field label="Project name" value={name} onChangeText={setName} placeholder="Project name" autoFocus returnKeyType="done"
               onSubmitEditing={rename} editable={!busy} maxLength={80} />
             <Button title="Save name" onPress={rename} loading={busy} disabled={!name.trim()} />
             <Button title="Cancel" variant="secondary" onPress={() => setMode('menu')} disabled={busy} />
           </View>
         ) : mode === 'delete' ? (
           <View style={s.form}>
-            <Text style={s.note}>“{project.name}” is removed from every device that can see it.</Text>
-            <Text style={s.note}>Its chats stay in Chats with their messages, drafts, pins and Hermes sessions. Nothing is deleted.</Text>
+            <Text style={s.note}>{project.private ? `“${project.name}” is removed from this device.` : `“${project.name}” is removed from all shared devices.`}</Text>
+            <Footnote>Its chats, messages, drafts, pins and sessions are kept.</Footnote>
             <Button title="Delete project only" variant="danger" loading={busy} onPress={async () => {
               setBusy(true);
               try {
@@ -139,25 +138,25 @@ export function ProjectMenuSheet({ server, projectId, visible, onClose, onDelete
         ) : (
           <>
             {!online ? <Text style={s.note}>Connect to your bot to change projects.</Text> : null}
-            {!canManage ? <Text style={s.note}>This is a shared project. Only an owner can rename, reorder, archive or delete it. You can still move your own chats in and out.</Text> : null}
+            {!canManage ? <Text style={s.note}>Owner-managed project. You can still move your own chats.</Text> : null}
             {canManage && online ? (
-              <>
-                <SheetAction icon={<Pencil size={20} color={t.colors.text} />} label="Rename project"
+              <ListGroup>
+                <SheetAction icon={<Pencil size={20} color={t.colors.textSecondary} />} label="Rename project"
                   onPress={() => { setName(project.name); setMode('rename'); }} />
-                {up ? <SheetAction icon={<ArrowUp size={20} color={t.colors.text} />} label="Move up"
+                {up ? <SheetAction icon={<ArrowUp size={20} color={t.colors.textSecondary} />} label="Move up"
                   onPress={() => change(() => useApp.getState().reorderProjects(server.id, up), 'Project moved', 'The new order is on every device.')} /> : null}
-                {down ? <SheetAction icon={<ArrowDown size={20} color={t.colors.text} />} label="Move down"
+                {down ? <SheetAction icon={<ArrowDown size={20} color={t.colors.textSecondary} />} label="Move down"
                   onPress={() => change(() => useApp.getState().reorderProjects(server.id, down!), 'Project moved', 'The new order is on every device.')} /> : null}
                 {project.archived
-                  ? <SheetAction icon={<ArchiveRestore size={20} color={t.colors.text} />} label="Restore project"
+                  ? <SheetAction icon={<ArchiveRestore size={20} color={t.colors.textSecondary} />} label="Restore project"
                     onPress={() => change(() => useApp.getState().setProjectArchived(server.id, projectId, false), 'Project restored', 'It is back in Projects.')} />
-                  : <SheetAction icon={<Archive size={20} color={t.colors.text} />} label="Archive project"
+                  : <SheetAction icon={<Archive size={20} color={t.colors.textSecondary} />} label="Archive project"
                     onPress={() => change(() => useApp.getState().setProjectArchived(server.id, projectId, true), 'Project archived', 'Its chats are still in Chats. Find the project under Archived.')} />}
                 <SheetAction icon={<Trash2 size={20} color={t.colors.danger} />} label="Delete project…" destructive
                   onPress={() => setMode('delete')} />
-              </>
+              </ListGroup>
             ) : null}
-            <SheetAction icon={<Folder size={20} color={t.colors.text} />} label={`${project.chat_count} ${project.chat_count === 1 ? 'chat' : 'chats'} in this project`}
+            <SheetAction icon={<Folder size={20} color={t.colors.textSecondary} />} label={`${project.chat_count} ${project.chat_count === 1 ? 'chat' : 'chats'} in this project`}
               onPress={onClose} />
           </>
         )}

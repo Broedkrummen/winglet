@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
+import Animated, { FadeIn } from 'react-native-reanimated';
 import { BookUser, NotebookPen, Plus } from '../components/icons';
 import { Screen } from '../components/Screen';
 import { withSelectedServer } from '../components/ServerScreen';
 import { Sheet } from '../components/Sheet';
-import { Button, Card, ConfirmButton, Field, LoadError, SectionHeader, Skeleton, Tap } from '../components/ui';
+import { Button, ConfirmButton, Field, Footnote, ListGroup, ListRow, LoadError, SectionHeader, Skeleton } from '../components/ui';
 import { api, signedApi } from '../lib/api';
 import { haptic } from '../lib/haptics';
+import { spring, useReducedMotion } from '../lib/motion';
 import { useApp } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
 
@@ -21,6 +23,7 @@ const TITLES: Record<Target, { title: string; note: string }> = {
 export default withSelectedServer(MemoryScreen);
 
 function MemoryScreen() {
+  const t = useTheme();
   const s = useStyles();
   const server = useApp((st) => st.servers.find((x) => x.id === st.selection.serverId) ?? st.servers[0]);
   const [data, setData] = useState<Store | null>(null);
@@ -34,54 +37,50 @@ function MemoryScreen() {
   useEffect(() => { load(); }, [server?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <Screen title="Memory" subtitle={`What ${server?.bot.title ?? 'your agent'} carries from one chat to the next. Edit or remove anything that's wrong.`}
+    <Screen title="Memory"
       onRefresh={load}>
       {error && data ? <Text style={s.error}>{error}</Text> : null}
       {!data ? (error ? <LoadError message={error} onRetry={load} />
-        : <View style={{ gap: 10, marginTop: 12 }}>{[0, 1, 2].map((i) => <Skeleton key={i} height={64} radius={16} />)}</View>)
-        : (['user', 'memory'] as Target[]).map((target) => (
-          <Section key={target} target={target} store={data[target]} onEdit={(entry) => setEdit({ target, entry })} />
+        : <View style={{ gap: 10, marginTop: 12 }}>{[0, 1, 2].map((i) => <Skeleton key={i} height={64} radius={t.radius.lg} />)}</View>)
+        : (['user', 'memory'] as Target[]).map((target, i) => (
+          <Section key={target} index={i} target={target} store={data[target]} onEdit={(entry) => setEdit({ target, entry })} />
         ))}
       <EditSheet edit={edit} onClose={() => setEdit(null)} onSaved={(next) => { setData(next); setEdit(null); }} />
     </Screen>
   );
 }
 
-function Section({ target, store, onEdit }: { target: Target; store: Store[Target]; onEdit: (entry?: string) => void }) {
+function Section({ target, store, onEdit, index }: { target: Target; store: Store[Target]; onEdit: (entry?: string) => void; index: number }) {
   const t = useTheme();
   const s = useStyles();
-  const pct = store.limit ? Math.min(1, store.used / store.limit) : 0;
+  const reduced = useReducedMotion();
+  const share = store.limit ? Math.min(1, store.used / store.limit) : 0;
+  const nearlyFull = !!store.limit && store.used / store.limit > 0.9;
   return (
-    <>
-      <SectionHeader title={TITLES[target].title} right={store.enabled ? (
-        <Button size="sm" variant="tonal" title="Add" icon={<Plus size={15} color={t.colors.onAccentSoft} />} onPress={() => onEdit()} />
-      ) : null} />
-      <Text style={s.note}>{TITLES[target].note}</Text>
-      {store.limit ? (
-        <>
-          <View style={s.meter} accessibilityLabel={`${Math.round(pct * 100)}% full`}>
-            <View style={[s.meterFill, { width: `${Math.max(2, pct * 100)}%`, backgroundColor: pct > 0.9 ? t.colors.warning : t.colors.accent }]} />
+    <Animated.View entering={reduced ? undefined
+      : FadeIn.duration(180)}>
+      <SectionHeader title={TITLES[target].title} />
+      <ListGroup>
+        {store.limit ? (
+          <View style={s.meter} accessible accessibilityLabel={`Characters: ${store.used.toLocaleString()} of ${store.limit.toLocaleString()}`}>
+            <View style={s.meterHead}>
+              <Text style={s.meterTitle}>Characters</Text>
+              <Text style={s.meterValue}>{store.used.toLocaleString()} / {store.limit.toLocaleString()}</Text>
+            </View>
+            <View style={s.track}>
+              <View style={[s.fill, { width: `${Math.max(2, share * 100)}%`, backgroundColor: nearlyFull ? t.colors.warning : t.colors.accent }]} />
+            </View>
           </View>
-          <Text style={[s.meterText, pct > 0.9 && { color: t.colors.warning }]}>
-            {store.used.toLocaleString()} of {store.limit.toLocaleString()} characters
-            {pct > 0.9 ? '. Nearly full: remove what you no longer need to make room for new things.' : ''}
-          </Text>
-        </>
-      ) : null}
-      {store.entries.length ? (
-        <View style={{ gap: 8 }}>
-          {store.entries.map((entry, i) => (
-            <Tap key={`${i}-${entry.slice(0, 20)}`} feedback="selection" onPress={() => onEdit(entry)} accessibilityLabel={`${entry}. Edit`}
-              style={({ hovered }) => [s.entry, hovered && { borderColor: t.colors.borderStrong }]}>
-              {target === 'user' ? <BookUser size={16} color={t.colors.textSecondary} /> : <NotebookPen size={16} color={t.colors.textSecondary} />}
-              <Text style={s.entryText}>{entry}</Text>
-            </Tap>
-          ))}
-        </View>
-      ) : (
-        <Card><Text style={s.note}>{store.enabled ? 'Nothing yet.' : 'Turned off in Hermes\'s memory settings.'}</Text></Card>
-      )}
-    </>
+        ) : null}
+        {store.entries.length ? store.entries.map((entry, i) => (
+          <ListRow key={`${i}-${entry.slice(0, 20)}`} title={entry}
+            icon={target === 'user' ? <BookUser /> : <NotebookPen />} onPress={() => onEdit(entry)} />
+        )) : <ListRow title={store.enabled ? 'No memories yet.' : 'Memory is off in Hermes.'} />}
+      </ListGroup>
+      {nearlyFull ? <Footnote>Nearly full. Remove old memories to make room.</Footnote> : null}
+      {store.enabled ? <Button style={{ marginTop: t.space.md }} variant="secondary" title="Add memory"
+        icon={<Plus size={16} color={t.colors.text} />} onPress={() => onEdit()} /> : null}
+    </Animated.View>
   );
 }
 
@@ -126,14 +125,12 @@ function EditSheet({ edit, onClose, onSaved }: { edit: { target: Target; entry?:
 }
 
 const useStyles = makeStyles((t) => ({
-  meterText: { ...t.type.caption, color: t.colors.textTertiary, marginTop: 6 },
+  meter: { paddingHorizontal: t.space.lg, paddingVertical: t.space.md, gap: t.space.sm, minHeight: 52, justifyContent: 'center' },
+  meterHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: t.space.md },
+  meterTitle: { ...t.type.body, color: t.colors.text },
+  meterValue: { ...t.type.callout, color: t.colors.textSecondary },
+  track: { height: 6, borderRadius: t.radius.pill, backgroundColor: t.colors.border, overflow: 'hidden' },
+  fill: { height: 6, borderRadius: t.radius.pill },
   note: { ...t.type.callout, color: t.colors.textSecondary, marginBottom: 10 },
   error: { ...t.type.callout, color: t.colors.danger, marginTop: 10 },
-  meter: { height: 4, borderRadius: 2, backgroundColor: t.colors.surfaceSunken, overflow: 'hidden', marginBottom: 12 },
-  meterFill: { height: 4, borderRadius: 2 },
-  entry: {
-    flexDirection: 'row', gap: 10, padding: 14, borderRadius: t.radius.md, backgroundColor: t.colors.surface,
-    borderWidth: 1, borderColor: t.colors.border,
-  },
-  entryText: { flex: 1, ...t.type.callout, color: t.colors.text },
 }));

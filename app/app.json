@@ -2,7 +2,7 @@
   "expo": {
     "name": "Winglet",
     "slug": "winglet",
-    "version": "0.6.0",
+    "version": "0.9.0",
     "scheme": "winglet",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -15,7 +15,7 @@
     "android": {
       "package": "io.github.vikasrp24.winglet",
       "adaptiveIcon": {
-        "backgroundColor": "#1E1F22",
+        "backgroundColor": "#5B4BD6",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"

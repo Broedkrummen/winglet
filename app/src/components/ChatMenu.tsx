@@ -6,10 +6,11 @@ import { chatKey, changeChatOrganization } from '../lib/chatOrganization';
 import { usePrefs } from '../lib/prefs';
 import { mutedUntil, pushPrefsKey, usePushPrefs } from '../lib/pushPrefs';
 import { homeChat, useApp } from '../lib/store';
-import { makeStyles, useTheme } from '../lib/themeContext';
+import { makeStyles } from '../lib/themeContext';
 import type { Server } from '../lib/types';
-import { Activity, Archive, ArchiveRestore, Bell, BellOff, Download, FileDiff, Folder, Cpu, Images, Pencil, Pin, PinOff, Target, Trash2 } from './icons';
-import { Sheet, SheetAction } from './Sheet';
+import { Activity, Archive, ArchiveRestore, Bell, BellOff, Clock, Download, FileDiff, Folder, Cpu, Images, Pencil, Pin, PinOff, Target, Trash2 } from './icons';
+import Wifi from 'lucide-react-native/icons/wifi';
+import { Sheet, SheetAction, SheetGroup } from './Sheet';
 import { ProjectPicker } from '../features/projects/MoveToProjectSheet';
 import { Button, Field } from './ui';
 
@@ -34,7 +35,6 @@ export function ChatMenu({ server, chatId, title, visible, onClose, onGoal, hasG
   onDeleted?: () => void;
   onArchived?: () => void;
 }) {
-  const t = useTheme();
   const s = useStyles();
   const chat = useApp((st) => st.runtime[server.id]?.chats[chatId]);
   const renameChat = useApp((st) => st.renameChat);
@@ -77,58 +77,68 @@ export function ChatMenu({ server, chatId, title, visible, onClose, onGoal, hasG
   };
 
   return (
-    <Sheet visible={visible} onClose={close}
-      title={mode === 'mute' ? 'Mute notifications' : mode === 'move' ? 'Move to project' : title}>
+    <Sheet visible={visible} onClose={close} scrollable
+      title={mode === 'mute' ? 'Mute notifications' : mode === 'move' ? 'Move to project' : mode === 'rename' ? 'Rename chat' : mode === 'delete' ? 'Delete chat' : 'Chat options'}>
       {mode === 'menu' ? (
         <>
-          {side ? <SheetAction icon={archived ? <ArchiveRestore size={20} color={t.colors.text} /> : pinned ? <PinOff size={20} color={t.colors.text} /> : <Pin size={20} color={t.colors.text} />}
-            label={archived ? 'Restore chat' : pinned ? 'Unpin chat' : 'Pin chat'} onPress={() => organize(archived ? 'restore' : pinned ? 'unpin' : 'pin')} /> : null}
-          {side && !archived ? <SheetAction icon={<Archive size={20} color={t.colors.text} />} label="Archive chat" onPress={() => organize('archive')} /> : null}
-          {side && features?.projects ? <SheetAction icon={<Folder size={20} color={t.colors.text} />} label="Move to project…"
-            onPress={() => setMode('move')} /> : null}
-          {onGoal ? <SheetAction icon={<Target size={20} color={t.colors.text} />} label={hasGoal ? 'Goal' : 'Set a goal'} onPress={() => { close(); onGoal(); }} /> : null}
-          {onFiles ? <SheetAction icon={<Images size={20} color={t.colors.text} />} label="Files and photos" onPress={() => { close(); onFiles(); }} /> : null}
-          {onContext ? <SheetAction icon={<Activity size={20} color={t.colors.text} />} label="Context and usage" onPress={() => { close(); onContext(); }} /> : null}
-          {onProcesses ? <SheetAction icon={<Cpu size={20} color={t.colors.text} />} label="Background processes"
-            onPress={() => { close(); onProcesses(); }} /> : null}
-          {onCheckpoints ? <SheetAction icon={<FileDiff size={20} color={t.colors.text} />} label="Workspace checkpoints"
-            onPress={() => { close(); onCheckpoints(); }} /> : null}
-          {side ? <SheetAction icon={<Pencil size={20} color={t.colors.text} />} label="Rename" onPress={() => { setName(chat?.title ?? ''); setMode('rename'); }} /> : null}
-          {features?.mute ? (until !== undefined ? (
-            <SheetAction icon={<Bell size={20} color={t.colors.text} />} label={`Unmute${until ? ` (muted until ${clockTime(until)})` : ''}`} onPress={() => mute(null)} />
-          ) : (
-            <SheetAction icon={<BellOff size={20} color={t.colors.text} />} label="Mute notifications" onPress={() => setMode('mute')} />
-          )) : null}
-          {features?.export ? (
-            <SheetAction icon={<Download size={20} color={t.colors.text} />} label={busy ? 'Exporting…' : 'Export chat'} onPress={async () => {
-              setBusy(true);
-              try {
-                await exportChat(server, chatId, title.replace(/^#/, ''));
-                close();
-              } catch (e) {
-                fail("Couldn't export")(e);
-              } finally {
-                setBusy(false);
-              }
-            }} />
-          ) : null}
-          <SheetAction icon={<Activity size={20} color={t.colors.text} />} label="Connection details" onPress={() => { close(); router.push(`/connection/${server.id}`); }} />
-          {side ? <SheetAction icon={<Trash2 size={20} color={t.colors.danger} />} label="Delete chat" destructive onPress={() => setMode('delete')} /> : null}
+          <SheetGroup>
+            {side ? <SheetAction icon={archived ? <ArchiveRestore /> : pinned ? <PinOff /> : <Pin />}
+              label={archived ? 'Restore chat' : pinned ? 'Unpin chat' : 'Pin chat'} onPress={() => organize(archived ? 'restore' : pinned ? 'unpin' : 'pin')} /> : null}
+            {side && !archived ? <SheetAction icon={<Archive />} label="Archive chat" onPress={() => organize('archive')} /> : null}
+            {side && features?.projects ? <SheetAction icon={<Folder />} label="Move to project…"
+              onPress={() => setMode('move')} /> : null}
+            {side ? <SheetAction icon={<Pencil />} label="Rename" onPress={() => { setName(chat?.title ?? ''); setMode('rename'); }} /> : null}
+          </SheetGroup>
+          <SheetGroup>
+            {onGoal ? <SheetAction icon={<Target />} label={hasGoal ? 'Goal' : 'Set a goal'} onPress={() => { close(); onGoal(); }} /> : null}
+            {onFiles ? <SheetAction icon={<Images />} label="Files and photos" onPress={() => { close(); onFiles(); }} /> : null}
+            {onContext ? <SheetAction icon={<Activity />} label="Context and usage" onPress={() => { close(); onContext(); }} /> : null}
+            {onProcesses ? <SheetAction icon={<Cpu />} label="Background processes"
+              onPress={() => { close(); onProcesses(); }} /> : null}
+            {onCheckpoints ? <SheetAction icon={<FileDiff />} label="Workspace checkpoints"
+              onPress={() => { close(); onCheckpoints(); }} /> : null}
+          </SheetGroup>
+          <SheetGroup>
+            {features?.mute ? (until !== undefined ? (
+              <SheetAction icon={<Bell />} label={`Unmute${until ? ` (muted until ${clockTime(until)})` : ''}`} onPress={() => mute(null)} />
+            ) : (
+              <SheetAction icon={<BellOff />} label="Mute notifications" onPress={() => setMode('mute')} />
+            )) : null}
+            {features?.export ? (
+              <SheetAction icon={<Download />} label={busy ? 'Exporting…' : 'Export chat'} onPress={async () => {
+                setBusy(true);
+                try {
+                  await exportChat(server, chatId, title.replace(/^#/, ''));
+                  close();
+                } catch (e) {
+                  fail("Couldn't export")(e);
+                } finally {
+                  setBusy(false);
+                }
+              }} />
+            ) : null}
+            <SheetAction icon={<Wifi />} label="Connection details" onPress={() => { close(); router.push(`/connection/${server.id}`); }} />
+          </SheetGroup>
+          <SheetGroup>
+            {side ? <SheetAction icon={<Trash2 />} label="Delete chat" destructive onPress={() => setMode('delete')} /> : null}
+          </SheetGroup>
         </>
       ) : mode === 'mute' ? (
         <>
           <Text style={s.menuNote}>Approvals and questions still come through: {server.bot.title} is waiting on those.</Text>
-          {MUTE_OPTIONS.map((o) => <SheetAction key={o.label} label={o.label} onPress={() => mute(o.seconds)} />)}
+          <SheetGroup>
+            {MUTE_OPTIONS.map((o) => <SheetAction key={o.label} icon={o.seconds ? <Clock /> : <BellOff />} label={o.label} onPress={() => mute(o.seconds)} />)}
+          </SheetGroup>
         </>
       ) : mode === 'move' ? (
         <ProjectPicker server={server} chatId={chatId} onDone={close} />
       ) : mode === 'rename' ? (
-        <View style={{ gap: 14, paddingHorizontal: 4 }}>
+        <View style={s.form}>
           <Field value={name} onChangeText={setName} placeholder="Chat name" autoFocus onSubmitEditing={rename} />
           <Button title="Save" onPress={rename} />
         </View>
       ) : (
-        <View style={{ gap: 14, paddingHorizontal: 4 }}>
+        <View style={s.form}>
           <Text style={s.menuNote}>This removes the chat from Winglet on every device. Hermes keeps its own session history.</Text>
           <Button title="Delete chat" variant="danger" onPress={async () => { await deleteChat(server.id, chatId); organize('remove'); onDeleted?.(); }} />
           <Button title="Cancel" variant="secondary" onPress={() => setMode('menu')} />
@@ -139,5 +149,6 @@ export function ChatMenu({ server, chatId, title, visible, onClose, onGoal, hasG
 }
 
 const useStyles = makeStyles((t) => ({
-  menuNote: { ...t.type.callout, color: t.colors.textSecondary, textAlign: 'center', paddingHorizontal: 12, marginBottom: 6 },
+  menuNote: { ...t.type.footnote, color: t.colors.textSecondary, paddingHorizontal: t.space.md, marginBottom: t.space.md },
+  form: { gap: 14, paddingHorizontal: t.space.xs, paddingBottom: t.space.sm },
 }));

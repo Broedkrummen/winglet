@@ -3,7 +3,7 @@ import { ActivityIndicator, Platform, Pressable, Text, View } from 'react-native
 import { RefreshCw } from '../components/icons';
 import { Screen } from '../components/Screen';
 import { withSelectedServer } from '../components/ServerScreen';
-import { Button, Card, Chip, IconButton, LoadError, SearchField, Segmented, Skeleton } from '../components/ui';
+import { Button, Card, Chip, IconButton, LoadError, SearchField, SectionHeader, Segmented, Skeleton } from '../components/ui';
 import { api } from '../lib/api';
 import { bytes, logLevel, splitLogLine, type LogLevel } from '../lib/control';
 import { useApp } from '../lib/store';
@@ -51,7 +51,7 @@ function LogsScreen() {
 
   const rows = data ? [...data.lines].reverse() : [];
   return (
-    <Screen title="Logs" subtitle="What Hermes has been doing, newest first. Keys and tokens are hidden the way Hermes hides them."
+    <Screen title="Logs"
       right={<IconButton label="Refresh" variant="filled" onPress={load}>
         {loading ? <ActivityIndicator size="small" color={t.colors.text} /> : <RefreshCw size={19} color={t.colors.text} />}
       </IconButton>} onRefresh={load}>
@@ -66,7 +66,7 @@ function LogsScreen() {
       {error && data ? <Text style={s.error}>{error}</Text> : null}
       {!data ? (error ? <LoadError message={error} onRetry={load} /> : <Skeleton height={320} radius={20} style={{ marginTop: 16 }} />) : rows.length ? (
         <>
-          <Text style={s.meta}>{rows.length} line{rows.length === 1 ? '' : 's'}{data.size ? ` · ${bytes(data.size)} log` : ''}</Text>
+          <SectionHeader title={`${rows.length} lines`} right={data.size ? <Text style={s.meta}>{bytes(data.size)}</Text> : undefined} />
           <Card style={s.card}>
             {rows.map((line, i) => <LogLine key={`${i}-${line.slice(0, 24)}`} line={line} />)}
           </Card>
@@ -76,7 +76,7 @@ function LogsScreen() {
         </>
       ) : (
         <Card style={{ marginTop: 16 }}>
-          <Text style={s.empty}>{debounced || level ? 'Nothing matches.' : file === 'errors' ? 'No errors. Nice.' : 'This log is empty.'}</Text>
+          <Text style={s.empty}>{debounced || level ? 'Nothing matches.' : file === 'errors' ? 'No errors.' : 'This log is empty.'}</Text>
         </Card>
       )}
     </Screen>
@@ -107,12 +107,12 @@ function LogLine({ line }: { line: string }) {
 const useStyles = makeStyles((t) => ({
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   error: { ...t.type.callout, color: t.colors.danger, marginTop: 12 },
-  meta: { ...t.type.caption, color: t.colors.textTertiary, marginTop: 16, marginBottom: 8 },
+  meta: { ...t.type.caption, color: t.colors.textTertiary },
   card: { paddingVertical: 6, paddingHorizontal: 0, gap: 0 },
   line: { flexDirection: 'row', gap: 10, paddingVertical: 6, paddingRight: 12, borderBottomWidth: 1, borderBottomColor: t.colors.border },
   stripe: { width: 3, borderRadius: 2 },
   text: {
-    flex: 1, minWidth: 0, fontFamily: t.fonts.mono, fontSize: 12, lineHeight: 17, color: t.colors.text,
+    flex: 1, minWidth: 0, ...t.type.footnote, fontFamily: t.fonts.mono, color: t.colors.text,
     // Paths and URLs have no spaces to wrap at.
     ...(Platform.OS === 'web' ? ({ wordBreak: 'break-word' } as object) : {}),
   },

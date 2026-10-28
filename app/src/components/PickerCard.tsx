@@ -4,7 +4,7 @@ import Animated, { FadeIn } from 'react-native-reanimated';
 import { api, ApiError } from '../lib/api';
 import { haptic } from '../lib/haptics';
 import { availableSavedModels, isCurrentModel, modelName, modelProviders, recentModels, savedModelKey, shortModel, toggleSavedModel, type SavedModel } from '../lib/modelOptions';
-import { useReducedMotion } from '../lib/motion';
+import { spring, useReducedMotion } from '../lib/motion';
 import { usePrefs } from '../lib/prefs';
 import { isOwner, useApp } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
@@ -78,8 +78,12 @@ export function PickerCard({ server, message, presentation = 'card', onChosen }:
     }
   };
 
-  const icon = picker.kind === 'model' ? <Cpu size={18} color={t.colors.onAccentSoft} />
-    : picker.kind === 'confirm' ? <ShieldQuestion size={18} color={t.colors.warning} /> : <SlidersHorizontal size={18} color={t.colors.onAccentSoft} />;
+  const icon = picker.kind === 'model' ? <Cpu size={18} color={t.colors.textSecondary} />
+    : picker.kind === 'confirm' ? <ShieldQuestion size={18} color={t.colors.warning} /> : <SlidersHorizontal size={18} color={t.colors.textSecondary} />;
+
+  /** A choice's state on the right of its row: a spinner while sending, a filled accent dot when it's the current one. */
+  const mark = (current: boolean, sending: boolean) => sending ? <ActivityIndicator size="small" color={t.colors.accent} />
+    : <View style={[s.radio, current && s.radioOn]}>{current ? <Check size={13} strokeWidth={3} color={t.colors.onAccent} /> : null}</View>;
 
   const q = query.trim().toLowerCase();
   const providers = useMemo(() => modelProviders(picker, q), [picker.providers, picker.current_model, picker.current_provider, q]);
@@ -98,10 +102,16 @@ export function PickerCard({ server, message, presentation = 'card', onChosen }:
       <Star size={17} color={selected ? t.colors.accent : t.colors.textTertiary} fill={selected ? t.colors.accent : 'none'} />
     </Pressable>;
   };
+  // Saved sections are shortcuts, not duplicates of the same selectable model below.
+  const quickKeys = new Set(sheet && !q
+    ? availableSavedModels([...favorites, ...recent], picker).map(savedModelKey) : []);
+  const displayedProviders = providers.map((provider) => ({ ...provider,
+    models: provider.models.filter((model) => !quickKeys.has(savedModelKey({ provider: provider.slug, model }))),
+  })).filter((provider) => provider.models.length > 0);
   const savedSection = (title: string, saved: SavedModel[]) => {
     const entries = availableSavedModels(saved, picker);
     if (!sheet || q || !entries.length) return null;
-    return <View style={{ gap: 4 }}>
+    return <View style={s.section}>
       <Text style={s.provider}>{title}</Text>
       {entries.map((entry) => {
         const key = `${entry.provider}/${entry.model}`;
@@ -112,7 +122,7 @@ export function PickerCard({ server, message, presentation = 'card', onChosen }:
             onPress={() => choose(key, { provider: entry.provider, model: entry.model })} style={[s.modelRow, { flex: 1, minWidth: 0 }]}>
             <View style={s.modelText}><Text style={s.modelName} numberOfLines={1}>{modelName(entry.model)}</Text>
               <Text style={s.modelId} numberOfLines={1}>{entry.providerName} · {entry.model}</Text></View>
-            {busy === key ? <ActivityIndicator size="small" color={t.colors.accent} /> : current ? <Check size={16} color={t.colors.accent} /> : null}
+            {mark(current, busy === key)}
           </Pressable>
           {star(entry.provider, entry.model)}
         </View>;
@@ -123,7 +133,7 @@ export function PickerCard({ server, message, presentation = 'card', onChosen }:
   return (
     <Animated.View entering={reduced ? undefined : FadeIn.duration(180)} style={[s.card, sheet && s.sheetCard, open && picker.kind === 'confirm' && { borderColor: t.colors.warning }]}>
       {sheet ? null : <View style={s.head}>
-        <View style={[s.icon, { backgroundColor: picker.kind === 'confirm' ? t.colors.warningSoft : t.colors.accentSoft }]}>{icon}</View>
+        <View style={[s.icon, { backgroundColor: picker.kind === 'confirm' ? t.colors.warningSoft : t.colors.surfaceSunken }]}>{icon}</View>
         <View style={{ flex: 1, minWidth: 0 }}>
           <Text style={s.title}>{picker.kind === 'model' ? 'Model for this chat' : picker.kind === 'confirm' ? 'Confirm' : 'Choose a setting'}</Text>
           {picker.kind === 'model' && picker.current_model ? (
@@ -150,7 +160,7 @@ export function PickerCard({ server, message, presentation = 'card', onChosen }:
       ) : !owner ? (
         <Text style={s.sub}>Only an owner can choose here.</Text>
       ) : picker.kind === 'model' ? (
-        <View style={{ gap: sheet ? 8 : 12 }}>
+        <View style={{ gap: sheet ? 16 : 12 }}>
           {total > (sheet ? 6 : 12) ? (
             <View style={s.search}>
               <Search size={16} color={t.colors.textTertiary} />
@@ -161,14 +171,14 @@ export function PickerCard({ server, message, presentation = 'card', onChosen }:
           ) : null}
           {savedSection('Starred', favorites)}
           {savedSection('Recent', recent.filter((entry) => !favoriteKeys.has(savedModelKey(entry))))}
-          {providers.map((p) => {
+          {displayedProviders.map((p) => {
             const all = expanded[p.slug] || !!q;
             const limit = sheet ? 4 : SHOWN_PER_PROVIDER;
             const models = all ? p.models : p.models.slice(0, limit);
             const names = new Map<string, number>();
             for (const id of p.models) { const name = modelName(id); names.set(name, (names.get(name) ?? 0) + 1); }
             return (
-              <View key={p.slug} style={{ gap: sheet ? 4 : 8 }}>
+              <View key={p.slug} style={sheet ? s.section : { gap: 8 }}>
                 <Text style={s.provider}>{p.name}</Text>
                 <View style={sheet ? s.modelRows : s.chips} accessibilityRole={sheet ? 'radiogroup' : undefined}>
                   {models.map((m) => {
@@ -185,9 +195,9 @@ export function PickerCard({ server, message, presentation = 'card', onChosen }:
                           <Text style={s.modelName}>{name}</Text>
                           {showId ? <Text style={s.modelId} numberOfLines={1}>{m}</Text> : null}
                         </View>
-                        {busy === key ? <ActivityIndicator color={t.colors.accent} /> : <View style={[s.radio, current && s.radioOn]}>{current ? <Check size={13} color={t.colors.onAccent} strokeWidth={3} /> : null}</View>}
+                        {mark(current, busy === key)}
                       </Pressable>{star(p.slug, m)}</View> : <Chip key={key} label={shortModel(m)} selected={current} accessibilityLabel={`${m} from ${p.name}${current ? ', current' : ''}`}
-                        icon={busy === key ? <ActivityIndicator size="small" color={t.colors.accent} /> : current ? <Check size={14} color={t.colors.onAccentSoft} /> : undefined}
+                        icon={busy === key ? <ActivityIndicator size="small" color={t.colors.accent} /> : current ? <Check size={14} color={t.colors.textSecondary} /> : undefined}
                         onPress={() => !busy && choose(key, { provider: p.slug, model: m })} />
                     );
                   })}
@@ -231,9 +241,9 @@ export function PickerCard({ server, message, presentation = 'card', onChosen }:
               disabled={!!busy} accessibilityLabel={`${c.label}${c.current ? ', current' : ''}`} onPress={() => choose(c.value, { value: c.value })}
               style={({ pressed }) => [s.settingRow, c.current && s.currentRow, pressed && { backgroundColor: t.colors.pressed }]}>
               <Text style={[s.modelName, { flex: 1 }]}>{c.label}</Text>
-              {busy === c.value ? <ActivityIndicator color={t.colors.accent} /> : c.current ? <Check size={20} color={t.colors.accent} /> : null}
+              {mark(!!c.current, busy === c.value)}
             </Pressable> : <Chip key={c.value} label={c.label} selected={c.current}
-              icon={busy === c.value ? <ActivityIndicator size="small" color={t.colors.accent} /> : c.current ? <Check size={14} color={t.colors.onAccentSoft} /> : undefined}
+              icon={busy === c.value ? <ActivityIndicator size="small" color={t.colors.accent} /> : c.current ? <Check size={14} color={t.colors.textSecondary} /> : undefined}
               onPress={() => !busy && choose(c.value, { value: c.value })} />
           ))}
           {sheet ? <Pressable accessibilityRole="button" accessibilityState={{ expanded: details }} onPress={() => setDetails((value) => !value)} style={s.more}>
@@ -247,36 +257,50 @@ export function PickerCard({ server, message, presentation = 'card', onChosen }:
 
 const useStyles = makeStyles((t) => ({
   sheetCard: { padding: 0, borderWidth: 0, backgroundColor: 'transparent', maxWidth: undefined, marginTop: 0 },
-  modelRows: { gap: 2 },
-  savedRow: { flexDirection: 'row', alignItems: 'center', borderRadius: t.radius.sm },
-  star: { minHeight: 44, width: 42, alignItems: 'center', justifyContent: 'center' },
-  settingRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, paddingVertical: 8, minHeight: 44, borderRadius: t.radius.sm },
-  modelRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, paddingVertical: 8, minHeight: 44, borderRadius: t.radius.sm },
-  currentRow: { backgroundColor: t.colors.accentSoft },
-  modelText: { flex: 1, minWidth: 0, gap: 1 },
-  modelName: { ...t.type.callout, fontFamily: t.fonts.medium, color: t.colors.text },
-  modelId: { ...t.type.caption, fontSize: 11.5, color: t.colors.textSecondary },
-  radio: { width: 22, height: 22, borderRadius: 11, borderWidth: 1.5, borderColor: t.colors.borderStrong, alignItems: 'center', justifyContent: 'center' },
+  section: { gap: t.space.sm },
+  modelRows: { gap: t.space.sm },
+  // In the sheet every choice is its own frosted card; the current one is lit in the accent.
+  savedRow: {
+    flexDirection: 'row', alignItems: 'center', borderRadius: t.radius.lg, overflow: 'hidden',
+    backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border,
+  },
+  currentRow: { backgroundColor: t.colors.surfaceHigh, borderColor: t.colors.text },
+  star: { minHeight: 56, width: 48, alignItems: 'center', justifyContent: 'center' },
+  settingRow: {
+    flexDirection: 'row', alignItems: 'center', gap: t.space.md, paddingHorizontal: t.space.lg, paddingVertical: t.space.sm, minHeight: 56,
+    borderRadius: t.radius.lg, backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border,
+  },
+  modelRow: { flexDirection: 'row', alignItems: 'center', gap: t.space.md, paddingLeft: t.space.lg, paddingRight: t.space.xs, paddingVertical: t.space.sm, minHeight: 56 },
+  radio: {
+    width: 22, height: 22, borderRadius: t.radius.pill, alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1.5, borderColor: t.colors.borderStrong,
+  },
   radioOn: { backgroundColor: t.colors.accentFill, borderColor: t.colors.accentFill },
-  more: { minHeight: 44, paddingHorizontal: 12, flexDirection: 'row', gap: 6, alignItems: 'center' },
-  moreText: { ...t.type.callout, fontFamily: t.fonts.medium, color: t.colors.accent },
-  clear: { width: 28, height: 32, alignItems: 'center', justifyContent: 'center' },
+  modelText: { flex: 1, minWidth: 0, gap: 1 },
+  modelName: { ...t.type.callout, fontFamily: t.fonts.semibold, color: t.colors.text },
+  modelId: { ...t.type.caption, color: t.colors.textSecondary },
+  more: {
+    minHeight: 44, paddingHorizontal: t.space.lg, flexDirection: 'row', gap: 6, alignItems: 'center', alignSelf: 'flex-start',
+    borderRadius: t.radius.md, backgroundColor: t.colors.surfaceSunken,
+  },
+  moreText: { ...t.type.callout, fontFamily: t.fonts.medium, color: t.colors.text },
+  clear: { width: 32, height: 44, alignItems: 'center', justifyContent: 'center' },
   card: {
-    gap: 12, padding: 14, borderRadius: t.radius.lg, backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border,
+    gap: 12, padding: t.space.lg, borderRadius: t.radius.lg, backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border,
     marginTop: 4, maxWidth: 560,
   },
   head: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  icon: { width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  icon: { width: 40, height: 40, borderRadius: t.radius.pill, alignItems: 'center', justifyContent: 'center' },
   title: { ...t.type.bodyStrong, color: t.colors.text },
   sub: { ...t.type.caption, color: t.colors.textSecondary, marginTop: 2 },
-  provider: { ...t.type.label, fontSize: 11.5, color: t.colors.textSecondary },
+  provider: { ...t.type.caption, fontFamily: t.fonts.semibold, letterSpacing: 0.6, textTransform: 'uppercase', color: t.colors.textTertiary, paddingHorizontal: t.space.xs },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   buttons: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   chosen: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   chosenText: { ...t.type.caption, fontFamily: t.fonts.semibold, color: t.colors.success },
   search: {
-    flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, height: 40, borderRadius: t.radius.pill,
-    backgroundColor: t.colors.surfaceSunken,
+    flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: t.space.lg, height: 44, borderRadius: t.radius.pill,
+    backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border,
   },
   searchInput: { flex: 1, ...t.type.callout, color: t.colors.text, ...({ outlineStyle: 'none' } as object) },
 }));

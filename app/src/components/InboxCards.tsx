@@ -1,6 +1,6 @@
 import { router } from 'expo-router';
 import { useRef, useState } from 'react';
-import { Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, Text, View } from 'react-native';
 import { agoText } from '../lib/agent';
 import { haptic } from '../lib/haptics';
 import { isOwner, useApp } from '../lib/store';
@@ -9,14 +9,24 @@ import type { InboxItem } from '../lib/types';
 import { Check, CheckCircle2, CircleHelp, Clock, ShieldAlert, Sparkles, XCircle } from './icons';
 import { Markdown } from './Markdown';
 import { Sheet } from './Sheet';
-import { Button } from './ui';
+import { Button, Card, Field, ListGroup, ListRow } from './ui';
 
 const CHOICE_ORDER = ['once', 'session', 'always', 'deny'];
 
-export function InboxCard({ serverId, item, compact, embedded }: { serverId: string; item: InboxItem; compact?: boolean; embedded?: boolean }) {
-  if (item.kind === 'approval') return <ApprovalCard serverId={serverId} item={item} compact={compact} embedded={embedded} />;
-  if (item.kind === 'question') return <QuestionCard serverId={serverId} item={item} embedded={embedded} />;
-  return <ResultCard serverId={serverId} item={item} compact={compact} embedded={embedded} />;
+/**
+ * One thing from the agent that needs (or needed) you. `embedded` sits inside a chat; `bare` drops the card's own
+ * frame because the Inbox wraps it in a notification card of its own.
+ */
+export function InboxCard({ serverId, item, compact, embedded, bare }: { serverId: string; item: InboxItem; compact?: boolean; embedded?: boolean; bare?: boolean }) {
+  if (item.kind === 'approval') return <ApprovalCard serverId={serverId} item={item} compact={compact} embedded={embedded} bare={bare} />;
+  if (item.kind === 'question') return <QuestionCard serverId={serverId} item={item} embedded={embedded} bare={bare} />;
+  return <ResultCard serverId={serverId} item={item} compact={compact} embedded={embedded} bare={bare} />;
+}
+
+/** What kind of card this is, as a plain icon coloured by what it needs from you. */
+function KindIcon({ icon: Icon, color, small }: { icon: typeof ShieldAlert; color: string; soft?: string; small?: boolean }) {
+  const s = useStyles();
+  return <View style={[s.kind, small && s.kindSmall]}><Icon size={small ? 16 : 18} color={color} /></View>;
 }
 
 function StatusLine({ item }: { item: InboxItem }) {
@@ -25,9 +35,9 @@ function StatusLine({ item }: { item: InboxItem }) {
   if (item.status === 'pending') return null;
   const expired = item.status === 'expired';
   const label = expired
-    ? 'Expired · the agent stopped waiting'
+    ? 'Expired'
     : item.kind === 'approval'
-      ? item.resolution === 'deny' ? 'You denied this' : `Approved · ${item.payload.labels?.[item.resolution] ?? item.resolution}`
+      ? item.resolution === 'deny' ? 'You denied this' : `Approved: ${item.payload.labels?.[item.resolution] ?? item.resolution}`
       : `You answered: ${item.resolution}`;
   const Icon = expired ? Clock : item.resolution === 'deny' ? XCircle : CheckCircle2;
   const color = expired ? t.colors.textSecondary : item.resolution === 'deny' ? t.colors.danger : t.colors.success;
@@ -43,7 +53,7 @@ function StatusLine({ item }: { item: InboxItem }) {
  * A request to run something risky. Hermes's own choices are offered as plain buttons: nothing is
  * approved by a gesture, and "Always" needs a second, explicit confirmation.
  */
-function ApprovalCard({ serverId, item, compact, embedded }: { serverId: string; item: InboxItem; compact?: boolean; embedded?: boolean }) {
+function ApprovalCard({ serverId, item, compact, embedded, bare }: { serverId: string; item: InboxItem; compact?: boolean; embedded?: boolean; bare?: boolean }) {
   const t = useTheme();
   const s = useStyles();
   const respond = useApp((st) => st.respond);
@@ -69,26 +79,25 @@ function ApprovalCard({ serverId, item, compact, embedded }: { serverId: string;
     } finally { acting.current = false; setBusy(null); }
   };
   return (
-    <View style={[s.card, embedded && s.embedded, compact && s.compactCard, pending && { borderColor: t.colors.warning }]} accessibilityLabel="Approval request">
+    <Card style={[s.card, embedded && s.embedded, compact && s.compactCard, bare && s.bare]} accessibilityLabel="Approval request">
       <View style={s.header}>
-        <View style={[s.iconWrap, { backgroundColor: t.colors.warningSoft }]}><ShieldAlert size={15} color={t.colors.warning} /></View>
+        <KindIcon icon={ShieldAlert} color={t.colors.warning} soft={t.colors.warningSoft} small={embedded} />
         <View style={{ flex: 1, minWidth: 0 }}>
-          <Text style={s.title}>{pending ? 'Run a command?' : 'Command request'}</Text>
-          <Text style={s.subtitle} numberOfLines={1}>{pending && item.payload.description ? `${item.payload.description} · ` : ''}{agoText(item.created_at)}</Text>
+          <Text style={s.title}>{item.payload.description || (pending ? 'Run this command?' : 'Command request')}</Text>
+          {embedded ? <Text style={s.subtitle}>{agoText(item.created_at)}</Text> : null}
         </View>
       </View>
       <View style={s.command}>
         {expanded ? <ScrollView nestedScrollEnabled style={{ maxHeight: compact ? 160 : 220 }}><Text selectable style={s.commandText}>{item.payload.command || item.body}</Text></ScrollView>
           : <Text style={s.commandText} numberOfLines={pending ? 2 : 1}>{item.payload.command || item.body}</Text>}
-        <Pressable accessibilityRole="button" accessibilityLabel={expanded ? 'Show less of the command' : 'Show all of the command'}
-          onPress={() => setExpanded((e) => !e)} hitSlop={{ left: 6, right: 6 }} style={s.commandToggle}>
-          <Text style={s.commandToggleText}>{expanded ? 'Show less' : 'View command'}</Text>
-        </Pressable>
+        <Button variant="ghost" size="sm" title={expanded ? 'Show less' : 'View command'}
+          accessibilityLabel={expanded ? 'Show less of the command' : 'Show all of the command'}
+          onPress={() => setExpanded((e) => !e)} style={{ alignSelf: 'flex-start' }} />
       </View>
       {pending && !owner ? (
         <View style={s.waiting} accessibilityLiveRegion="polite">
           <Clock size={14} color={t.colors.textSecondary} />
-          <Text style={s.waitingText}>Waiting for an owner to approve or deny this.</Text>
+          <Text style={s.waitingText}>Waiting for an owner.</Text>
         </View>
       ) : pending ? (
         <View style={s.actions}>
@@ -96,6 +105,7 @@ function ApprovalCard({ serverId, item, compact, embedded }: { serverId: string;
             <Button
               key={choice}
               size="sm"
+              style={s.action}
               title={label(choice)}
               variant={choice === 'deny' ? 'danger' : choice === 'once' ? 'primary' : 'secondary'}
               loading={busy === choice}
@@ -118,11 +128,11 @@ function ApprovalCard({ serverId, item, compact, embedded }: { serverId: string;
           <Button title="Cancel" variant="secondary" onPress={() => setConfirmAlways(false)} />
         </View>
       </Sheet>
-    </View>
+    </Card>
   );
 }
 
-function QuestionCard({ serverId, item, embedded }: { serverId: string; item: InboxItem; embedded?: boolean }) {
+function QuestionCard({ serverId, item, embedded, bare }: { serverId: string; item: InboxItem; embedded?: boolean; bare?: boolean }) {
   const t = useTheme();
   const s = useStyles();
   const respond = useApp((st) => st.respond);
@@ -144,19 +154,20 @@ function QuestionCard({ serverId, item, embedded }: { serverId: string; item: In
     setPicked((p) => (p.includes(label) ? p.filter((x) => x !== label) : [...p, label]));
   };
   return (
-    <View style={[s.card, embedded && s.embedded, pending && { borderColor: t.colors.accent }]} accessibilityLabel="Question from the agent">
+    <Card style={[s.card, embedded && s.embedded, bare && s.bare]} accessibilityLabel="Question from the agent">
       <View style={s.header}>
-        <View style={[s.iconWrap, { backgroundColor: t.colors.accentSoft }]}><CircleHelp size={15} color={t.colors.onAccentSoft} /></View>
+        <KindIcon icon={CircleHelp} color={t.colors.textSecondary} small={embedded} />
         <Text style={[s.title, { flex: 1 }]}>{item.payload.question || item.body}</Text>
       </View>
       {pending ? (
         <>
-          {choices.map((choice) => {
+          <ListGroup>{choices.map((choice) => {
             const recommended = /\(recommended\)\s*$/i.test(choice);
             const label = choice.replace(/\s*\(recommended\)\s*$/i, '');
             const on = picked.includes(label);
             return (
-              <Pressable
+              !multi ? <ListRow key={choice} title={label} value={recommended ? 'Recommended' : undefined}
+                chevron={false} disabled={busy} onPress={() => send(label)} /> : <Pressable
                 key={choice}
                 disabled={busy}
                 accessibilityRole={multi ? 'checkbox' : 'button'}
@@ -170,80 +181,77 @@ function QuestionCard({ serverId, item, embedded }: { serverId: string; item: In
                 {recommended ? <Text style={s.recommended}>Recommended</Text> : null}
               </Pressable>
             );
-          })}
+          })}</ListGroup>
           {multi ? (
             <Button title={picked.length ? `Submit ${picked.length} selected` : 'Pick one or more'} disabled={!picked.length} loading={busy && !!picked.length} onPress={() => send(picked)} />
           ) : null}
           <View style={s.otherRow}>
-            <TextInput
+            <View style={{ flex: 1 }}><Field
               value={other}
               onChangeText={setOther}
               placeholder={choices.length ? 'Something else…' : 'Type your answer…'}
-              placeholderTextColor={t.colors.textTertiary}
               accessibilityLabel="Your answer"
-              style={s.otherInput}
               onSubmitEditing={() => send(other)}
               returnKeyType="send"
-            />
+            /></View>
             <Button size="sm" title="Send" onPress={() => send(other)} disabled={!other.trim()} loading={busy && !!other} />
           </View>
         </>
       ) : (
         <StatusLine item={item} />
       )}
-    </View>
+    </Card>
   );
 }
 
-function ResultCard({ serverId, item, compact, embedded }: { serverId: string; item: InboxItem; compact?: boolean; embedded?: boolean }) {
+function ResultCard({ serverId, item, compact, embedded, bare }: { serverId: string; item: InboxItem; compact?: boolean; embedded?: boolean; bare?: boolean }) {
   const t = useTheme();
   const s = useStyles();
   const history = useApp(st => st.runtime[serverId]?.info?.features?.routine_history === true && isOwner(st.runtime[serverId]));
   const routineId = item.payload.routine_id || item.payload.job_id;
   const limit = compact ? 400 : 1200;
   return (
-    <View style={[s.card, embedded && s.embedded]}>
+    <Card style={[s.card, embedded && s.embedded, bare && s.bare]}>
       <View style={s.header}>
-        <View style={[s.iconWrap, { backgroundColor: t.colors.successSoft }]}><Sparkles size={18} color={t.colors.success} /></View>
+        <KindIcon icon={Sparkles} color={t.colors.success} soft={t.colors.successSoft} small={embedded} />
         <Text style={[s.title, { flex: 1 }]}>{item.title}</Text>
       </View>
       <Markdown text={item.body.length > limit ? `${item.body.slice(0, limit)}…` : item.body} compact={compact} />
-      {history && typeof routineId === 'string' ? <Button size="sm" variant="ghost" title={item.payload.run_id ? 'View recorded run' : 'View routine history'}
+      {history && typeof routineId === 'string' ? <Button size="sm" variant="tonal" style={s.pill} title={item.payload.run_id ? 'View recorded run' : 'View routine history'}
         onPress={() => router.push(`/routine/${encodeURIComponent(serverId)}/${encodeURIComponent(routineId)}${item.payload.run_id ? `/run/${encodeURIComponent(item.payload.run_id)}` : ''}` as any)} /> : null}
-    </View>
+    </Card>
   );
 }
 
 const useStyles = makeStyles((t) => ({
   waiting: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   waitingText: { ...t.type.callout, color: t.colors.textSecondary, flex: 1 },
-  card: { backgroundColor: t.colors.surface, borderRadius: t.radius.lg, padding: 12, gap: 10, borderWidth: 1, borderColor: t.colors.border, maxWidth: 560, width: '100%' },
-  embedded: { maxWidth: undefined, borderRadius: 14, padding: 10, gap: 7 },
-  compactCard: { gap: 6, padding: 9, borderRadius: 12 },
-  header: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  iconWrap: { width: 28, height: 28, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
-  title: { ...t.type.bodyStrong, fontSize: 15, color: t.colors.text },
+  card: { padding: t.space.lg, gap: t.space.md, width: '100%' },
+  embedded: { maxWidth: undefined, borderRadius: t.radius.md, padding: 10, gap: 7 },
+  compactCard: { gap: 6, padding: 9, borderRadius: t.radius.sm },
+  bare: { backgroundColor: 'transparent', borderWidth: 0, borderRadius: 0, padding: 0 },
+  header: { flexDirection: 'row', alignItems: 'center', gap: t.space.md },
+  kind: { width: 20, height: 22, alignItems: 'center', justifyContent: 'center' },
+  kindSmall: { width: 18 },
+  action: { flexGrow: 1 },
+  pill: { alignSelf: 'flex-start' },
+  title: { ...t.type.bodyStrong, color: t.colors.text },
   subtitle: { ...t.type.caption, color: t.colors.textSecondary },
-  command: { backgroundColor: t.colors.codeBg, borderRadius: t.radius.sm, paddingHorizontal: 10, paddingVertical: 8, borderWidth: 1, borderColor: t.colors.border },
-  commandText: { fontFamily: t.fonts.mono, fontSize: 12.5, lineHeight: 17, color: t.colors.codeText },
-  commandToggle: { minHeight: 32, justifyContent: 'center', alignSelf: 'flex-start' },
-  commandToggleText: { ...t.type.caption, color: t.colors.textSecondary, fontFamily: t.fonts.medium },
-  actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  command: { backgroundColor: t.colors.codeBg, borderRadius: t.radius.md, paddingHorizontal: t.space.md, paddingVertical: 10, borderWidth: 1, borderColor: t.colors.border, gap: 2 },
+  commandText: { ...t.type.footnote, fontFamily: t.fonts.mono, color: t.colors.codeText },
+  actions: { flexDirection: 'row', flexWrap: 'wrap', gap: t.space.sm },
   status: { flexDirection: 'row', alignItems: 'center', gap: 7 },
-  statusText: { fontFamily: t.fonts.medium, fontSize: 12.5, flexShrink: 1 },
+  statusText: { ...t.type.caption, flexShrink: 1 },
   sheetText: { ...t.type.callout, color: t.colors.textSecondary, textAlign: 'center' },
   choice: {
-    flexDirection: 'row', alignItems: 'center', minHeight: 44, backgroundColor: t.colors.surfaceSunken,
-    borderRadius: t.radius.md, paddingHorizontal: 14, borderWidth: 1, borderColor: 'transparent',
+    flexDirection: 'row', alignItems: 'center', minHeight: 48, backgroundColor: 'transparent',
+    paddingHorizontal: t.space.lg, borderWidth: 1, borderColor: 'transparent',
   },
   choiceText: { ...t.type.callout, fontFamily: t.fonts.medium, color: t.colors.text },
-  choiceOn: { borderColor: t.colors.accent, backgroundColor: t.colors.accentSoft },
+  choiceOn: { borderColor: t.colors.text, backgroundColor: t.colors.surfaceHigh },
   check: { width: 22, height: 22, borderRadius: 7, borderWidth: 2, borderColor: t.colors.textSecondary, marginRight: 12, alignItems: 'center', justifyContent: 'center' },
   checkOn: { backgroundColor: t.colors.accentFill, borderColor: t.colors.accentFill },
-  recommended: { ...t.type.label, fontSize: 11, color: t.colors.onAccentSoft },
+  recommended: { ...t.type.caption, color: t.colors.onAccentSoft },
   otherRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  otherInput: {
-    flex: 1, minWidth: 0, minHeight: 44, backgroundColor: t.colors.surfaceSunken, color: t.colors.text, ...t.type.callout, borderRadius: t.radius.pill,
-    paddingHorizontal: 16, ...(Platform.OS === 'web' ? ({ outlineStyle: 'none' } as object) : {}),
-  },
+
 }));

@@ -1,61 +1,60 @@
 <div align="center">
 
-<img src="docs/images/logo.svg" width="96" alt="Winglet logo" />
+<img src="docs/images/logo.svg" width="88" alt="Winglet logo" />
 
 # Winglet
 
-**The open-source Dots for Hermes Agent. Your agents, in your pocket.**
+**Your Hermes agents, in your pocket.**
 
-Named AI agents that live on *your* server, work while you're away,
+A calm, open-source phone app for [Hermes Agent](https://github.com/NousResearch/hermes-agent).<br/>
+Your agents run on *your* server, keep working while you're away,
 and tap you on the shoulder when they need you.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/VIKASRP24/winglet?label=release)](https://github.com/VIKASRP24/winglet/releases/latest)
 [![CI](https://github.com/VIKASRP24/winglet/actions/workflows/ci.yml/badge.svg)](https://github.com/VIKASRP24/winglet/actions/workflows/ci.yml)
 ![Android APK](https://img.shields.io/badge/android-APK-3DDC84)
-![iPhone PWA](https://img.shields.io/badge/iPhone-PWA-lightgrey)
+![iPhone PWA](https://img.shields.io/badge/iPhone-web%20app-lightgrey)
 
 <br/>
 
-<img src="docs/screenshots/home.png" width="200" alt="Home: what your agent needs from you" />&nbsp;
-<img src="docs/screenshots/trip.png" width="200" alt="A chat working toward a goal, with a question to answer" />&nbsp;
-<img src="docs/screenshots/goal.png" width="200" alt="A goal's progress and requirements" />&nbsp;
-<img src="docs/screenshots/server.png" width="200" alt="Server health and controls" />
+<a href="docs/media/winglet-explainer.mp4"><img src="docs/media/winglet-explainer.gif" width="720" alt="Winglet in 30 seconds: set up the server, scan the QR code, then chat, approve and switch bots from your phone" /></a>
 
-**[Get started](#get-started)** · **[Features](#what-it-does)** · **[How it works](#how-it-works)** · **[FAQ](#faq)**
+<sub>30 seconds of Winglet. <a href="docs/media/winglet-explainer.mp4">Watch in full quality</a>.</sub>
+
+**[Get started](#get-started)** · **[Features](#what-it-does)** · **[Tour](#tour)** · **[How it works](#how-it-works)** · **[FAQ](#faq)**
 
 </div>
 
 > [!TIP]
-> **New in [v0.5.0](docs/releases/v0.5.0.md):** chat-first navigation with a sidebar, an animated bot dock,
-> pinned and archived chats, and model controls inside the message box.
+> **New in [v0.9.0](docs/releases/v0.9.0.md):** a cleaner, flat redesign of every screen; switch bots in one tap
+> from the landing; charcoal, graphite or true-black dark mode; and a new Mono accent.
 
-## 💡 Why Winglet?
+## Why Winglet?
 
 OpenAI Dots, Meta Muse and Grok Bot showed what a personal agent on your phone should feel like.
-Winglet brings that to [Hermes Agent](https://github.com/NousResearch/hermes-agent), the open-source
-agent by Nous Research.
+Winglet brings that to Hermes Agent, the open-source agent by Nous Research, without handing your data to anyone.
 
 <table>
   <tr>
     <td width="33%" valign="top">
-      <h4>🏠 Your server, your models</h4>
+      <h4>Your server, your models</h4>
       Hermes runs on your own machine with any model provider, local models included.
     </td>
     <td width="33%" valign="top">
-      <h4>📲 No app store needed</h4>
-      An APK for Android, and an installable web app with notifications for iPhone and desktop.
+      <h4>Pair in one scan</h4>
+      One command on the server prints a QR code. Scan it and you're in: no accounts, no ports, no app store.
     </td>
     <td width="33%" valign="top">
-      <h4>🐾 Not another chat window</h4>
-      Each bot has a name and an animated pet, and Home shows what it's doing and what it needs from you.
+      <h4>Not another chat window</h4>
+      Each bot has a name and a pet, works on goals and routines, and brings you only what needs you.
     </td>
   </tr>
 </table>
 
 <a id="get-started"></a>
 
-## 🚀 Get started
+## Get started in two minutes
 
 **1. On your Hermes machine**, with the Hermes messaging gateway installed:
 
@@ -67,87 +66,100 @@ hermes winglet setup          # sets up HTTPS, starts the gateway, shows a QR co
 
 Setup gives you a free HTTPS address through Cloudflare. You don't need an account, a domain or any open ports.
 
-**2. On your phone**, scan the QR code:
+**2. On your phone, scan the QR code.**
 
-| 🤖 Android | 🍎 iPhone | 💻 Desktop |
+| Android | iPhone | Desktop |
 |---|---|---|
-| Install `winglet-<version>-arm64-v8a.apk` from the [latest release](https://github.com/VIKASRP24/winglet/releases/latest), then scan the QR in the app. | Scan with the Camera app, then **Share → Add to Home Screen**, open Winglet from your Home Screen and enter the pairing code. | Open the link from `hermes winglet pair` in any browser. |
+| Install `winglet-<version>-arm64-v8a.apk` from the [latest release](https://github.com/VIKASRP24/winglet/releases/latest), open it and tap **Scan QR code**. | Scan with the Camera app, then **Share → Add to Home Screen** and open Winglet from there. | Open the link from `hermes winglet pair` in any browser. |
 
-That's it. For Tailscale or your own domain, notifications, live typing and updates, see the **[setup guide](docs/SETUP.md)**.
+**3. Say hello.** Your bot is on the landing screen, ready for a message.
+
+The QR code carries your server key's fingerprint, so the phone checks it's really your server before pairing.
+For Tailscale or your own domain, notifications and updates, see the **[setup guide](docs/SETUP.md)**.
 
 <a id="what-it-does"></a>
 
-## 🧭 What it does
+## What it does
 
 <table>
   <tr>
     <td width="50%" valign="top">
-      <h4>💬 Chats</h4>
+      <h4>Chats</h4>
       A chat for every topic, with streaming replies, code, photos, files and voice notes. Search every chat, share from any Android app, and keep working on a bad connection.
     </td>
     <td width="50%" valign="top">
-      <h4>✅ Approvals and questions</h4>
-      Approve risky commands and answer questions with one tap, from the app or the notification. The Inbox collects everything waiting on you.
+      <h4>Approvals and questions</h4>
+      Approve risky commands and answer questions with one tap, from the app or the notification. The Inbox collects everything waiting on you, across all your bots.
     </td>
   </tr>
   <tr>
     <td valign="top">
-      <h4>🎯 Goals</h4>
-      Give a chat an outcome and Hermes keeps working on it, turn after turn, until it's done. Follow progress in the chat and on Home.
+      <h4>Goals</h4>
+      Give a chat an outcome and Hermes keeps working on it, turn after turn, until it's done.
     </td>
     <td valign="top">
-      <h4>⏰ Routines</h4>
+      <h4>Routines</h4>
       Schedule work in plain words, like "weekdays at 9am" or "every 2h". Results land in the Updates chat.
     </td>
   </tr>
   <tr>
     <td valign="top">
-      <h4>🐾 Pets and many bots</h4>
-      Give each bot an animated face from <a href="https://petdex.dev">petdex</a>. Pick a main bot, add more for separate jobs, and let them ask each other. <a href="docs/BOTS.md">More on bots →</a>
+      <h4>Many bots, one tap</h4>
+      Add a bot for each job and switch between them from the landing. Give each an animated pet from <a href="https://petdex.dev">petdex</a>. <a href="docs/BOTS.md">More on bots →</a>
     </td>
     <td valign="top">
-      <h4>🧠 Your agent</h4>
+      <h4>Your agent</h4>
       Switch model and reasoning level per chat. Edit persona and memory, track usage, and manage skills, tools and MCP servers.
     </td>
   </tr>
   <tr>
     <td valign="top">
-      <h4>🖥️ Your server</h4>
+      <h4>Your server</h4>
       Processor, memory and disk at a glance. Pause, restart and update Hermes and Winglet, read logs, and browse past sessions.
     </td>
     <td valign="top">
-      <h4>🔒 Safe by default</h4>
+      <h4>Safe by default</h4>
       Verified QR pairing, signed owner actions, an activity log, members who can't see your chats, and an optional app lock.
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <h4>Workspaces</h4>
+      Projects, branching from any exchange, checkpoints you can diff and restore, rooms with several bots, and hands-free voice.
+    </td>
+    <td valign="top">
+      <h4>Make it yours</h4>
+      Light or dark in charcoal, graphite or true black, six accents, bubbles or a compact layout, and a drawer or pinned sidebar.
     </td>
   </tr>
 </table>
 
 See **[all features](docs/FEATURES.md)** for the full list.
 
-## 📸 Tour
+<a id="tour"></a>
+
+## Tour
 
 <table>
   <tr>
-    <td align="center"><img src="docs/screenshots/home-goals.png" width="190" alt="Home: working now and working toward" /><br/><sub>What it's working on</sub></td>
-    <td align="center"><img src="docs/screenshots/chat.png" width="190" alt="A reply with highlighted code" /><br/><sub>Code, highlighted</sub></td>
-    <td align="center"><img src="docs/screenshots/model.png" width="190" alt="Choosing a model for one chat" /><br/><sub>A model per chat</sub></td>
-    <td align="center"><img src="docs/screenshots/agent.png" width="190" alt="The Agent tab" /><br/><sub>Your agent</sub></td>
+    <td align="center"><img src="docs/screenshots/home.png" width="190" alt="The landing: your bot, a greeting, and one-tap bot chips" /><br/><sub>Start from the landing</sub></td>
+    <td align="center"><img src="docs/screenshots/chat.png" width="190" alt="A conversation with your bot" /><br/><sub>Just ask</sub></td>
+    <td align="center"><img src="docs/screenshots/inbox.png" width="190" alt="The inbox, where questions and approvals wait" /><br/><sub>One inbox for every bot</sub></td>
+    <td align="center"><img src="docs/screenshots/sidebar.png" width="190" alt="The sidebar" /><br/><sub>Everything in one sidebar</sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/screenshots/schedule.png" width="190" alt="Scheduled routines" /><br/><sub>Routines</sub></td>
-    <td align="center"><img src="docs/screenshots/updates.png" width="190" alt="A routine's result in the Updates chat" /><br/><sub>Results in Updates</sub></td>
-    <td align="center"><img src="docs/screenshots/search.png" width="190" alt="Searching every chat" /><br/><sub>Search every chat</sub></td>
-    <td align="center"><img src="docs/screenshots/home-light.png" width="190" alt="Home in light mode" /><br/><sub>Light mode</sub></td>
+    <td align="center"><img src="docs/screenshots/agent.png" width="190" alt="Managing your agent" /><br/><sub>Your agent</sub></td>
+    <td align="center"><img src="docs/screenshots/schedule.png" width="190" alt="Routines and ideas for new ones" /><br/><sub>Routines</sub></td>
+    <td align="center"><img src="docs/screenshots/usage.png" width="190" alt="Token usage and cost" /><br/><sub>Usage and cost</sub></td>
+    <td align="center"><img src="docs/screenshots/appearance.png" width="190" alt="Appearance: theme, dark tone and accent" /><br/><sub>Make it yours</sub></td>
   </tr>
 </table>
 
-<img src="docs/screenshots/desktop.png" alt="Winglet in a desktop browser: chats on the left, a chat working toward a goal on the right" />
-
-<sub>Screenshots show the interface before v0.4, which redesigned Home, avatars and model controls.</sub>
+<sub>Screenshots are from a phone running Winglet against a test Hermes server, in dark mode with the Black tone.</sub>
 
 <a id="how-it-works"></a>
 
-## ⚙️ How it works
+## How it works
 
 <img src="docs/images/how-it-works.svg" alt="Your phone talks to the Winglet plugin inside Hermes on your server over HTTPS. Hermes uses your models, and notifications come back to the phone." />
 
@@ -156,7 +168,7 @@ See **[all features](docs/FEATURES.md)** for the full list.
 
 <a id="faq"></a>
 
-## ❓ FAQ
+## FAQ
 
 <details>
 <summary><b>Do I need to pay for anything?</b></summary>
@@ -213,7 +225,7 @@ It lets you use Winglet without a native iOS build or an App Store account. It s
 iOS 16.4+ when added to the Home Screen over HTTPS.
 </details>
 
-## 🗺️ What's next
+## What's next
 
 - [ ] Live screen: watch the agent's computer and take over when it needs you
 - [ ] Real-time voice
@@ -221,7 +233,7 @@ iOS 16.4+ when added to the Home Screen over HTTPS.
 
 The full plan is in [docs/APP_PLAN.md](docs/APP_PLAN.md).
 
-## 🛠️ Development
+## Development
 
 ```bash
 # Plugin tests
@@ -238,8 +250,9 @@ npx tsc --noEmit && npm test
 ```
 
 To try the plugin against your own Hermes, copy `plugin/` to `~/.hermes/plugins/winglet/` and enable it.
+The design rules for the app are in [docs/DESIGN.md](docs/DESIGN.md).
 
-## 🤝 Contributing
+## Contributing
 
 Early days, so everything is open: code, design, naming, ideas. See [CONTRIBUTING.md](CONTRIBUTING.md).
 Found a security issue? Please read [SECURITY.md](SECURITY.md) first.

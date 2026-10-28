@@ -38,13 +38,13 @@ test('visible Copy preserves the complete Markdown response and shows confirmati
   const text = '**Full reply**\n\n```ts\nconst n = 42;\n```';
   await h.render(text).props.children[0].props.onPress();
   assert.deepEqual(h.copied, [text]);
-  assert.equal(h.render(text).props.children[0].props.accessibilityLabel, 'Copied response');
+  assert.equal(h.render(text).props.children[0].props.label, 'Copied response');
 });
 
 test('clipboard failure leaves Copy available and gives a recoverable error', async () => {
   const h = harness(true);
   await h.render('reply').props.children[0].props.onPress();
-  assert.equal(h.render('reply').props.children[0].props.accessibilityLabel, 'Copy response');
+  assert.equal(h.render('reply').props.children[0].props.label, 'Copy response');
   assert.equal(h.toasts.length, 1);
   assert.equal(h.copied.length, 0);
 });

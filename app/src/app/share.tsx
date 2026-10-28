@@ -6,7 +6,7 @@ import Animated, { FadeIn } from 'react-native-reanimated';
 import { AgentFace } from '../components/AgentFace';
 import { FileText, Hash, MessageCircle, X } from '../components/icons';
 import { Screen } from '../components/Screen';
-import { Button, Card, IconButton, ListGroup, ListRow, SectionHeader } from '../components/ui';
+import { Button, Card, Footnote, IconButton, ListGroup, ListRow, SectionHeader } from '../components/ui';
 import { attachFiles } from '../lib/attach';
 import { haptic } from '../lib/haptics';
 import { formatSize } from '../lib/media';
@@ -41,12 +41,13 @@ export default function ShareScreen() {
   };
 
   return (
-    <Screen title="Share to…" subtitle="Pick a chat. It goes into the message box there, so you can add a note before you send it."
+    <Screen title="Share to a chat"
       right={<IconButton label="Cancel" onPress={close}><X size={20} color={t.colors.text} /></IconButton>}>
       <Preview shared={shared} />
+      <Footnote>You can review and edit before sending.</Footnote>
       {!servers.length ? (
         <Card style={{ gap: 12, marginTop: 18 }}>
-          <Text style={s.body}>Pair Winglet with your Hermes server first, then share again.</Text>
+          <Text style={s.body}>Pair a server to share to its chats.</Text>
           <Button title="Pair a server" onPress={() => router.replace('/pair')} />
         </Card>
       ) : servers.map((server) => {
@@ -58,7 +59,7 @@ export default function ShareScreen() {
             <ListGroup>
               {shareTargets(rt?.chats, main, server.deviceId).map((chat) => (
                 <ListRow key={chat.id} title={chat.main ? `${server.bot.title} (main chat)` : chat.title}
-                  icon={chat.main ? <MessageCircle size={18} color={t.colors.onAccentSoft} /> : <Hash size={18} color={t.colors.onAccentSoft} />}
+                  icon={chat.main ? <MessageCircle size={18} color={t.colors.textSecondary} /> : <Hash size={18} color={t.colors.textSecondary} />}
                   onPress={() => deliver(server.id, chat.id)} />
               ))}
             </ListGroup>
@@ -89,7 +90,7 @@ function Preview({ shared }: { shared: Shared }) {
       ) : null}
       {shared.text ? <Text style={s.text} numberOfLines={6} selectable>{shared.text}</Text> : null}
       {shared.dropped ? (
-        <Text style={s.note}>Only the first {shared.files.length} files come along; {shared.dropped} more were left out.</Text>
+        <Text style={s.note}>{shared.files.length} files included; {shared.dropped} left out.</Text>
       ) : null}
     </Card>
   );

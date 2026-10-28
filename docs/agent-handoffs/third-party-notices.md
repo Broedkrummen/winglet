@@ -72,3 +72,11 @@ control policy blocked the Python preview launch; the existing Node runtime serv
 Review generator/render, the --check tests, app JSON import, About navigation, then plugin output. No source
 license file is edited or replaced by this feature. Reverting these feature commits removes the packaged
 copies/UI/hook; attribution source files remain. Do not distribute adapted code without its notices.
+
+## 2026-10-26: reference-only notices removed
+
+A source comparison against Herald (MIT) found that only live voice (`endOfSpeech.ts`, `voiceText.ts`) and
+structured execution (`execution/model.ts`) translate Herald code; their notices stay. Checkpoints, event replay,
+phone tools, projects and routine history were designed with Herald as a behavioural reference only and share no
+code, so `herald-{checkpoints,event-replay,phone-tools,projects,routine-history}.md` were deleted and both generated
+copies regenerated. Older handoffs that mention those files describe the state at the time they were written.

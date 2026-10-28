@@ -1,14 +1,17 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { router } from 'expo-router';
-import { X } from '../components/icons';
-import { useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Button, IconButton } from '../components/ui';
+import { Camera, X } from '../components/icons';
+import { Button, IconButton, Tap } from '../components/ui';
 import { defaultDeviceName, fetchInfo, pair, parsePairLink, verifyDevice } from '../lib/api';
 import { useApp } from '../lib/store';
 import { FIXED } from '../lib/theme';
-import { makeStyles } from '../lib/themeContext';
+import { makeStyles, useTheme } from '../lib/themeContext';
+
+const FRAME = 250;
+const CORNER = 44;
 
 export default function ScanScreen() {
   const styles = useStyles();
@@ -53,16 +56,7 @@ export default function ScanScreen() {
 
   if (!permission) return <View style={styles.root} />;
 
-  if (!permission.granted) {
-    return (
-      <View style={[styles.root, styles.center, { padding: 24 }]}>
-        <Text style={styles.title}>Camera access</Text>
-        <Text style={styles.text}>Winglet needs the camera only to scan the pairing code shown by `hermes winglet pair`.</Text>
-        <Button title="Allow camera" onPress={requestPermission} size="lg" style={{ alignSelf: 'stretch' }} />
-        <Button title="Enter the code instead" variant="ghost" onPress={() => router.back()} />
-      </View>
-    );
-  }
+  if (!permission.granted) return <AskCamera onAllow={requestPermission} />;
 
   return (
     <View style={styles.root}>
@@ -76,12 +70,12 @@ export default function ScanScreen() {
         <IconButton label="Close" onPress={() => router.back()} style={styles.close}>
           <X size={24} color={FIXED.white} />
         </IconButton>
-        <View style={styles.frame} />
+        <Viewfinder still={status !== 'scanning'} />
         <View style={styles.hintBox}>
           {status === 'pairing' || status === 'verifying' ? <ActivityIndicator color={FIXED.white} /> : null}
           <Text style={styles.hint}>
             {status === 'pairing' ? 'Pairing…' : status === 'verifying' ? 'Verifying this phone…'
-              : error || 'Point at the QR code from `hermes winglet pair` or another phone'}
+              : error || 'Scan the code from hermes winglet pair or another phone.'}
           </Text>
           {status === 'error' ? (
             <Button title="Try again" onPress={() => { handled.current = false; setError(''); setStatus('scanning'); }} />
@@ -92,14 +86,57 @@ export default function ScanScreen() {
   );
 }
 
+/** Before the camera: why it's needed. */
+function AskCamera({ onAllow }: { onAllow: () => unknown }) {
+  const t = useTheme();
+  const styles = useStyles();
+  const insets = useSafeAreaInsets();
+  return (
+    <View style={[styles.ask, { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 24 }]}>
+      <Camera size={36} color={t.colors.textSecondary} strokeWidth={1.6} />
+      <View style={styles.askWords}>
+        <Text style={styles.title} accessibilityRole="header">Camera access</Text>
+        <Text style={styles.text}>Only used to scan pairing codes.</Text>
+      </View>
+      <View style={styles.askActions}>
+        <Button title="Allow camera" onPress={() => { onAllow(); }} size="lg" />
+        <Button title="Enter the code instead" variant="secondary" size="lg" onPress={() => router.back()} />
+      </View>
+    </View>
+  );
+}
+
+/** Four corners marking where to hold the code. */
+function Viewfinder(_props: { still: boolean }) {
+  const styles = useStyles();
+  return (
+    <View style={styles.frame} pointerEvents="none">
+      <View style={[styles.corner, styles.topLeft]} />
+      <View style={[styles.corner, styles.topRight]} />
+      <View style={[styles.corner, styles.bottomLeft]} />
+      <View style={[styles.corner, styles.bottomRight]} />
+    </View>
+  );
+}
+
 const useStyles = makeStyles((t) => ({
   root: { flex: 1, backgroundColor: FIXED.camera },
-  center: { alignItems: 'center', justifyContent: 'center', gap: 14, backgroundColor: t.colors.bg },
-  title: { ...t.type.title, color: t.colors.text },
-  text: { ...t.type.callout, fontSize: 15, color: t.colors.textSecondary, textAlign: 'center' },
+  ask: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: t.space.xl, paddingHorizontal: t.space.xl, backgroundColor: t.colors.bg },
+  askWords: { gap: t.space.sm, alignItems: 'center' },
+  askActions: { width: '100%', maxWidth: 400, gap: t.space.md },
+  title: { ...t.type.title, color: t.colors.text, textAlign: 'center' },
+  text: { ...t.type.callout, color: t.colors.textSecondary, textAlign: 'center' },
   overlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'space-between', paddingBottom: 60 },
-  close: { alignSelf: 'flex-start', marginLeft: 12, backgroundColor: FIXED.cameraScrim, borderRadius: 20 },
-  frame: { width: 250, height: 250, borderRadius: 32, borderWidth: 3, borderColor: FIXED.cameraFrame },
-  hintBox: { alignItems: 'center', gap: 12, backgroundColor: FIXED.cameraScrim, borderRadius: t.radius.lg, paddingHorizontal: 18, paddingVertical: 14, marginHorizontal: 24 },
-  hint: { fontFamily: t.fonts.semibold, fontSize: 15, color: FIXED.white, textAlign: 'center' },
+  close: { alignSelf: 'flex-start', marginLeft: 12, backgroundColor: FIXED.cameraScrim, borderRadius: t.radius.pill },
+  frame: { width: FRAME, height: FRAME },
+  corner: { position: 'absolute', width: CORNER, height: CORNER, borderColor: FIXED.cameraFrame },
+  topLeft: { top: 0, left: 0, borderTopWidth: 3, borderLeftWidth: 3, borderTopLeftRadius: 22 },
+  topRight: { top: 0, right: 0, borderTopWidth: 3, borderRightWidth: 3, borderTopRightRadius: 22 },
+  bottomLeft: { bottom: 0, left: 0, borderBottomWidth: 3, borderLeftWidth: 3, borderBottomLeftRadius: 22 },
+  bottomRight: { bottom: 0, right: 0, borderBottomWidth: 3, borderRightWidth: 3, borderBottomRightRadius: 22 },
+  hintBox: {
+    alignItems: 'center', gap: 12, backgroundColor: FIXED.cameraScrim, borderRadius: t.radius.xl, paddingHorizontal: 20, paddingVertical: 16,
+    marginHorizontal: 24,
+  },
+  hint: { ...t.type.callout, color: FIXED.white, textAlign: 'center' },
 }));

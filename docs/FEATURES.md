@@ -67,7 +67,7 @@ The [README](../README.md#what-it-does) has the overview. This page lists everyt
 - **Chat-first navigation.** Open the sidebar from the top-left menu for grouped conversation and workspace controls, pinned and recent conversations, search,
   all chats and archives, Agent and Settings. Inbox is at the top right. Settings → Navigation offers an automatic sidebar,
   a drawer, or a pinned sidebar with a compact rail on phones. Search sits inside the history card; long-press a chat or tap its
-  three-dot menu for chat actions. The sidebar has a subtle glass finish with a solid reduced-transparency fallback. There is no bottom navigation bar.
+  three-dot menu for chat actions. There is no bottom navigation bar.
 - **Goals.** Give a chat an outcome and Hermes keeps working on it, turn after turn, until its judge says
   it's done. Add requirements, pause it, and follow its progress in the chat.
 - **Skills, tools and MCP servers.** Turn skills on and off, read them, and install Hermes's official ones.
@@ -91,8 +91,10 @@ The [README](../README.md#what-it-does) has the overview. This page lists everyt
 
 ## Looks good everywhere
 
-- Light and true-black dark themes with accent colors, smooth motion and haptics, soft sounds you can turn off,
-  a sidebar layout on tablets and desktop, and more than one bot side by side.
+- A flat, quiet look: light or dark, with dark mode in charcoal (the default), graphite or true black for OLED
+  screens, six accent colors including a neutral Mono, short motion and haptics, soft sounds you can turn off,
+  and a sidebar layout on tablets and desktop.
+- With more than one bot, chips under the landing's greeting switch between them in one tap.
 - Compact chat layout uses smaller text and tighter spacing. Approval cards follow the conversation's text column,
   with a short command preview and the full command available to expand and scroll.
 - Message boxes stay above the keyboard, including Android windows that draw edge to edge. Updates has a compact shortcut in Chats.

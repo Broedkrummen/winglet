@@ -6,8 +6,8 @@ import { CheckCircle2, CircleAlert, ExternalLink, Plug, RefreshCw, Search, Trash
 import { Screen } from '../components/Screen';
 import { withSelectedServer } from '../components/ServerScreen';
 import { Sheet } from '../components/Sheet';
-import { Button, Card, ConfirmButton, Field, ListGroup, ListRow, LoadError, SearchField, SectionHeader, Skeleton, Toggle } from '../components/ui';
-import { matches, missingEnv, prettyName, serverPlace, shortDescription, signsIn } from '../lib/abilities';
+import { Button, Card, ConfirmButton, Field, Footnote, ListGroup, ListRow, LoadError, SearchField, SectionHeader, Skeleton, Toggle } from '../components/ui';
+import { matches, missingEnv, prettyName, serverPlace, signsIn } from '../lib/abilities';
 import { api, ApiError, serverKey, signedApi } from '../lib/api';
 import { idempotencyKey } from '../lib/control';
 import { seal } from '../lib/crypto';
@@ -75,7 +75,7 @@ function McpScreen() {
   };
 
   return (
-    <Screen title="MCP servers" subtitle="Connect your agent to other apps and services. Each server gives it new tools." onRefresh={load}>
+    <Screen title="MCP servers" onRefresh={load}>
       {error && info ? <Text style={s.error}>{error}</Text> : null}
       {!info ? (error ? <LoadError message={error} onRetry={load} /> : (
         <View style={{ gap: 12, marginTop: 20 }}>{[0, 1].map((i) => <Skeleton key={i} height={64} radius={16} />)}</View>
@@ -83,7 +83,7 @@ function McpScreen() {
         <Animated.View entering={FadeIn}>
           {info.needs_reload ? (
             <Card style={s.banner}>
-              <RefreshCw size={18} color={t.colors.onAccentSoft} />
+              <RefreshCw size={18} color={t.colors.textSecondary} />
               <Text style={s.bannerText}>
                 {info.can_reload ? 'Reconnect to put your changes to work.' : 'Restart the server to put your changes to work.'}
               </Text>
@@ -95,27 +95,24 @@ function McpScreen() {
           {info.servers.length ? (
             <ListGroup>
               {info.servers.map((x) => (
-                <ListRow key={x.name} icon={<Plug size={18} color={x.enabled ? t.colors.onAccentSoft : t.colors.textTertiary} />}
-                  title={prettyName(x.name)} subtitle={`${serverPlace(x)}${x.source === 'plugin' ? ` · from ${x.plugin}` : ''}`}
+                <ListRow key={x.name} icon={<Plug size={18} color={x.enabled ? t.colors.textSecondary : t.colors.textTertiary} />}
+                  title={prettyName(x.name)} value={serverPlace(x)} subtitle={x.source === 'plugin' ? `From ${x.plugin}` : undefined}
                   onPress={() => setOpen(x)} chevron={false}
                   right={x.source === 'plugin' ? undefined
                     : <Toggle label={`${x.name} server`} value={x.enabled} onValueChange={(on) => toggle(x, on)} />} />
               ))}
             </ListGroup>
           ) : (
-            <Card style={{ alignItems: 'center', gap: 8, paddingVertical: 22 }}>
-              <Plug size={24} color={t.colors.onAccentSoft} />
-              <Text style={s.emptyText}>No servers yet. Add one below.</Text>
-            </Card>
+            <ListGroup><ListRow title="No servers yet. Add one below." /></ListGroup>
           )}
 
           <SectionHeader title="Add a server" />
           <SearchField value={query} onChangeText={setQuery} placeholder="Search Linear, Notion, GitHub…" />
-          <Text style={s.note}>From Hermes's list of approved servers. Each one shows what it connects to before you add it.</Text>
+          <Footnote>Approved servers from Hermes.</Footnote>
           {!catalog ? <Skeleton height={64} radius={16} style={{ marginTop: 12 }} /> : available.length ? (
             <ListGroup style={{ marginTop: 12 }}>
               {available.map((e) => (
-                <ListRow key={e.name} title={prettyName(e.name)} subtitle={shortDescription(e.description)} onPress={() => setAdding(e)} />
+                <ListRow key={e.name} title={prettyName(e.name)} onPress={() => setAdding(e)} />
               ))}
             </ListGroup>
           ) : (
@@ -330,7 +327,7 @@ function AddSheet({ server, entry, onClose, onJob, onAdded }: {
 
 const useStyles = makeStyles((t) => ({
   error: { ...t.type.callout, color: t.colors.danger, marginTop: 10 },
-  banner: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 18, backgroundColor: t.colors.accentSoft, borderColor: 'transparent' },
+  banner: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 18, backgroundColor: t.colors.surface },
   bannerText: { ...t.type.callout, color: t.colors.text, flex: 1 },
   note: { ...t.type.caption, color: t.colors.textSecondary, marginTop: 8, paddingHorizontal: 4 },
   empty: { alignItems: 'center', gap: 8, paddingVertical: 28 },
@@ -338,7 +335,7 @@ const useStyles = makeStyles((t) => ({
   description: { ...t.type.callout, color: t.colors.text },
   trust: { gap: 6, padding: 12, borderRadius: t.radius.md, backgroundColor: t.colors.surfaceSunken },
   trustLabel: { ...t.type.caption, color: t.colors.textSecondary },
-  code: { fontFamily: t.fonts.mono, fontSize: 13, color: t.colors.text },
+  code: { ...t.type.footnote, fontFamily: t.fonts.mono, color: t.colors.text },
   result: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, padding: 12, borderRadius: t.radius.md },
   resultText: { ...t.type.caption, color: t.colors.text, flex: 1 },
 }));

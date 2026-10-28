@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Text, View } from 'react-native';
 import { Sheet } from '../../components/Sheet';
 import { GitBranch } from '../../components/icons';
-import { Button, Chip, Field } from '../../components/ui';
+import { Button, Card, Chip, Field, Footnote, ListGroup, ListRow } from '../../components/ui';
 import { ApiError, api } from '../../lib/api';
 import { useApp } from '../../lib/store';
 import { makeStyles, useTheme } from '../../lib/themeContext';
@@ -55,7 +55,7 @@ export function BranchSheet({ server, chatId, chatTitle, messages, state, online
       : !state?.revision ? 'Reload this chat to branch it.'
         : busy ? 'Wait for the current reply to finish.'
           : null;
-  const titleText = mode === 'edit' ? 'Edit in a new branch' : mode === 'regenerate' ? 'Regenerate reply' : 'Branch from here';
+  const titleText = mode === 'edit' ? 'Edit message' : mode === 'regenerate' ? 'Regenerate reply' : 'New branch';
   const primary = mode === 'branch' ? 'Create branch' : mode === 'edit' ? 'Branch and send' : inPlace ? 'Replace reply' : 'Branch and regenerate';
   const chosen = inPlace ? 'in_place' : 'new';
 
@@ -128,10 +128,10 @@ export function BranchSheet({ server, chatId, chatTitle, messages, state, online
 
         {blocked ? <View style={s.noteBox}><Text style={s.note}>{blocked}</Text></View> : null}
 
-        <View style={s.destination}>
+        <Card style={s.destination}>
           <View style={s.destinationHead}>
-            <View style={[s.destinationIcon, { backgroundColor: t.colors.accentSoft }]}>
-              <GitBranch size={17} color={t.colors.onAccentSoft} />
+            <View style={s.destinationIcon}>
+              <GitBranch size={20} color={t.colors.textSecondary} />
             </View>
             <View style={{ flex: 1, minWidth: 0 }}>
               <Text style={s.destinationTitle}>{inPlace ? 'This chat' : 'New chat'}</Text>
@@ -142,17 +142,17 @@ export function BranchSheet({ server, chatId, chatTitle, messages, state, online
             <Field label="Branch title" value={title} onChangeText={(v) => { setTitle(v); op.current = null; }}
               maxLength={80} returnKeyType="done" autoCapitalize="sentences" placeholder="Name this branch" />
           ) : null}
-        </View>
+        </Card>
 
         {mode === 'edit' ? (
           <Field label="Your message" value={text} onChangeText={(v) => { setText(v); op.current = null; }}
             multiline textAlignVertical="top" maxLength={16000} style={s.editField}
-            hint="The original message stays in the original chat. This branch sends the edited text from the same context." />
+            hint="The original stays unchanged; the edited message sends in a new branch." />
         ) : null}
 
         {mode === 'regenerate' ? (
           <View style={{ gap: 8 }}>
-            <Text style={s.label}>Where should the new reply go?</Text>
+            <Text style={s.label}>Destination</Text>
             <View style={s.choices}>
               <Chip label="New chat" selected={where === 'new'} onPress={() => { setWhere('new'); setConfirming(false); op.current = null; }}
                 accessibilityLabel="Regenerate in a new branch, keeping the original chat" />
@@ -160,22 +160,23 @@ export function BranchSheet({ server, chatId, chatTitle, messages, state, online
                 if (canReplace) { setWhere('in_place'); setConfirming(false); op.current = null; }
               }} accessibilityLabel={canReplace ? 'Replace this reply in place, destructive' : 'Replacing this reply isn’t available here'} />
             </View>
-            {!canReplace ? <Text style={s.hint}>Only the newest settled reply without attachments can be replaced in place.</Text> : null}
-            {inPlace ? <View style={s.dangerNote}><Text style={s.dangerText}>This removes the current reply from this chat and generates it again. The original prompt stays; later messages would block this action.</Text></View> : null}
+            {!canReplace ? <Text style={s.hint}>Only the latest finished reply without attachments can be replaced.</Text> : null}
+            {inPlace ? <View style={s.dangerNote}><Text style={s.dangerText}>Replaces the current reply. Your prompt stays unchanged.</Text></View> : null}
           </View>
         ) : null}
 
-        <View style={s.summary}>
+        <Card style={s.summary}>
           <Text style={s.summaryLine}>{copies ? `${copies} earlier ${copies === 1 ? 'message' : 'messages'} copied into the branch.` : 'The branch starts from the same context.'}</Text>
           <Text style={s.summaryLine}>{actionHint(mode, later, chosen)}</Text>
-        </View>
+        </Card>
 
-        {state?.model ? <Text style={s.model}>Continues with {modelLabel(state.model)}. Uses your current tool permissions.</Text> : <Text style={s.model}>Uses this chat’s current model and your tool permissions.</Text>}
+        <ListGroup><ListRow title="Model" value={state?.model ? modelLabel(state.model) : "Current chat model"} /></ListGroup>
+        <Footnote>Uses your current tool permissions.</Footnote>
 
         {inPlace && confirming ? (
           <View style={s.confirmBox} accessibilityRole="alert">
             <Text style={s.confirmTitle}>Replace this reply?</Text>
-            <Text style={s.confirmText}>The current reply is removed from this chat and generated again from your prompt. This can’t be undone.</Text>
+            <Text style={s.confirmText}>Replaces this reply from your prompt. This can’t be undone.</Text>
             <View style={s.actions}>
               <Button title="Keep original" variant="secondary" onPress={() => { setConfirming(false); onClose(); }} />
               <Button title="Replace reply" variant="danger" loading={saving} onPress={submit} />
@@ -188,26 +189,26 @@ export function BranchSheet({ server, chatId, chatTitle, messages, state, online
               onPress={submit} style={{ flex: 1 }} />
           </View>
         )}
-        <Text style={s.privacy}>{mode === 'regenerate'
+        <Footnote>{mode === 'regenerate'
           ? 'Nothing in the current chat changes unless you choose “Replace this reply”.'
-          : 'The original chat stays exactly as it is.'}</Text>
+          : 'The original chat stays unchanged.'}</Footnote>
       </View>
     </Sheet>
   );
 }
 
 const useStyles = makeStyles((t) => ({
-  body: { gap: 14, paddingHorizontal: 4, paddingBottom: 8 },
-  destination: { gap: 12, padding: 12, borderRadius: t.radius.lg, backgroundColor: t.colors.surfaceSunken, borderWidth: 1, borderColor: t.colors.border },
+  body: { gap: t.space.md, paddingBottom: t.space.sm },
+  destination: { gap: t.space.md },
   destinationHead: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  destinationIcon: { width: 34, height: 34, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  destinationIcon: { width: 22, alignItems: 'center', justifyContent: 'center' },
   destinationTitle: { ...t.type.bodyStrong, color: t.colors.text },
   destinationSub: { ...t.type.caption, color: t.colors.textSecondary, marginTop: 2 },
   label: { ...t.type.label, color: t.colors.textSecondary },
   editField: { minHeight: 120, maxHeight: 220 },
   choices: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   hint: { ...t.type.caption, color: t.colors.textSecondary },
-  summary: { gap: 4, padding: 12, borderRadius: t.radius.md, backgroundColor: t.colors.surface },
+  summary: { gap: t.space.xs },
   summaryLine: { ...t.type.callout, color: t.colors.textSecondary },
   model: { ...t.type.caption, color: t.colors.textTertiary, paddingHorizontal: 2 },
   privacy: { ...t.type.caption, color: t.colors.textTertiary, textAlign: 'center' },

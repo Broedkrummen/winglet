@@ -2,7 +2,7 @@ import {useEffect,useMemo,useRef,useState} from 'react';
 import {router} from 'expo-router';
 import {Text, View} from 'react-native';
 import {Sheet} from '../../components/Sheet';
-import {Button, Field} from '../../components/ui';
+import {Button, Card, Field, Footnote, SectionHeader} from '../../components/ui';
 import {focusComposer} from '../../components/Composer';
 import {requestFocus} from '../../lib/focus';
 import {useApp, useServerState} from '../../lib/store';
@@ -59,10 +59,10 @@ export function QuoteSheet({server, chatId, message, visible, onClose, onBranch}
     }catch(e){if(mounted.current)setError((e as Error).message);}
     finally{if(mounted.current)setBusy(false);}
   };
-  return <Sheet visible={visible} title="Ask about a quote" onClose={()=>{if(!busy)onClose();}} scrollable>
+  return <Sheet visible={visible} title="Quote" onClose={()=>{if(!busy)onClose();}} scrollable>
     <View style={s.content}>
-      {!sourceValid ? <Text style={s.error}>The reply changed or is no longer available. Close this panel and select it again.</Text> : <>
-        <Text style={s.note}>Select text below, or paste an exact passage into Quote text. Markdown, code and tables are shown as source text so the selected characters stay exact.</Text>
+      {!sourceValid ? <Text style={s.error}>Reply unavailable or changed. Select it again.</Text> : <>
+        <Footnote>Select from the source, or paste an exact passage.</Footnote>
         <SourceSelection text={message!.text} colors={t.colors} fontFamily={t.fonts.regular}
           onSelect={(start,end)=>{
             if(end>start && end-start<=MAX_QUOTE){
@@ -75,16 +75,16 @@ export function QuoteSheet({server, chatId, message, visible, onClose, onBranch}
           <Text style={s.note}>Match {match+1} of {matches.length}</Text>
           <Button size="sm" variant="tonal" title="Next match" onPress={()=>setMatch(n=>(n+1)%matches.length)} />
         </View> : null}
-        {typed && !anchor ? <Text style={s.error}>Use an exact passage of up to4000 complete characters from this reply.</Text> : null}
-        {anchor ? <View style={s.preview}><Text style={s.caption}>SELECTED QUOTE · characters {anchor.start+1}–{anchor.end}</Text>
-          <Text selectable style={s.quote}>{anchor.text}</Text></View> : null}
+        {typed && !anchor ? <Text style={s.error}>Choose an exact passage of up to 4,000 complete characters.</Text> : null}
+        {anchor ? <Card style={s.preview}><SectionHeader title="Selected quote" right={<Text style={s.note}>{anchor.start+1}–{anchor.end}</Text>} style={{paddingTop:0,paddingHorizontal:0}}/>
+          <Text selectable style={s.quote}>{anchor.text}</Text></Card> : null}
         <Field label="Your question (optional)" value={question} onChangeText={setQuestion} multiline maxLength={4000}
           placeholder="What would you like to know?" />
-        <Text style={s.note}>The quote and question go to the composer for review before you send. A side question receives this quote only, without the original conversation.</Text>
+        <Footnote>Review in the composer before sending. Side questions include only the quote, not this conversation.</Footnote>
         {!supported ? <Text style={s.error}>Update this server to use exact quotes. Your text has not been sent.</Text> : null}
         <Button title="Use in this chat" disabled={!anchor || busy || !supported} loading={busy} onPress={()=>prepare(false)} />
         <Button title="Start a side question" variant="tonal" disabled={!anchor || busy || !supported || !online} onPress={()=>prepare(true)} />
-        {onBranch ? <Button title="Branch the conversation instead" variant="ghost" onPress={onBranch} disabled={busy || !online} /> : null}
+        {onBranch ? <Button title="Branch conversation" variant="ghost" onPress={onBranch} disabled={busy || !online} /> : null}
         <Button title="Show original reply" variant="ghost" onPress={()=>{onClose();requestFocus(server.id,chatId,message!.id);}} />
       </>}
       {error ? <Text style={s.error} accessibilityLiveRegion="polite">{error}</Text> : null}
@@ -92,12 +92,12 @@ export function QuoteSheet({server, chatId, message, visible, onClose, onBranch}
   </Sheet>;
 }
 const useStyles=makeStyles(t=>({
-  content:{paddingHorizontal:8,gap:12},
+  content:{gap:t.space.md,paddingBottom:t.space.sm},
   note:{...t.type.callout,color:t.colors.textSecondary},
   caption:{...t.type.caption,color:t.colors.accent},
   source:{height:180,padding:12,borderRadius:t.radius.md,borderWidth:1,borderColor:t.colors.border,backgroundColor:t.colors.surface,color:t.colors.text,...t.type.callout},
   matches:{flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:8,flexWrap:'wrap'},
-  preview:{gap:8,padding:12,borderLeftWidth:3,borderLeftColor:t.colors.accent,backgroundColor:t.colors.surface,borderRadius:t.radius.md},
+  preview:{gap:t.space.sm,borderLeftWidth:3,borderLeftColor:t.colors.accent},
   quote:{...t.type.callout,color:t.colors.text},
   error:{...t.type.callout,color:t.colors.danger},
 }));

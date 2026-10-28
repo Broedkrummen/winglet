@@ -106,6 +106,7 @@ test('drawer dismissal never waits for an animation callback and Android Back is
       useAnimatedStyle: (fn: any) => fn(), withTiming: (value: number) => value, withSpring: (value: number) => value },
     '../lib/motion': { useReducedMotion: () => false, spring: { snappy: {} } },
     '../lib/navigation': { sidebarDrawerWidth },
+    '../lib/prefs': { usePrefs: (select: any) => select({ prefs: { view: 'full' } }) },
     '../lib/themeContext': { makeStyles: () => () => ({}), useTheme: () => ({ colors: { overlay: '#000' } }) },
   };
   const result: any = {};

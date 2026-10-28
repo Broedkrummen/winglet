@@ -5,6 +5,7 @@ import vm from 'node:vm';
 import { test } from 'node:test';
 import * as jsx from 'react/jsx-runtime';
 import ts from 'typescript';
+import { messageLimitError } from '../src/lib/messageLimits.ts';
 
 // Execute the real Composer JSX with its device/services replaced. This checks
 // actual sibling identities, including the action that mounts the voice panel.
@@ -24,6 +25,7 @@ function composer() {
     'react-native-reanimated':{default:{View:'AnimatedView'}},
     '../lib/store':{draftKey:(server:string,chat:string)=>server+':'+chat,useApp:(fn:any)=>fn(store)},
     '../lib/attach':{canSend:()=>false},
+    '../lib/messageLimits':{messageLimitError},
     '../lib/themeContext':{makeStyles:()=>()=>style,useTheme:()=>theme},
     '../lib/prefs':{usePrefs:(fn:any)=>fn({prefs:{busyMode:'queue'},update(){}})},
     './TaskProgress':{TaskProgress:'TaskProgress'},

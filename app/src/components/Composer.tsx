@@ -70,6 +70,7 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
   const online = useApp((st) => st.runtime[server.id]?.status === 'online');
   const features = useApp((st) => st.runtime[server.id]?.info?.features);
   const busyMode = usePrefs((st) => st.prefs.busyMode);
+  const simple = usePrefs((st) => st.prefs.view === 'simple');
   const updatePrefs = usePrefs((st) => st.update);
   const [height, setHeight] = useState(MIN_INPUT);
   const [voiceChat, setVoiceChat] = useState<string | null>(null);
@@ -229,7 +230,7 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
         </Glass>
       ) : null}
       {!prepareChat ? <TaskProgress key={`task:${key}`} server={server} chatId={chatId} busy={busy} /> : null}
-      {showBusyModes ? (
+      {showBusyModes && !simple ? (
         <Animated.View entering={FadeIn.duration(160)} exiting={FadeOut.duration(120)} style={s.modes} accessibilityLabel="While it works">
           <Text style={s.modesLabel}>While it works:</Text>
           {(['steer', 'queue', 'interrupt'] as const).map((m) => (
@@ -237,6 +238,7 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
           ))}
         </Animated.View>
       ) : null}
+      {showBusyModes && simple ? <Text style={s.offlineNote} accessibilityLiveRegion="polite">{busyMode === 'steer' ? 'Guiding current work' : busyMode === 'queue' ? 'Sending after current work' : 'Interrupting current work'}</Text> : null}
       {!online ? <Text style={s.offlineNote}>Offline. Messages you send are queued and go out when {server.bot.title} is back.</Text> : null}
       <View onLayout={(e) => setBoxY(e.nativeEvent.layout.y)}>
       <Glass target={target} style={s.box} intensity={50}>
@@ -254,7 +256,9 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
         {files.some((f) => f.autoSend) ? (
           <View style={s.voiceSending}><ActivityIndicator size="small" color={t.colors.accent} /><Text style={s.replyText}>Sending voice note…</Text></View>
         ) : null}
-        <View style={s.row}>
+        <View style={simple ? { flexDirection: 'row', alignItems: 'flex-end' } : undefined}>
+        <View style={[s.row, simple && { flex: 1, minWidth: 0, paddingHorizontal: 4, paddingTop: 0, alignItems: 'flex-end' }]}>
+          {simple && uploads ? <Tap accessibilityLabel="Attach photos or files" onPress={() => setAttachOpen(true)} style={[s.attach, { marginBottom: 4 }]}><Plus size={22} color={t.colors.textSecondary} /></Tap> : null}
           <TextInput
             ref={input}
             value={text}
@@ -274,15 +278,14 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
             }}
           />
         </View>
-        {limitError ? <Text accessibilityRole="alert" style={{ ...t.type.footnote, color: t.colors.danger, paddingHorizontal: 16, paddingVertical: 8 }}>{limitError}</Text> : null}
-        <View style={s.tools}>
-          {uploads ? (
+        {!simple && limitError ? <Text accessibilityRole="alert" style={{ ...t.type.footnote, color: t.colors.danger, paddingHorizontal: 16, paddingVertical: 8 }}>{limitError}</Text> : null}
+        <View style={[s.tools, simple && { paddingBottom: 4, paddingLeft: 0, paddingRight: 4 }]}>
+          {!simple && uploads ? (
             <Tap feedback="selection" accessibilityLabel="Attach photos or files" onPress={() => setAttachOpen(true)} style={s.attach} scaleTo={0.9}>
               <Plus size={22} color={t.colors.textSecondary} />
             </Tap>
-          ) : <View style={{ width: 8 }} />}
-          <ModelButton server={server} chatId={chatId} variant="composer" prepareChat={prepareChat} />
-          <View style={{ flex: 1 }} />
+          ) : !simple ? <View style={{ width: 8 }} /> : null}
+          {!simple ? <><ModelButton server={server} chatId={chatId} variant="composer" prepareChat={prepareChat} /><View style={{ flex: 1 }} /></> : null}
           {!busy && online && !text.trim() && !files.length && !replyTo && features?.voice_handsfree ? (
             <Tap accessibilityLabel="Open hands-free voice" onPress={async () => {
               const destination = prepareChat ? await prepareChat() : chatId;
@@ -300,6 +303,8 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
             </Tap>
           )}
         </View>
+        </View>
+        {simple && limitError ? <Text accessibilityRole="alert" style={{ ...t.type.footnote, color: t.colors.danger, paddingHorizontal: 16, paddingVertical: 8 }}>{limitError}</Text> : null}
       </Glass>
       </View>
       {perch ? <View pointerEvents="box-none" style={[s.perch, { top: boxY - PERCH_RISE }]}>{perch}</View> : null}

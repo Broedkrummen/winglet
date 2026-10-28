@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useShallow } from 'zustand/react/shallow';
 import { startNewChat } from '../lib/actions';
 import { simpleBotChat, simpleSidebarWidth } from '../lib/simpleView';
+import { useModalFocus } from '../lib/useModalFocus';
 import { useLock } from '../lib/appLock';
 import { chatKey } from '../lib/chatOrganization';
 import { chatActivity, chatActivityLabel, draftPreview, matchesChatFilter, type ChatFilter } from '../lib/chatActivity';
@@ -85,7 +86,7 @@ export function NavigationToggle() {
   const pinned = nav.reserved >= 280;
   const simple = usePrefs((s) => s.prefs.view === 'simple');
   if (simple && pinned) return <View style={{ width: 44 }} />;
-  return <IconButton label={pinned ? 'Collapse sidebar' : 'Open sidebar'} onPress={pinned ? () => usePrefs.getState().update({ sidebar: 'drawer' }) : nav.open}>
+  return <IconButton size={48} label={pinned ? 'Collapse sidebar' : 'Open sidebar'} onPress={pinned ? () => usePrefs.getState().update({ sidebar: 'drawer' }) : nav.open}>
     {pinned ? <PanelLeft size={22} color={t.colors.text} /> : <MenuMark size={24} color={t.colors.text} />}
   </IconButton>;
 }
@@ -93,7 +94,7 @@ export function NavigationToggle() {
 export function InboxButton() {
   const t = useTheme();
   const count = useApp((s) => Object.values(s.runtime).reduce((n, rt) => n + (rt?.pending ?? 0), 0));
-  return <IconButton label={count ? `Inbox, ${count} waiting` : 'Inbox'} onPress={() => router.navigate('/inbox')}>
+  return <IconButton size={48} label={count ? `Inbox, ${count} waiting` : 'Inbox'} onPress={() => router.navigate('/inbox')}>
     <View><Inbox size={22} color={t.colors.text} /><Badge count={count} style={{ position: 'absolute', top: -9, right: -10 }} /></View>
   </IconButton>;
 }
@@ -109,6 +110,8 @@ export function NavigationHeader({ title, inbox = false, right }: { title?: stri
 }
 
 function SidebarDrawer({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+  const focusPanel = useRef<View>(null);
+  useModalFocus(visible, focusPanel, onClose);
   const t = useTheme();
   const s = useStyles();
   const reduced = useReducedMotion();
@@ -140,7 +143,7 @@ function SidebarDrawer({ visible, onClose }: { visible: boolean; onClose: () => 
       <Animated.View style={[{ position: 'absolute', inset: 0, backgroundColor: t.colors.overlay }, dim]}>
         <Pressable accessibilityRole="button" accessibilityLabel="Close sidebar" onPress={onClose} style={{ flex: 1 }} />
       </Animated.View>
-      <View style={{ width: drawerWidth, flex: 1 }}>
+      <View ref={focusPanel} style={{ width: drawerWidth, flex: 1 }}>
       <KeyboardViewport>{() => <GestureDetector gesture={pan} touchAction="pan-y">
         <Animated.View accessibilityViewIsModal style={[{ width: drawerWidth, flex: 1 }, s.drawerPanel, panel]}>
           <View style={s.drawerClip}>{simple ? <SimpleSidebar onClose={onClose} drawer /> : <Sidebar onClose={onClose} drawer />}</View>

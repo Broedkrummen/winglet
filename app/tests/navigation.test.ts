@@ -97,7 +97,7 @@ test('drawer dismissal never waits for an animation callback and Android Back is
   const animation = { enabled: () => animation, activeOffsetX: () => animation, failOffsetY: () => animation,
     onUpdate: () => animation, onEnd: () => animation, onFinalize: () => animation };
   const modules: Record<string, any> = {
-    react: { createContext: () => ({}), memo: (component: any) => component, useEffect: (fn: any) => { cleanups.push(fn()); } },
+    react: { createContext: () => ({}), memo: (component: any) => component, useRef: () => ({ current: null }), useEffect: (fn: any) => { cleanups.push(fn()); } },
     'react/jsx-runtime': { jsx, jsxs: jsx },
     'react-native': { View: 'View', Platform: { OS: 'android' }, StyleSheet: { absoluteFill: {} }, useWindowDimensions: () => ({ width: 390 }),
       BackHandler: { addEventListener: (_name: string, fn: any) => { back = fn; return { remove: () => { removed = true; } }; } } },
@@ -106,6 +106,7 @@ test('drawer dismissal never waits for an animation callback and Android Back is
       useAnimatedStyle: (fn: any) => fn(), withTiming: (value: number) => value, withSpring: (value: number) => value },
     '../lib/motion': { useReducedMotion: () => false, spring: { snappy: {} } },
     '../lib/navigation': { sidebarDrawerWidth },
+    '../lib/useModalFocus': { useModalFocus: () => {} },
     '../lib/prefs': { usePrefs: (select: any) => select({ prefs: { view: 'full' } }) },
     '../lib/themeContext': { makeStyles: () => () => ({}), useTheme: () => ({ colors: { overlay: '#000' } }) },
   };

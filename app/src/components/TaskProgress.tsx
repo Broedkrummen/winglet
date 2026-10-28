@@ -149,7 +149,7 @@ const useStyles = makeStyles((t) => ({
   title: { ...t.type.caption, fontFamily: t.fonts.semibold, color: t.colors.text },
   detail: { ...t.type.caption, color: t.colors.textSecondary, fontSize: 12 },
   stop: {
-    height: 36, width: 36, alignItems: 'center', justifyContent: 'center', borderRadius: t.radius.pill,
+    height: 48, width: 48, alignItems: 'center', justifyContent: 'center', borderRadius: t.radius.pill,
     backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border,
   },
   track: { position: 'absolute', left: 22, right: 22, bottom: 0, height: 2, borderRadius: t.radius.pill, backgroundColor: t.colors.border, overflow: 'hidden' },

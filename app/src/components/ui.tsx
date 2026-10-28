@@ -23,16 +23,20 @@ type TapProps = Omit<PressableProps, 'style'> & {
 };
 
 /** A pressable that gives way slightly under the finger. Acts on release, so a touch can slide off. */
-export function Tap({ style, scaleTo = 0.97, feedback = 'none', onPressIn, onPressOut, onPress, children, ...rest }: TapProps) {
+export function Tap({ style, scaleTo = 0.97, feedback = 'none', onPressIn, onPressOut, onPress, onFocus, onBlur, children, ...rest }: TapProps) {
+  const t = useTheme();
   const reduced = useReducedMotion();
   const scale = useSharedValue(1);
   const [hovered, setHovered] = useState(false);
   const [pressed, setPressed] = useState(false);
+  const [focused, setFocused] = useState(false);
   const animated = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
   return (
     <AnimatedPressable
       accessibilityRole="button"
       {...rest}
+      onFocus={(event) => { setFocused(true); onFocus?.(event); }}
+      onBlur={(event) => { setFocused(false); onBlur?.(event); }}
       onHoverIn={() => setHovered(true)}
       onHoverOut={() => setHovered(false)}
       onPressIn={(e) => {
@@ -50,7 +54,8 @@ export function Tap({ style, scaleTo = 0.97, feedback = 'none', onPressIn, onPre
         else if (feedback === 'light') haptic.light();
         onPress?.(e);
       }}
-      style={[typeof style === 'function' ? style({ pressed, hovered }) : style, animated]}
+      style={[typeof style === 'function' ? style({ pressed, hovered }) : style, animated,
+        Platform.OS === 'web' && focused && { outlineStyle: 'solid', outlineWidth: 2, outlineOffset: 2, outlineColor: t.colors.accent }]}
     >
       {children}
     </AnimatedPressable>

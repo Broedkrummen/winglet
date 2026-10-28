@@ -229,7 +229,7 @@ export function ChatView({ server, chatId, showBack, embedded, landing }: { serv
         {composing ? null : <Glass target={target} borderless style={StyleSheet.absoluteFill} />}
         <View style={[s.header, { paddingTop: topPad + 8 }]}>
           {simple ? <>
-            <View style={{ width: 88, flexDirection: 'row' }}><NavigationToggle /></View>
+            <View style={{ width: 96, flexDirection: 'row' }}><NavigationToggle /></View>
             <View style={{ flex: 1, minWidth: 0, alignItems: 'center' }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, maxWidth: '100%' }}>
                 <AgentFace server={server} size={26} still />
@@ -237,8 +237,8 @@ export function ChatView({ server, chatId, showBack, embedded, landing }: { serv
               </View>
               {status !== 'Online' ? <Text style={s.headerSub} accessibilityLiveRegion="polite">{status}</Text> : null}
             </View>
-            <View style={{ width: 88, flexDirection: 'row', justifyContent: 'flex-end' }}>
-              <IconButton label="Conversation options" onPress={() => setSimpleOptions(true)}><MoreHorizontal size={22} color={t.colors.text} /></IconButton>
+            <View style={{ width: 96, flexDirection: 'row', justifyContent: 'flex-end' }}>
+              <IconButton size={48} label="Conversation options" onPress={() => setSimpleOptions(true)}><MoreHorizontal size={22} color={t.colors.text} /></IconButton>
               <InboxButton />
             </View>
           </> : <>
@@ -860,16 +860,16 @@ function HoverBar({ message, actions, serverId, inline = false }: { message: Mes
   return (
     <View style={inline ? s.responseActions : s.hoverBar}>
       {message.text ? (
-        <IconButton label={copied ? 'Copied response' : 'Copy response'} size={32} onPress={async () => {
+        <IconButton label={copied ? 'Copied response' : 'Copy response'} size={48} onPress={async () => {
           try { await Clipboard.setStringAsync(message.text); setCopied(true); haptic.selection(); }
           catch { useApp.getState().toast({ serverId, title: 'Couldn’t copy', body: 'Try again or use Select text from the message options.' }); }
         }}>
           {copied ? <Check size={16} color={t.colors.success} /> : <Copy size={16} color={t.colors.textTertiary} />}
         </IconButton>
       ) : null}
-      <IconButton label="Reply to response" size={32} onPress={() => actions.reply(message)}><Reply size={16} color={t.colors.textTertiary} /></IconButton>
-      {actions.quote && canQuote(message) ? <IconButton label="Ask about a quote" size={32} onPress={() => actions.quote?.(message)}><FileText size={16} color={t.colors.textTertiary} /></IconButton> : null}
-      <IconButton label="More response options" size={32} onPress={() => actions.open(message)}><MoreHorizontal size={16} color={t.colors.textTertiary} /></IconButton>
+      <IconButton label="Reply to response" size={48} onPress={() => actions.reply(message)}><Reply size={16} color={t.colors.textTertiary} /></IconButton>
+      {actions.quote && canQuote(message) ? <IconButton label="Ask about a quote" size={48} onPress={() => actions.quote?.(message)}><FileText size={16} color={t.colors.textTertiary} /></IconButton> : null}
+      <IconButton label="More response options" size={48} onPress={() => actions.open(message)}><MoreHorizontal size={16} color={t.colors.textTertiary} /></IconButton>
     </View>
   );
 }

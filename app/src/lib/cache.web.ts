@@ -3,6 +3,12 @@ const DB = 'winglet-cache';
 const STORE = 'kv';
 let opening: Promise<IDBDatabase | null> | null = null;
 
+// The browser cache has no keychain key and does not need native recovery.
+export function getCacheStatus(): 'ready' | 'unavailable' { return 'ready'; }
+export function subscribeCacheStatus(_listener: () => void) { return () => {}; }
+export async function checkCacheStatus(): Promise<void> {}
+export async function resetCache(): Promise<void> {}
+
 function open(): Promise<IDBDatabase | null> {
   opening ??= new Promise((resolve) => {
     try {

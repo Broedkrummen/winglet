@@ -1,6 +1,6 @@
 import Constants from 'expo-constants';
 import { router } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { Linking, Text, View } from 'react-native';
 import { InstallButton } from '../components/AppUpdate';
 import { AgentFace } from '../components/AgentFace';
@@ -10,6 +10,7 @@ import { Screen } from '../components/Screen';
 import { Button, Card, Footnote, ListGroup, ListRow, SectionHeader, Toggle } from '../components/ui';
 import { agoText } from '../lib/agent';
 import { appUpdateSupported, useAppUpdate } from '../lib/appUpdateCheck';
+import { checkCacheStatus, getCacheStatus, resetCache, subscribeCacheStatus } from '../lib/cache';
 import { usePrefs } from '../lib/prefs';
 import { APP_PROTOCOL, useApp } from '../lib/store';
 import { makeStyles, useTheme } from '../lib/themeContext';
@@ -23,6 +24,11 @@ export default function AboutScreen() {
   const runtime = useApp((st) => st.runtime);
   const clearCache = useApp((st) => st.clearCache);
   const [cleared, setCleared] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [resetError, setResetError] = useState(false);
+  const cacheStatus = useSyncExternalStore(subscribeCacheStatus, getCacheStatus, getCacheStatus);
+  useEffect(() => { void checkCacheStatus(); }, []);
   const appVersion = Constants.expoConfig?.version ?? '';
   return (
     <Screen title="About">
@@ -68,9 +74,29 @@ export default function AboutScreen() {
 
       <SectionHeader title="Storage" />
       <Card style={{ gap: 12 }}>
-        <Text style={s.note}>Clearing the offline cache keeps your full history on the server.</Text>
-        <Button title={cleared ? 'Cleared' : 'Clear cached messages'} variant="secondary" icon={<HardDrive size={16} color={t.colors.text} />}
-          onPress={async () => { await clearCache(); setCleared(true); }} />
+        {cacheStatus === 'unavailable' ? (
+          <>
+            <Text style={s.warn} accessibilityRole="alert">Offline storage is unavailable. Offline drafts and unsent messages can't be saved.</Text>
+            {confirmReset ? (
+              <>
+                <Text style={s.note}>Resetting will permanently delete previous offline drafts and unsent messages. This cannot be undone.</Text>
+                {resetError ? <Text style={s.warn} accessibilityRole="alert">Couldn't reset offline storage. Please try again.</Text> : null}
+                <Button title="Confirm reset offline storage" variant="danger" loading={resetting} onPress={async () => {
+                  setResetting(true); setResetError(false);
+                  try { await resetCache(); setConfirmReset(false); } catch { setResetError(true); }
+                  finally { setResetting(false); }
+                }} />
+                <Button title="Cancel" variant="secondary" disabled={resetting} onPress={() => { setConfirmReset(false); setResetError(false); }} />
+              </>
+            ) : <Button title="Reset offline storage" variant="danger" onPress={() => setConfirmReset(true)} />}
+          </>
+        ) : (
+          <>
+            <Text style={s.note}>Clearing the offline cache keeps your full history on the server.</Text>
+            <Button title={cleared ? 'Cleared' : 'Clear cached messages'} variant="secondary" icon={<HardDrive size={16} color={t.colors.text} />}
+              onPress={async () => { await clearCache(); setCleared(true); }} />
+          </>
+        )}
       </Card>
 
       <SectionHeader title="Help" />

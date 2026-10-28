@@ -1,7 +1,8 @@
 # Custom abilities and memory validation
 
 Approved scope is tracked in [#10](https://github.com/Broedkrummen/winglet/issues/10) and
-[#11](https://github.com/Broedkrummen/winglet/issues/11). See [usage and limits](../CUSTOM_ABILITIES.md).
+[#11](https://github.com/Broedkrummen/winglet/issues/11), delivered in the separate follow-up
+[PR #12](https://github.com/Broedkrummen/winglet/pull/12). See [usage and limits](../CUSTOM_ABILITIES.md).
 
 ## Evidence
 

@@ -22,6 +22,7 @@ function harness(os = 'web') {
   const phoneCalls: string[] = [];
   const sockets: string[] = [];
   const cache = new Map<string, any>();
+  let strictWrite = async (key: string, value: any) => { cache.set(key, structuredClone(value)); };
   let persisted: any;
   class FakeSocket {
     readyState = 1;
@@ -86,7 +87,7 @@ function harness(os = 'web') {
         request(server, path, { method, body: data === undefined ? undefined : JSON.stringify(data) }) },
     './cache': {
       cacheGet: async (key: string, fallback: any) => (cache.has(key) ? structuredClone(cache.get(key)) : fallback),
-      cacheSetStrict: async (key: string, value: any) => { cache.set(key, structuredClone(value)); },
+      cacheSetStrict: (key: string, value: any) => strictWrite(key, value),
       cacheSet: async (key: string, value: any) => { cache.set(key, structuredClone(value)); },
       cacheRemove: async (prefix: string) => { for (const k of [...cache.keys()]) if (k.startsWith(prefix)) cache.delete(k); },
     },
@@ -96,8 +97,13 @@ function harness(os = 'web') {
     './storage': { getJSON: async (key: string, fallback: any) => (key === 'winglet.servers' && persisted) || fallback,
       setJSON: async (key: string, value: any) => { if (key === 'winglet.servers') persisted = value; } },
   });
+  const { sendDraft } = compile('../src/lib/attach.ts', {
+    'react-native': { Platform: { OS: os } }, './haptics': { haptic: { light() {}, error() {} } },
+    './media': {}, './store': { useApp: store },
+  });
   const tick = () => new Promise(resolve => setImmediate(resolve));
   return {
+    sendDraft, setStrictWrite: (write: typeof strictWrite) => { strictWrite = write; },
     store, cache, played, phoneCalls, taskModel, setRequest: (fn: typeof request) => { request = fn; },
     setRecovery: (fn: typeof recoveryRequest) => { recoveryRequest = fn; },
     disconnect: () => { socket.readyState = 3; socket.onclose?.({ code: 1006 }); },
@@ -287,6 +293,100 @@ test('messages sent offline are queued, then delivered in order with their origi
   assert.equal(h.outbox().length, 0);
   assert.equal(JSON.stringify(h.messages().map((m: any) => m.status)), JSON.stringify(['final', 'final']));
   assert.equal(sent[0].client_id, h.messages()[0].meta.client_id);
+});
+
+test('failed durable acceptance keeps text, files and reply without claiming a queued send', async () => {
+  const h = harness();
+  await h.connect(); h.disconnect();
+  const state = h.store.getState();
+  state.setDraft('s', 'general', 'Keep this');
+  state.updateDraftFiles('s', 'general', () => [{ localId: 'pick', status: 'ready', upload: { id: 'file' } }]);
+  state.setReplyTo('s', 'general', { id: 'reply', text: 'Original' });
+  h.setStrictWrite(async () => { throw new Error('storage full'); });
+  assert.equal(await h.sendDraft('s', 'general', 'Keep this'), false);
+  assert.equal(h.store.getState().drafts['s:general'], 'Keep this');
+  assert.equal(h.store.getState().draftFiles['s:general'][0].upload.id, 'file');
+  assert.equal(h.store.getState().replyTo['s:general'].id, 'reply');
+  assert.equal(h.messages().length, 0);
+  assert.equal(h.outbox().length, 0);
+  assert.equal(h.store.getState().toasts.at(-1).title, 'Message not queued');
+  h.setStrictWrite(async (key, value) => { h.cache.set(key, structuredClone(value)); });
+  assert.equal(await h.sendDraft('s', 'general', 'Keep this'), true);
+  assert.equal(h.cache.get('outbox:s')[0].text, 'Keep this');
+  assert.equal(h.cache.get('outbox:s')[0].attachments[0].id, 'file');
+  assert.equal(h.cache.get('outbox:s')[0].reply_to.id, 'reply');
+  assert.equal(h.store.getState().drafts['s:general'], undefined);
+});
+
+test('storage acceptance preserves newer typing, attachments and reply context', async () => {
+  const h = harness();
+  await h.connect(); h.disconnect();
+  const state = h.store.getState();
+  state.setDraft('s', 'general', 'First');
+  state.updateDraftFiles('s', 'general', () => [{ localId: 'old', status: 'ready', upload: { id: 'old' } }]);
+  state.setReplyTo('s', 'general', { id: 'old', text: 'Old reply' });
+  let finish: () => void;
+  h.setStrictWrite((key, value) => new Promise<void>((resolve) => {
+    finish = () => { h.cache.set(key, structuredClone(value)); resolve(); };
+  }));
+  const pending = h.sendDraft('s', 'general', 'First');
+  await h.tick();
+  assert.equal(h.messages().length, 0);
+  state.setDraft('s', 'general', 'Second');
+  state.updateDraftFiles('s', 'general', (files: any[]) => [...files, { localId: 'new', status: 'ready', upload: { id: 'new' } }]);
+  state.setReplyTo('s', 'general', { id: 'new', text: 'New reply' });
+  finish!();
+  assert.equal(await pending, true);
+  assert.equal(h.store.getState().drafts['s:general'], 'Second');
+  assert.deepEqual(Array.from(h.store.getState().draftFiles['s:general'], (file: any) => file.localId), ['new']);
+  assert.equal(h.store.getState().replyTo['s:general'].id, 'new');
+});
+
+test('concurrent offline acceptance preserves every send in durable order', async () => {
+  const h = harness();
+  await h.connect(); h.disconnect();
+  await Promise.all(['one', 'two', 'three'].map((text) => h.store.getState().sendMessage('s', 'general', text)));
+  assert.deepEqual(Array.from(h.cache.get('outbox:s'), (entry: any) => entry.text), ['one', 'two', 'three']);
+  assert.deepEqual(Array.from(h.outbox(), (entry: any) => entry.text), ['one', 'two', 'three']);
+});
+
+test('a composer clears after durable acceptance while network delivery is still waiting', async () => {
+  const h = harness();
+  await h.connect(); await h.hello();
+  let finish: (() => void) | undefined;
+  h.setRequest((_server, _route, init) => new Promise((resolve) => {
+    const body = JSON.parse(init.body);
+    finish = () => resolve({ message: { ...msg(1), role: 'user', text: body.text, meta: { client_id: body.client_id } } });
+  }));
+  h.store.getState().setDraft('s', 'general', 'Slow network');
+  assert.equal(await h.sendDraft('s', 'general', 'Slow network'), true);
+  assert.equal(h.store.getState().drafts['s:general'], undefined);
+  assert.equal(h.cache.get('outbox:s')[0].text, 'Slow network');
+  finish!(); await h.tick();
+  assert.equal(h.outbox().length, 0);
+});
+
+test('acknowledgements during another durable write do not resurrect earlier sends', async () => {
+  const h = harness();
+  await h.connect(); await h.hello();
+  let delivered: () => void;
+  h.setRequest((server, route, init) => {
+    if (init?.method === 'POST') return new Promise((resolve) => { delivered = async () => resolve(await echoServer([])(server, route, init)); });
+    return echoServer([])(server, route, init);
+  });
+  await h.store.getState().sendMessage('s', 'general', 'first', { waitForDelivery: false });
+  const first = h.outbox()[0];
+  let finish: () => void;
+  h.setStrictWrite((key, value) => new Promise<void>((resolve) => {
+    finish = () => { h.cache.set(key, structuredClone(value)); resolve(); };
+  }));
+  const second = h.store.getState().sendMessage('s', 'general', 'second', { waitForDelivery: false });
+  await h.tick();
+  h.event({ type: 'message.new', chat_id: 'general', message: { ...msg(1), role: 'user', text: 'first', meta: { client_id: first.client_id } } });
+  finish!(); await second; await h.tick();
+  assert.deepEqual(Array.from(h.outbox(), (entry: any) => entry.text), ['second']);
+  assert.deepEqual(Array.from(h.cache.get('outbox:s'), (entry: any) => entry.text), ['second']);
+  h.setRequest(echoServer([])); delivered!(); await h.tick();
 });
 
 test('a send whose reply is lost is retried with the same id, so the server can de-duplicate it', async () => {

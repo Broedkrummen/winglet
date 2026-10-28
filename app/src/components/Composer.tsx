@@ -168,7 +168,7 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
       onBeforeSend?.(destination);
       if (value !== undefined) {
         haptic.light();
-        void useApp.getState().sendMessage(server.id, destination, value);
+        if (!await useApp.getState().sendMessage(server.id, destination, value, { waitForDelivery: false })) return;
         sound.sent();
         onSent?.();
         return;
@@ -176,7 +176,7 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
       haptic.light();
       const prefix = showBusyModes && busyMode !== 'interrupt' ? `/${busyMode}` : '';
       const body = prepareChat ? useApp.getState().drafts[draftKey(server.id, destination)] ?? text : text;
-      void sendDraft(server.id, destination, body, prefix);
+      if (!await sendDraft(server.id, destination, body, prefix)) return;
       setHeight(MIN_INPUT);
       sound.sent();
       onSent?.();

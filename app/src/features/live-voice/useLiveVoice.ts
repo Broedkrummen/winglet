@@ -25,7 +25,7 @@ export function useLiveVoice(server: Server, chatId: string) {
   const control = useRef<AbortController | null>(null);
   const recording = useRef<Recording | null>(null);
   const session = useRef<VoiceSession | null>(null);
-  const sendPending = useRef<Promise<void> | null>(null);
+  const sendPending = useRef<Promise<boolean> | null>(null);
   const dictationFinish = useRef<(() => void) | null>(null);
   const mounted = useRef(true);
   const ownsAudio = useRef(false);

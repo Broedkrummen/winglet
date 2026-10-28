@@ -42,7 +42,9 @@ export type OutboxEntry = {
   attachments?: Attachment[]; reply_to?: ReplyRef;
 };
 
-export type SendOptions = { clientId?: string; liveOnly?: boolean; retryClientId?: string; attachments?: Attachment[]; replyTo?: ReplyRef };
+export type SendOptions = { clientId?: string; liveOnly?: boolean; retryClientId?: string; attachments?: Attachment[]; replyTo?: ReplyRef;
+  /** The composer waits for durable acceptance, not a potentially slow network response. */
+  waitForDelivery?: boolean };
 
 export type ServerState = {
   status: ConnStatus;
@@ -112,7 +114,7 @@ type AppState = {
   loadTask: (serverId: string, chatId: string, force?: boolean) => Promise<void>;
   /** Match a server's other bots to the list it sent: add new ones, drop removed ones, keep names current. */
   syncBots: (serverId: string, bots: BotRow[]) => Promise<void>;
-  sendMessage: (serverId: string, chatId: string, text: string, opts?: string | SendOptions) => Promise<void>;
+  sendMessage: (serverId: string, chatId: string, text: string, opts?: string | SendOptions) => Promise<boolean>;
   updateDraftFiles: (serverId: string, chatId: string, fn: (files: DraftFile[]) => DraftFile[]) => void;
   setReplyTo: (serverId: string, chatId: string, ref?: ReplyRef) => void;
   discardMessage: (serverId: string, chatId: string, clientId: string) => void;
@@ -204,7 +206,27 @@ export const useApp = create<AppState>((set, get) => {
         m.id === clientId && isLocal(m) ? { ...m, status } : m) },
     }));
 
-  const saveOutbox = (serverId: string) => cacheSet(`outbox:${serverId}`, get().runtime[serverId]?.outbox ?? []);
+  const outboxWrites = new Map<string, Promise<void>>();
+  const saveOutbox = (serverId: string, accept?: (entries: OutboxEntry[]) => OutboxEntry[]) => {
+    const server = get().servers.find((s) => s.id === serverId);
+    const write = (outboxWrites.get(serverId) ?? Promise.resolve()).then(async () => {
+      if (!server || get().servers.find((s) => s.id === serverId) !== server) {
+        if (accept) throw new Error('This bot was removed.');
+        return;
+      }
+      const entries = get().runtime[serverId]?.outbox ?? [];
+      if (!accept) { await cacheSet(`outbox:${serverId}`, entries); return; }
+      await cacheSetStrict(`outbox:${serverId}`, accept(entries));
+      if (get().servers.find((s) => s.id === serverId) !== server) {
+        if (!get().servers.some((s) => s.id === serverId)) await cacheRemove(`outbox:${serverId}`);
+        throw new Error('This bot changed. Try sending again.');
+      }
+      // A live acknowledgement may have removed an older send while storage was committing.
+      patch(serverId, (s) => ({ outbox: accept(s.outbox) }));
+    });
+    outboxWrites.set(serverId, write.catch(() => {}));
+    return write;
+  };
 
   const projectLoads = new Map<string, number>();
   type ProjectGuard = { server: Server; snapshot: ProjectSnapshot | undefined };
@@ -870,9 +892,9 @@ export const useApp = create<AppState>((set, get) => {
       const o: SendOptions = typeof opts === 'string' ? { retryClientId: opts } : opts ?? {};
       const retryClientId = o.retryClientId;
       const server = get().servers.find((s) => s.id === serverId);
-      if (!server || (!text.trim() && !o.attachments?.length && !retryClientId)) return;
+      if (!server || (!text.trim() && !o.attachments?.length && !retryClientId)) return false;
       if (retryClientId && get().runtime[serverId]?.messages[chatId]?.some((m) =>
-        !isLocal(m) && m.meta?.client_id === retryClientId)) return;
+        !isLocal(m) && m.meta?.client_id === retryClientId)) return true;
       // A retry reuses the original id so the server can tell it already has the message.
       const clientId = retryClientId ?? o.clientId ?? `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
       // Hands-free turns belong to this live session. They never enter the durable offline outbox.
@@ -885,16 +907,23 @@ export const useApp = create<AppState>((set, get) => {
         } catch (error) {
           if (!get().runtime[serverId]?.messages[chatId]?.some((m) => m.meta?.client_id === clientId && !isLocal(m))) throw error;
         }
-        return;
+        return true;
       }
       const existing = get().runtime[serverId]?.outbox.find((x) => x.client_id === clientId);
       const entry: OutboxEntry = existing ? { ...existing, failed: false, failure: undefined }
         : { client_id: clientId, chat_id: chatId, text: text.trim(), created_at: Date.now() / 1000,
           ...(o.attachments?.length ? { attachments: o.attachments } : {}), ...(o.replyTo ? { reply_to: o.replyTo } : {}) };
-      updateOutbox(serverId, (o) => [...o.filter((x) => x.client_id !== clientId), entry]);
+      try {
+        await saveOutbox(serverId, (entries) => [...entries.filter((x) => x.client_id !== clientId), entry]);
+      } catch {
+        toast({ serverId, title: 'Message not queued', body: 'Could not save this message on your device. Free some storage, then try again.' });
+        return false;
+      }
       upsertMessage(serverId, chatId, { ...localMessage(entry), status: get().runtime[serverId]?.status === 'online' ? 'pending' : 'queued' });
       if (retryClientId) sendPaused.delete(serverId);
-      await enqueue(serverId, entry);
+      const delivery = enqueue(serverId, entry);
+      if (o.waitForDelivery !== false) await delivery;
+      return true;
     },
 
     discardMessage: (serverId, chatId, clientId) => {

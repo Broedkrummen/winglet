@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS message_deletions (
     id TEXT PRIMARY KEY, chat_id TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS message_deletions_chat ON message_deletions (chat_id);
+CREATE TABLE IF NOT EXISTS chat_deletions (id TEXT PRIMARY KEY, deleted_at REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS inbox (
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, chat_id TEXT NOT NULL, title TEXT NOT NULL,
     body TEXT NOT NULL DEFAULT '', payload TEXT NOT NULL DEFAULT '{}', status TEXT NOT NULL DEFAULT 'pending',
@@ -390,13 +391,21 @@ class Store:
     # -- chats -------------------------------------------------------------------
 
     def ensure_chat(self, chat_id: str, title: str = "", kind: str = "chat", owner_device: Optional[str] = None,
-                    bot: Optional[str] = None) -> Dict[str, Any]:
+                    bot: Optional[str] = None, *, implicit: bool = False) -> Optional[Dict[str, Any]]:
         """``owner_device`` marks a member's chat; owners' chats have none, and every owner sees them.
         ``bot`` is the Hermes profile the chat talks to (None: the main one)."""
-        now = _now()
-        self._exec("INSERT OR IGNORE INTO chats (id, title, kind, created_at, updated_at, owner_device, bot) "
-                   "VALUES (?, ?, ?, ?, ?, ?, ?)", (chat_id, (title or chat_id)[:80], kind, now, now, owner_device, bot or None))
-        return self.get_chat(chat_id)
+        with self.transaction():
+            if implicit and self.chat_deleted(chat_id):
+                return None
+            if not implicit:
+                self._exec("DELETE FROM chat_deletions WHERE id = ?", (chat_id,))
+            now = _now()
+            self._exec("INSERT OR IGNORE INTO chats (id, title, kind, created_at, updated_at, owner_device, bot) "
+                       "VALUES (?, ?, ?, ?, ?, ?, ?)", (chat_id, (title or chat_id)[:80], kind, now, now, owner_device, bot or None))
+            return self.get_chat(chat_id)
+
+    def chat_deleted(self, chat_id: str) -> bool:
+        return self._one("SELECT 1 FROM chat_deletions WHERE id = ?", (chat_id,)) is not None
 
     def create_chat(self, title: str = "", owner_device: Optional[str] = None, bot: Optional[str] = None) -> Dict[str, Any]:
         return self.ensure_chat("c-" + new_id(), (title or "").strip() or "New chat", owner_device=owner_device, bot=bot)
@@ -504,8 +513,14 @@ class Store:
 
     def delete_chat(self, chat_id: str) -> bool:
         with self.transaction():
+            if self.get_chat(chat_id) is None:
+                return False
+            now = _now()
+            self._exec("INSERT OR IGNORE INTO chat_deletions (id, deleted_at) VALUES (?, ?)", (chat_id, now))
+            self._exec("UPDATE inbox SET status = 'expired', updated_at = ? WHERE chat_id = ? AND status = 'pending'",
+                       (now, chat_id))
             self._exec("INSERT OR IGNORE INTO message_deletions (id, chat_id, deleted_at) "
-                       "SELECT id, chat_id, ? FROM messages WHERE chat_id = ?", (_now(), chat_id))
+                       "SELECT id, chat_id, ? FROM messages WHERE chat_id = ?", (now, chat_id))
             self._exec("DELETE FROM messages WHERE chat_id = ?", (chat_id,))
             self._exec("DELETE FROM chat_branches WHERE chat_id = ?", (chat_id,))
             return self._exec("DELETE FROM chats WHERE id = ?", (chat_id,)) == 1
@@ -520,14 +535,16 @@ class Store:
     # -- messages ----------------------------------------------------------------
 
     def add_message(self, chat_id: str, role: str, text: str, *, status: str = "final",
-                    meta: Optional[Dict[str, Any]] = None, message_id: Optional[str] = None) -> Dict[str, Any]:
-        self.ensure_chat(chat_id)
-        message_id, now = message_id or new_id(), _now()
-        self._exec("INSERT INTO messages (id, chat_id, role, text, status, meta, created_at, updated_at) "
-                   "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                   (message_id, chat_id, role, text, status, json.dumps(meta or {}), now, now))
-        self._touch_chat(chat_id, text, meta)
-        return self.get_message(message_id)
+                    meta: Optional[Dict[str, Any]] = None, message_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        with self.transaction():
+            if self.ensure_chat(chat_id, implicit=True) is None:
+                return None
+            message_id, now = message_id or new_id(), _now()
+            self._exec("INSERT INTO messages (id, chat_id, role, text, status, meta, created_at, updated_at) "
+                       "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                       (message_id, chat_id, role, text, status, json.dumps(meta or {}), now, now))
+            self._touch_chat(chat_id, text, meta)
+            return self.get_message(message_id)
 
     def update_message(self, message_id: str, text: str, *, status: Optional[str] = None,
                        meta: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
@@ -608,12 +625,15 @@ class Store:
     # -- inbox -------------------------------------------------------------------
 
     def add_inbox(self, kind: str, chat_id: str, title: str, body: str = "",
-                  payload: Optional[Dict[str, Any]] = None, status: str = "pending") -> Dict[str, Any]:
-        item_id, now = new_id(), _now()
-        self._exec("INSERT INTO inbox (id, kind, chat_id, title, body, payload, status, created_at, updated_at) "
-                   "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                   (item_id, kind, chat_id, title[:200], body, json.dumps(payload or {}), status, now, now))
-        return self.get_inbox(item_id)
+                  payload: Optional[Dict[str, Any]] = None, status: str = "pending") -> Optional[Dict[str, Any]]:
+        with self.transaction():
+            if self.chat_deleted(chat_id):
+                return None
+            item_id, now = new_id(), _now()
+            self._exec("INSERT INTO inbox (id, kind, chat_id, title, body, payload, status, created_at, updated_at) "
+                       "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                       (item_id, kind, chat_id, title[:200], body, json.dumps(payload or {}), status, now, now))
+            return self.get_inbox(item_id)
 
     def get_inbox(self, item_id: str) -> Optional[Dict[str, Any]]:
         row = self._one("SELECT * FROM inbox WHERE id = ?", (item_id,))

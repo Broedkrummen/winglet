@@ -1275,6 +1275,8 @@ class Hub:
             lambda: self.store.add_message(chat_id, "user", text, meta=meta, message_id=message_id),
             lambda row: [{"type": "message.new", "chat_id": chat_id, "message": row},
                          {"type": "chat.update", "chat": self.store.get_chat(chat_id)}])
+        if message is None:
+            return None
         if refused:
             # Hermes never sees it: members can't change settings or approve through a slash command either.
             await self.post_message(chat_id, f"Only an owner can use {refused}.", role="system", push=False)
@@ -1686,12 +1688,15 @@ class Hub:
             lambda row: {"type": "inbox.update", "item": row, "pending": self.store.pending_count()})
 
     async def add_inbox(self, kind: str, chat_id: str, title: str, body: str, payload: Dict[str, Any], *,
-                        push: bool = True) -> Dict[str, Any]:
+                        push: bool = True) -> Optional[Dict[str, Any]]:
         # Results are informational: they land in the inbox history but never count as "needs you".
         status = "resolved" if kind == "result" else "pending"
         item = await self.publish(
             lambda: self.store.add_inbox(kind, chat_id, title, body, payload, status=status),
             lambda row: {"type": "inbox.new", "item": row, "pending": self.store.pending_count()})
+        if item is None:
+            logger.debug("[winglet] discarded inbox item for deleted chat %s", chat_id)
+            return None
         if push:
             await self.push_now(self._inbox_notification(item), tag=f"inbox-{item['id']}",
                                 urgency="normal" if kind == "result" else "high", item=item)
@@ -1711,13 +1716,16 @@ class Hub:
     # -- outbound (called by the adapter) ------------------------------------------------------
 
     async def post_message(self, chat_id: str, text: str, *, role: str = "bot", status: str = "final",
-                           meta: Optional[Dict[str, Any]] = None, push: bool = True) -> Dict[str, Any]:
+                           meta: Optional[Dict[str, Any]] = None, push: bool = True) -> Optional[Dict[str, Any]]:
         if not push:
             meta = {**(meta or {}), "notify": False}
         message = await self.publish(
             lambda: self.store.add_message(chat_id, role, text, status=status, meta=meta),
             lambda row: [{"type": "message.new", "chat_id": chat_id, "message": row},
                          {"type": "chat.update", "chat": self.store.get_chat(chat_id)}])
+        if message is None:
+            logger.debug("[winglet] discarded output for deleted chat %s", chat_id)
+            return None
         if push and self._notifiable(message):
             self.schedule_push(chat_id, message["id"], final=status == "final")
         return message
@@ -2318,12 +2326,14 @@ class Hub:
     # -- pickers (/model, /reasoning, /fast, command confirmations) ------------------------------
 
     async def post_picker(self, chat_id: str, kind: str, title: str, data: Dict[str, Any],
-                          callback: Callable[..., Awaitable[Any]], ttl: float = PICKER_SECONDS) -> Dict[str, Any]:
+                          callback: Callable[..., Awaitable[Any]], ttl: float = PICKER_SECONDS) -> Optional[Dict[str, Any]]:
         """A card in the chat the owner taps to answer. ``callback`` gets the choice and returns the
         reply, which replaces the card's question."""
         picker_id = new_id()
         meta = {"picker": {"id": picker_id, "kind": kind, **data, "status": "open", "expires_at": time.time() + ttl}}
         message = await self.post_message(chat_id, title, role="bot", meta=meta, push=False)
+        if message is None:
+            return None
         self._pickers[picker_id] = {"callback": callback, "chat_id": chat_id, "message_id": message["id"],
                                     "kind": kind, "expires": time.monotonic() + ttl}
         return message
@@ -2996,7 +3006,14 @@ class Hub:
             if kind == "restart":
                 await self._finish_job(job["id"], "succeeded", "Back online.")
             elif kind == "winglet_update":
-                await self._finish_job(job["id"], "succeeded", f"Updated to Winglet {VERSION}.", to=VERSION)
+                previous = detail.get("from")
+                if not previous:
+                    state, message = "unknown", "The server restarted, but the starting Winglet version was not recorded."
+                elif previous == VERSION:
+                    state, message = "failed", f"The server restarted, but Winglet is still at version {VERSION}."
+                else:
+                    state, message = "succeeded", f"Updated to Winglet {VERSION}."
+                await self._finish_job(job["id"], state, message, to=VERSION)
             elif kind == "hermes_update":
                 now = self.hermes_version() or ""
                 state, message, lines = "unknown", "The server restarted, but the update didn't report how it went.", []
@@ -3009,11 +3026,14 @@ class Hub:
                     receipt = status.get("receipt") or {}
                     ours = detail.get("action_id") and status.get("action_id") == detail.get("action_id")
                     recent = _iso_ts(receipt.get("started_at")) >= job["created_at"] - 5
-                    if ours or (recent and receipt.get("outcome") == "success"):
-                        state, message = "succeeded", "Hermes is up to date."
-                    elif recent and receipt.get("outcome"):
-                        state, message = "failed", "The update didn't finish. Its log is below."
-                if state == "unknown" and now and now != detail.get("from"):
+                    if ours or recent:
+                        outcome = receipt.get("outcome")
+                        code = status.get("exit_code") if ours else receipt.get("exit_code")
+                        if (outcome and outcome != "success") or (code is not None and code != 0):
+                            state, message = "failed", "The update didn't finish. Its log is below."
+                        elif outcome == "success" or code == 0:
+                            state, message = "succeeded", "Hermes is up to date."
+                if state == "unknown" and detail.get("from") and now and now != detail.get("from"):
                     state, message = "succeeded", "Hermes is up to date."
                 await self._finish_job(job["id"], state, message, to=now, lines=lines)
             else:

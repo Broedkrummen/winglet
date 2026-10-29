@@ -132,7 +132,7 @@ export function BotPills({ server }: { server: Server }) {
     {mainFirst(servers, chosen).map((x) => {
       const on = x.id === server.id;
       const waiting = pending[x.id] ?? 0;
-      return <Tap key={x.id} feedback="selection" scaleTo={0.96} accessibilityRole="radio" accessibilityState={{ selected: on }}
+      return <Tap key={x.id} feedback="selection" scaleTo={0.96} accessibilityRole="radio" accessibilityState={{ checked: on }} aria-checked={on}
         accessibilityLabel={`${x.bot.title}${waiting ? `, ${waiting} waiting` : ''}`}
         onPress={() => { if (!on) useApp.getState().select(x.id, homeChat(useApp.getState().runtime[x.id])); }}
         style={({ pressed, hovered }) => [s.pill, on ? s.pillOn : (pressed || hovered) && { backgroundColor: t.colors.surfaceRaised }]}>

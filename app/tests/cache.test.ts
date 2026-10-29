@@ -37,6 +37,7 @@ function harness(rows = new Map<string, string>(), secrets = new Map<string, str
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText, { exports, require: (id: string) => modules[id], TextEncoder, TextDecoder, Uint8Array });
   return { rows, secrets, get: exports.cacheGet, set: exports.cacheSet, strict: exports.cacheSetStrict, remove: exports.cacheRemove,
+    status: exports.getCacheStatus, subscribe: exports.subscribeCacheStatus, reset: exports.resetCache,
     keychain: (available: boolean) => { keychainAvailable = available; },
     writes: (fn: typeof beforeWrite) => { beforeWrite = fn; } };
 }
@@ -94,6 +95,40 @@ test('a missing device key cannot replace an encrypted outbox with new empty dat
   await restored.remove('');
   await restored.set('drafts', { text: 'Fresh cache' });
   assert.deepEqual(structuredClone(await restored.get('drafts', {})), { text: 'Fresh cache' });
+});
+
+test('restored cache reports the missing key and resets only on explicit request', async () => {
+  const original = harness();
+  await original.set('drafts', { text: 'old draft' });
+  await original.set('outbox:bot', [{ text: 'old unsent message' }]);
+  const oldKey = [...original.secrets.values()][0];
+  const before = new Map(original.rows);
+  const restored = harness(original.rows);
+  const changes: string[] = [];
+  const unsubscribe = restored.subscribe(() => changes.push(restored.status()));
+  assert.equal(await restored.get('drafts', 'unavailable'), 'unavailable');
+  assert.equal(restored.status(), 'unavailable');
+  await restored.set('drafts', { text: 'new draft' });
+  assert.deepEqual(restored.rows, before);
+  assert.equal(restored.secrets.size, 0);
+  await restored.reset();
+  assert.equal(restored.status(), 'ready');
+  assert.deepEqual(changes, ['unavailable', 'ready']);
+  unsubscribe();
+  assert.equal(restored.rows.size, 0);
+  assert.notEqual([...restored.secrets.values()][0], oldKey);
+  await restored.set('drafts', { text: 'new draft' });
+  await restored.set('outbox:bot', [{ text: 'new message' }]);
+  assert.deepEqual(structuredClone(await restored.get('drafts', null)), { text: 'new draft' });
+  assert.deepEqual(structuredClone(await restored.get('outbox:bot', null)), [{ text: 'new message' }]);
+});
+
+test('healthy cache remains ready and retains existing data', async () => {
+  const h = harness();
+  await h.set('drafts', { text: 'kept' });
+  const restarted = harness(h.rows, h.secrets);
+  assert.deepEqual(structuredClone(await restarted.get('drafts', null)), { text: 'kept' });
+  assert.equal(restarted.status(), 'ready');
 });
 
 test('queued migration and rapid draft saves cannot overwrite newer text or revive removed rows', async () => {

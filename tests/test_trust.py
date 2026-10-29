@@ -317,6 +317,76 @@ async def test_token_rotation_replaces_the_old_token(client, hub):
     assert (await client.get("/api/me", headers={"Authorization": f"Bearer {new}"})).status == 200
 
 
+async def test_approval_requires_signed_http_but_deny_remains_available(client, hub):
+    owner = await pair_phone(client, hub)
+    item = await hub.add_inbox('approval', 'general', 'Run?', '', {'choices': ['once', 'deny']}, push=False)
+    path = f"/api/inbox/{item['id']}/respond"
+    assert (await client.post(path, json={'choice': 'once'}, headers=owner.auth)).status == 403
+    assert hub.store.get_inbox(item['id'])['status'] == 'pending'
+    ws = await client.ws_connect('/api/ws')
+    await ws.send_json({'type': 'auth', 'token': owner.token})
+    assert (await ws.receive_json())['type'] == 'hello'
+    await ws.send_json({'type': 'inbox.respond', 'id': item['id'], 'choice': 'once'})
+    assert (await ws.receive_json())['type'] == 'error'
+    assert hub.store.get_inbox(item['id'])['status'] == 'pending'
+    await ws.close()
+    impostor = Phone('impostor')
+    impostor.id, impostor.token = owner.id, owner.token
+    assert (await post_signed(client, impostor, path, {'choice': 'once'})).status == 403
+    assert (await post_signed(client, owner, path, {'choice': 'once'})).status == 200
+    denied = await hub.add_inbox('approval', 'general', 'Run?', '', {'choices': ['once', 'deny']}, push=False)
+    assert (await client.post(f"/api/inbox/{denied['id']}/respond", json={'choice': 'deny'}, headers=owner.auth)).status == 200
+    legacy = await pair_phone(client, hub, 'Unverified', sealed=False)
+    item = await hub.add_inbox('approval', 'general', 'Run?', '', {'choices': ['once', 'deny']}, push=False)
+    response = await client.post(f"/api/inbox/{item['id']}/respond", json={'choice': 'once'}, headers=legacy.auth)
+    assert response.status == 403 and (await response.json())['needs'] == 'verify'
+
+
+async def test_verified_key_replacement_requires_current_key_and_owner_code(client, hub):
+    owner = await pair_phone(client, hub)
+    attacker = Phone('attacker')
+    info = await (await client.get('/api/server-key')).json()
+    code = hub.store.create_pair_code(role='member')
+    payload = {'sealed': seal(info, 'verify', {'code': code, 'sign_key': attacker.public, 'pinned': True}, owner.id)}
+    assert (await post_signed(client, owner, '/api/devices/verify', payload)).status == 403
+    assert hub.store.redeem_pair_code(code) == 'member'
+    code = hub.store.create_pair_code(role='owner')
+    payload = {'sealed': seal(info, 'verify', {'code': code, 'sign_key': attacker.public, 'pinned': True}, owner.id)}
+    assert (await client.post('/api/devices/verify', json=payload, headers=owner.auth)).status == 403
+    assert hub.store.device_sign_key(owner.id) == owner.public
+    assert (await post_signed(client, owner, '/api/devices/verify', payload)).status == 200
+    assert hub.store.device_sign_key(owner.id) == attacker.public
+
+
+async def test_owner_approve_slash_command_needs_signed_http(client, hub):
+    owner = await pair_phone(client, hub)
+    path = '/api/chats/general/messages'
+    response = await client.post(path, json={'text': '/approve once'}, headers=owner.auth)
+    assert response.status == 403 and not hub.received
+    ws = await client.ws_connect('/api/ws')
+    await ws.send_json({'type': 'auth', 'token': owner.token})
+    assert (await ws.receive_json())['type'] == 'hello'
+    await ws.send_json({'type': 'message.send', 'chat_id': 'general', 'text': '/approve once'})
+    assert (await ws.receive_json())['type'] == 'error' and not hub.received
+    await ws.close()
+    assert (await post_signed(client, owner, path, {'text': '/approve once'})).status == 200
+    assert [entry[1] for entry in hub.received] == ['/approve once']
+
+
+async def test_confirm_picker_requires_signature(client, hub):
+    owner = await pair_phone(client, hub)
+    called = []
+    async def confirm(choice):
+        called.append(choice)
+        return 'Done'
+    message = await hub.post_picker('general', 'confirm', 'Confirm?', {'choices': [{'value': 'once'}]}, confirm)
+    path = f"/api/pickers/{message['meta']['picker']['id']}/select"
+    assert (await client.post(path, json={'value': 'once'}, headers=owner.auth)).status == 403
+    assert not called
+    assert (await post_signed(client, owner, path, {'value': 'once'})).status == 200
+    assert called == ['once']
+
+
 # -- what members can see and do ----------------------------------------------------------------
 
 
@@ -361,7 +431,7 @@ async def test_only_owners_answer_approvals_even_in_a_members_chat(client, hub):
                                {"choices": ["once", "deny"], "command": "rm -rf x"}, push=False)
     resp = await client.post(f"/api/inbox/{item['id']}/respond", json={"choice": "once"}, headers=member.auth)
     assert resp.status == 403
-    resp = await client.post(f"/api/inbox/{item['id']}/respond", json={"choice": "once"}, headers=owner.auth)
+    resp = await post_signed(client, owner, f"/api/inbox/{item['id']}/respond", {"choice": "once"})
     assert resp.status == 200
     entry = hub.store.list_audit()[0]
     assert entry["action"] == "approval" and entry["summary"] == "once: rm -rf x" and entry["device_id"] == owner.id

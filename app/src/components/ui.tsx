@@ -174,9 +174,9 @@ export function ListGroup({ children, style }: { children: ReactNode; style?: St
   );
 }
 
-export function ListRow({ icon, iconColor, title, subtitle, value, right, onPress, chevron = !!onPress, destructive, accessibilityRole, disabled }: {
+export function ListRow({ icon, iconColor, title, subtitle, value, right, onPress, chevron = !!onPress, destructive, accessibilityRole, checked, disabled }: {
   icon?: ReactNode; iconColor?: string; title: string; subtitle?: string; value?: string; right?: ReactNode;
-  onPress?: () => void; chevron?: boolean; destructive?: boolean; accessibilityRole?: AccessibilityRole; disabled?: boolean;
+  onPress?: () => void; chevron?: boolean; destructive?: boolean; accessibilityRole?: AccessibilityRole; checked?: boolean; disabled?: boolean;
 }) {
   const t = useTheme();
   const s = useStyles();
@@ -198,6 +198,7 @@ export function ListRow({ icon, iconColor, title, subtitle, value, right, onPres
   if (!onPress) return <View style={s.row}>{body}</View>;
   return (
     <Tap feedback="selection" scaleTo={0.99} disabled={disabled} accessibilityRole={accessibilityRole ?? 'button'} accessibilityLabel={title}
+      accessibilityState={checked === undefined ? undefined : { checked, disabled: !!disabled }} aria-checked={checked}
       onPress={onPress} style={({ pressed, hovered }) => [s.row, (pressed || hovered) && { backgroundColor: t.colors.pressed }, disabled && { opacity: 0.5 }]}>
       {body}
     </Tap>
@@ -243,7 +244,7 @@ export function Segmented<T extends string>({ options, value, onChange, label }:
       {options.map((o) => {
         const on = o.value === value;
         return (
-          <Pressable key={o.value} accessibilityRole="radio" accessibilityState={{ selected: on }} accessibilityLabel={o.label}
+          <Pressable key={o.value} accessibilityRole="radio" accessibilityState={{ checked: on }} aria-checked={on} accessibilityLabel={o.label}
             style={s.segment} onPress={() => { if (!on) { haptic.selection(); onChange(o.value); } }}>
             {o.icon}
             <Text style={[s.segmentText, { color: on ? t.colors.text : t.colors.textSecondary }]} numberOfLines={1}>{o.label}</Text>

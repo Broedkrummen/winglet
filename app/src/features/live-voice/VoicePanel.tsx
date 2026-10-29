@@ -132,7 +132,7 @@ export function VoicePanel({ server, chatId, onClose, onType }: { server: Server
             return <ListRow key={value} title={value === 'server' ? 'Server' : deviceTitle}
               subtitle={value === 'server' ? 'Provider configured in Hermes' : kind === 'voiceListenWith' ? device.listenReason : device.speakReason}
               right={selected ? <Check size={18} color={t.colors.accent} accessibilityLabel="Selected" /> : undefined}
-              disabled={!available} onPress={() => update({ [kind]: value })} accessibilityRole="radio" />;
+              disabled={!available} onPress={() => update({ [kind]: value })} accessibilityRole="radio" checked={selected} />;
           })}
         </ListGroup>
       </View>) : null}

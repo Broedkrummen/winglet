@@ -14,6 +14,19 @@ const decoder = new TextDecoder();
 let deviceKey: Uint8Array | undefined;
 let migrated = false;
 let queue: Promise<unknown> = Promise.resolve();
+let status: 'ready' | 'unavailable' = 'ready';
+const listeners = new Set<() => void>();
+
+export function getCacheStatus() { return status; }
+export function subscribeCacheStatus(listener: () => void) {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+function setStatus(next: typeof status) {
+  if (status === next) return;
+  status = next;
+  for (const listener of listeners) listener();
+}
 
 // Migration, saves and removal share one queue, so an older migration/read can never replace a
 // newer draft or resurrect a removed bot. A rejected operation must not block subsequent saves.
@@ -45,10 +58,12 @@ async function ready(): Promise<void> {
       if (bytes.length !== 32) throw new Error('Invalid cache key');
       deviceKey = bytes;
     } else {
-      // A restored database can outlive its keychain entry. Do not replace that key or overwrite
-      // unreadable encrypted outbox entries; clearing the cache can recover this condition.
+      // A restored database can outlive its keychain entry. Only an explicit reset may discard it.
       for (const key of keys) {
-        if ((await db.getItemAsync(key))?.startsWith(PREFIX)) throw new Error('Cache key unavailable');
+        if ((await db.getItemAsync(key))?.startsWith(PREFIX)) {
+          setStatus('unavailable');
+          throw new Error('Cache key unavailable');
+        }
       }
       const bytes = getRandomBytes(32);
       await setItem(KEY, b64e(bytes));
@@ -64,6 +79,26 @@ async function ready(): Promise<void> {
     await db.setItemAsync(key, seal(key, raw));
   }
   migrated = true;
+  setStatus('ready');
+}
+
+/** Probe on the storage screen even if no cache operation has run yet. */
+export async function checkCacheStatus(): Promise<void> {
+  try { await ordered(ready); } catch { /* live use remains available */ }
+}
+
+/** Explicitly discard offline storage and create a new key, serialized with all cache work. */
+export async function resetCache(): Promise<void> {
+  await ordered(async () => {
+    setStatus('unavailable');
+    deviceKey = undefined;
+    migrated = false;
+    const bytes = getRandomBytes(32);
+    for (const key of await db.getAllKeysAsync()) await db.removeItemAsync(key);
+    await setItem(KEY, b64e(bytes));
+    deviceKey = bytes;
+    await ready();
+  });
 }
 
 export async function cacheGet<T>(key: string, fallback: T): Promise<T> {

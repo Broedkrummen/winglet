@@ -153,14 +153,14 @@ async def test_model_picker_switches_through_hermes_and_closes_the_card(client, 
                                     on_model_selected)
     picker = message["meta"]["picker"]
     path = f"/api/pickers/{picker['id']}/select"
-    assert (await client.post(path, json={"provider": "anthropic", "model": "gpt-9"}, headers=owner.auth)).status == 400
-    resp = await client.post(path, json={"provider": "anthropic", "model": "claude-y"}, headers=owner.auth)
+    assert (await post_signed(client, owner, path, {"provider": "anthropic", "model": "gpt-9"})).status == 400
+    resp = await post_signed(client, owner, path, {"provider": "anthropic", "model": "claude-y"})
     assert resp.status == 200
     updated = (await resp.json())["message"]
     assert updated["text"] == "Switched to claude-y." and updated["meta"]["picker"]["status"] == "done"
     assert calls == [("general", "claude-y", "anthropic")]
     # One answer per card.
-    assert (await client.post(path, json={"provider": "anthropic", "model": "claude-x"}, headers=owner.auth)).status == 410
+    assert (await post_signed(client, owner, path, {"provider": "anthropic", "model": "claude-x"})).status == 410
 
 
 async def test_custom_models_are_allowed_only_for_an_offered_provider(client, hub):
@@ -176,8 +176,8 @@ async def test_custom_models_are_allowed_only_for_an_offered_provider(client, hu
         {"slug": "openrouter", "name": "OpenRouter", "models": ["first"], "custom_models": True}]}, choose)
     path = f"/api/pickers/{message['meta']['picker']['id']}/select"
     for provider, model in [("other", "custom/model"), ("openrouter", ""), ("openrouter", "bad\nmodel")]:
-        assert (await client.post(path, json={"provider": provider, "model": model}, headers=owner.auth)).status == 400
-    resp = await client.post(path, json={"provider": "openrouter", "model": "vendor/custom-model:free"}, headers=owner.auth)
+        assert (await post_signed(client, owner, path, {"provider": provider, "model": model})).status == 400
+    resp = await post_signed(client, owner, path, {"provider": "openrouter", "model": "vendor/custom-model:free"})
     assert resp.status == 200
     assert calls == [("general", "vendor/custom-model:free", "openrouter")]
 
@@ -194,9 +194,9 @@ async def test_picker_failure_does_not_claim_success_and_can_be_retried(client, 
 
     message = await hub.post_picker("general", "choice", "Choose", {"choices": [{"value": "high"}]}, choose)
     path = f"/api/pickers/{message['meta']['picker']['id']}/select"
-    assert (await client.post(path, json={"value": "high"}, headers=owner.auth)).status == 502
+    assert (await post_signed(client, owner, path, {"value": "high"})).status == 502
     assert hub.store.get_message(message["id"])["meta"]["picker"]["status"] == "open"
-    assert (await client.post(path, json={"value": "high"}, headers=owner.auth)).status == 200
+    assert (await post_signed(client, owner, path, {"value": "high"})).status == 200
 
 
 async def test_a_concurrent_picker_tap_cannot_expire_an_inflight_selection(client, hub):
@@ -210,9 +210,9 @@ async def test_a_concurrent_picker_tap_cannot_expire_an_inflight_selection(clien
 
     message = await hub.post_picker("general", "choice", "Choose", {"choices": [{"value": "high"}]}, choose)
     path = f"/api/pickers/{message['meta']['picker']['id']}/select"
-    first = asyncio.ensure_future(client.post(path, json={"value": "high"}, headers=owner.auth))
+    first = asyncio.ensure_future(post_signed(client, owner, path, {"value": "high"}))
     await asyncio.wait_for(started.wait(), 2)
-    assert (await client.post(path, json={"value": "high"}, headers=owner.auth)).status == 409
+    assert (await post_signed(client, owner, path, {"value": "high"})).status == 409
     assert hub.store.get_message(message["id"])["meta"]["picker"]["status"] == "open"
     finish.set()
     assert (await first).status == 200
@@ -228,7 +228,7 @@ async def test_hermes_error_reply_leaves_the_actual_model_and_card_unchanged(cli
     message = await hub.post_picker("general", "model", "Choose", {"providers": [
         {"slug": "anthropic", "models": ["claude-x"]}]}, choose)
     path = f"/api/pickers/{message['meta']['picker']['id']}/select"
-    resp = await client.post(path, json={"provider": "anthropic", "model": "claude-x"}, headers=owner.auth)
+    resp = await post_signed(client, owner, path, {"provider": "anthropic", "model": "claude-x"})
     assert resp.status == 400 and "rejected" in (await resp.json())["error"]
     assert hub.store.get_message(message["id"])["meta"]["picker"]["status"] == "open"
 
@@ -248,7 +248,7 @@ async def test_failed_route_changes_cannot_claim_a_different_provider_or_vendor(
     message = await hub.post_picker("general", "model", "Choose", {"providers": [
         {"slug": provider, "models": [model]}]}, choose)
     path = f"/api/pickers/{message['meta']['picker']['id']}/select"
-    response = await client.post(path, json={"provider": provider, "model": model}, headers=owner.auth)
+    response = await post_signed(client, owner, path, {"provider": provider, "model": model})
     assert response.status == 400
     assert hub.store.get_message(message["id"])["meta"]["picker"]["status"] == "open"
 
@@ -271,7 +271,7 @@ async def test_choice_and_confirm_pickers_hand_back_the_value(client, hub):
                                     {"choices": [{"value": "once", "label": "Approve once"}, {"value": "cancel", "label": "Cancel"}]},
                                     on_confirm, ttl=300)
     for message, value in ((choice, "high"), (confirm, "once")):
-        resp = await client.post(f"/api/pickers/{message['meta']['picker']['id']}/select", json={"value": value}, headers=owner.auth)
+        resp = await post_signed(client, owner, f"/api/pickers/{message['meta']['picker']['id']}/select", {"value": value})
         assert resp.status == 200
     assert got == [("choice", "general", "high"), ("confirm", "once")]
 
@@ -289,7 +289,7 @@ async def test_pickers_are_for_owners_and_expire(client, hub):
     assert (await client.post(path, json={"value": "on"}, headers=member.auth)).status == 403
     # After a restart the callback is gone: the card is marked expired instead of hanging.
     hub._pickers.clear()
-    resp = await client.post(path, json={"value": "on", "message_id": message["id"]}, headers=owner.auth)
+    resp = await post_signed(client, owner, path, {"value": "on", "message_id": message["id"]})
     assert resp.status == 410
     assert hub.store.get_message(message["id"])["meta"]["picker"]["status"] == "expired"
 

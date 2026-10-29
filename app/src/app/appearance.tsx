@@ -34,7 +34,7 @@ export default function AppearanceScreen() {
         {THEMES.map(({ value, label, icon: Icon }) => {
           const on = prefs.theme === value;
           return (
-            <Tap key={value} feedback="selection" scaleTo={0.96} accessibilityRole="radio" accessibilityState={{ selected: on }} accessibilityLabel={label}
+            <Tap key={value} feedback="selection" scaleTo={0.96} accessibilityRole="radio" accessibilityState={{ checked: on }} aria-checked={on} accessibilityLabel={label}
               onPress={() => { if (!on) set('theme')(value); }} style={s.themeCell}>
               <View style={[s.themeFrame, on && { borderColor: t.colors.text }]}>
                 <View style={s.themeShot}>
@@ -59,7 +59,7 @@ export default function AppearanceScreen() {
           {DARK_TONES.map((tone) => {
             const on = prefs.darkTone === tone;
             return (
-              <Tap key={tone} feedback="selection" scaleTo={0.96} accessibilityRole="radio" accessibilityState={{ selected: on }} accessibilityLabel={TONE_LABELS[tone]}
+              <Tap key={tone} feedback="selection" scaleTo={0.96} accessibilityRole="radio" accessibilityState={{ checked: on }} aria-checked={on} accessibilityLabel={TONE_LABELS[tone]}
                 onPress={() => { if (!on) set('darkTone')(tone); }} style={s.themeCell}>
                 <View style={[s.themeFrame, on && { borderColor: t.colors.text }]}>
                   <View style={[s.themeShot, s.toneShot]}><MiniTheme colors={themeFor('dark', prefs.accent, tone).colors} /></View>
@@ -80,7 +80,7 @@ export default function AppearanceScreen() {
             const a = ACCENTS[name];
             const on = prefs.accent === name;
             return (
-              <Tap key={name} feedback="selection" accessibilityRole="radio" accessibilityState={{ selected: on }} accessibilityLabel={a.label}
+              <Tap key={name} feedback="selection" accessibilityRole="radio" accessibilityState={{ checked: on }} aria-checked={on} accessibilityLabel={a.label}
                 onPress={() => update({ accent: name })} style={s.swatchCell}>
                 <View style={[s.swatchRing, on && { borderColor: t.colors.text }]}>
                   <View style={[s.swatch, { backgroundColor: t.scheme === 'dark' ? a.dark : a.fill }]}>

@@ -130,9 +130,12 @@ export async function verifyDevice(server: Server, code: string, fp: string): Pr
   const key = await serverKey(server.url, fp);
   if (!key) throw new ApiError('Update Winglet on the server first.', 0);
   const signing = newSigningKey();
-  await api(server, '/api/devices/verify', {
-    method: 'POST',
-    body: JSON.stringify({ sealed: seal(key, 'verify', server.deviceId, { code: normalizeCode(code), sign_key: signing.public, pinned: true }) }),
+  const body = JSON.stringify({ sealed: seal(key, 'verify', server.deviceId, { code: normalizeCode(code), sign_key: signing.public, pinned: true }) });
+  const current = await getItem(keyOf(server));
+  const path = botPath(server, '/api/devices/verify');
+  await request(`${server.url}${path}`, {
+    method: 'POST', body, token: server.token,
+    ...(current ? { headers: signedHeaders(current, server.deviceId, 'POST', path, body) } : {}),
   });
   await setItem(keyOf(server), signing.secret);
   return { ...server, fingerprint: key.fingerprint };

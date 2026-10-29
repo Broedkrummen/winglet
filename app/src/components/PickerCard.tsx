@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, Text, TextInput, View } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
-import { api, ApiError } from '../lib/api';
+import { signedApi, ApiError } from '../lib/api';
 import { haptic } from '../lib/haptics';
 import { availableSavedModels, isCurrentModel, modelName, modelProviders, recentModels, savedModelKey, shortModel, toggleSavedModel, type SavedModel } from '../lib/modelOptions';
 import { spring, useReducedMotion } from '../lib/motion';
@@ -58,7 +58,7 @@ export function PickerCard({ server, message, presentation = 'card', onChosen }:
     setBusy(key);
     haptic.selection();
     try {
-      const result = await api<{ message: Message }>(server, `/api/pickers/${picker.id}/select`, { method: 'POST', body: JSON.stringify({ ...body, message_id: message.id }) });
+      const result = await signedApi<{ message: Message }>(server, 'POST', `/api/pickers/${picker.id}/select`, { ...body, message_id: message.id });
       if (result.message) setAnswer(result.message);
       if (picker.kind === 'model' && body.provider && body.model) {
         const prefs = usePrefs.getState();
@@ -117,7 +117,7 @@ export function PickerCard({ server, message, presentation = 'card', onChosen }:
         const key = `${entry.provider}/${entry.model}`;
         const current = isCurrentModel(picker, entry.provider, entry.model);
         return <View key={savedModelKey(entry)} style={[s.savedRow, current && s.currentRow]}>
-          <Pressable accessibilityRole="radio" accessibilityState={{ checked: current, disabled: !!busy }} disabled={!!busy}
+          <Pressable accessibilityRole="radio" accessibilityState={{ checked: current, disabled: !!busy }} aria-checked={current} disabled={!!busy}
             accessibilityLabel={`${modelName(entry.model)}, ${entry.model}, ${entry.providerName}${current ? ', current model' : ''}`}
             onPress={() => choose(key, { provider: entry.provider, model: entry.model })} style={[s.modelRow, { flex: 1, minWidth: 0 }]}>
             <View style={s.modelText}><Text style={s.modelName} numberOfLines={1}>{modelName(entry.model)}</Text>
@@ -187,7 +187,7 @@ export function PickerCard({ server, message, presentation = 'card', onChosen }:
                     const name = modelName(m);
                     const showId = !!q || (names.get(name) ?? 0) > 1;
                     return (
-                      sheet ? <View key={key} style={[s.savedRow, current && s.currentRow]}><Pressable accessibilityRole="radio" accessibilityState={{ checked: current, disabled: !!busy, busy: busy === key }}
+                      sheet ? <View key={key} style={[s.savedRow, current && s.currentRow]}><Pressable accessibilityRole="radio" accessibilityState={{ checked: current, disabled: !!busy, busy: busy === key }} aria-checked={current}
                         accessibilityLabel={`${name}, ${m}, ${p.name}${current ? ', current model' : ''}`} disabled={!!busy}
                         onPress={() => choose(key, { provider: p.slug, model: m })}
                         style={({ pressed }) => [s.modelRow, { flex: 1, minWidth: 0 }, pressed && { backgroundColor: t.colors.pressed }, !!busy && busy !== key && { opacity: 0.5 }]}>

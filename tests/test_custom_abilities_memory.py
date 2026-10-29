@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import json
 import sys
@@ -179,3 +180,21 @@ async def test_memory_review_route_ignores_forged_payload_and_keeps_audit_conten
                                  {'id': 'deadbeef', 'decision': 'approve', 'payload': {'content': 'FORGED_SECRET'}})
     assert response.status == 200 and received == [('deadbeef', 'approve')]
     assert 'FORGED_SECRET' not in json.dumps(hub.store.list_audit())
+
+
+async def test_refused_custom_install_finishes_job_with_hermes_reason(client, hub):
+    owner = await pair_phone(client, hub)
+    def refuse(*_): raise hub.hermes.HermesRefused('That plugin name is already installed.')
+    hub.hermes.apply_custom_ability = refuse
+    response = await post_signed(client, owner, '/api/abilities/add', {'token': 't', 'consent': True})
+    assert response.status == 202
+    job_id = (await response.json())['job']['id']
+    for _ in range(100):
+        job = hub.store.get_job(job_id)
+        if job['state'] != 'running':
+            break
+        await asyncio.sleep(0.01)
+    assert job['state'] == 'failed'
+    assert 'already installed' in job['detail']['message']
+    # A failed install must not leave a job that blocks the next one.
+    assert hub._busy_job() is None

@@ -152,7 +152,7 @@ ROUTE_POLICY = {
     "h_push_prefs": "device", "h_push_prefs_put": "device", "h_inbox": "device", "h_webpush_subscribe": "device",
     "h_webpush_unsubscribe": "device", "h_ntfy": "device", "h_push_test": "device", "h_device_verify": "device",
     "h_devices": "owner", "h_audit": "owner",
-    "h_agent": "device", "h_picker_select": "owner",
+    "h_agent": "device", "h_picker_select": "owner_signed",
     "h_chat_goal": "device", "h_goals": "device", "h_search": "device", "h_chat_files": "device",
     "h_checkpoints": "owner", "h_checkpoint": "owner", "h_checkpoint_restore": "owner_signed",
     "h_task": "device",
@@ -1239,6 +1239,11 @@ class Hub:
         if device is None:
             return _error(401, "This pairing was revoked. Reconnect before sending.")
         self._visible_chat(device, request.match_info["chat_id"])
+        if device["role"] == "owner" and self._approval_command(str(body.get("text") or "")):
+            problem = await self._signature_problem(request, device)
+            if problem:
+                needs = {"needs": "verify"} if problem in (VERIFY_FIRST, BAD_SIGNATURE) else {}
+                return _json({"error": problem, **needs}, status=403)
         attachments = body.get("attachments") or []
         if not isinstance(attachments, list) or not all(isinstance(a, str) for a in attachments):
             return _error(400, "attachments must be a list of upload ids")
@@ -1356,6 +1361,20 @@ class Hub:
                 await self.post_message(chat_id, "⚠️ Couldn't reach the agent. Check the gateway logs.",
                                         role="system", push=False)
         return message
+
+    def _approval_command(self, text: str) -> bool:
+        text = text.strip()
+        if not text.startswith("/") or not text[1:].strip():
+            return False
+        typed = text[1:].split(maxsplit=1)[0].split("@")[0].lower()
+        if typed == "approve":
+            return True
+        if self.command_resolver is not None:
+            try:
+                return self.command_resolver(typed) == "approve"
+            except Exception:
+                return False
+        return False
 
     def _refused_command(self, device: Dict[str, Any], text: str) -> str:
         """The slash command a member typed that's for owners only, or "" when the message may go through."""
@@ -1687,6 +1706,14 @@ class Hub:
             sig = str(body.get("sig") or request.query.get("sig") or "")
             if not (choice == "deny" and hmac.compare_digest(sig, self.action_signature(item_id, choice))):
                 return _error(401, "not paired")
+        item = self.store.get_inbox(item_id)
+        if device is not None and item and item["kind"] == "approval" and choice != "deny":
+            if device["role"] != "owner":
+                return _error(403, "Only an owner can approve or deny commands. It's waiting in their inbox.")
+            problem = await self._signature_problem(request, device)
+            if problem:
+                needs = {"needs": "verify"} if problem in (VERIFY_FIRST, BAD_SIGNATURE) else {}
+                return _json({"error": problem, **needs}, status=403)
         try:
             ok, item = await self.respond(item_id, choice=choice, answer=answer, device=device)
         except Forbidden as exc:
@@ -1740,12 +1767,15 @@ class Hub:
             lambda row: {"type": "inbox.update", "item": row, "pending": self.store.pending_count()})
 
     async def add_inbox(self, kind: str, chat_id: str, title: str, body: str, payload: Dict[str, Any], *,
-                        push: bool = True) -> Dict[str, Any]:
+                        push: bool = True) -> Optional[Dict[str, Any]]:
         # Results are informational: they land in the inbox history but never count as "needs you".
         status = "resolved" if kind == "result" else "pending"
         item = await self.publish(
             lambda: self.store.add_inbox(kind, chat_id, title, body, payload, status=status),
             lambda row: {"type": "inbox.new", "item": row, "pending": self.store.pending_count()})
+        if item is None:
+            logger.debug("[winglet] discarded inbox item for deleted chat %s", chat_id)
+            return None
         if push:
             await self.push_now(self._inbox_notification(item), tag=f"inbox-{item['id']}",
                                 urgency="normal" if kind == "result" else "high", item=item)
@@ -1765,13 +1795,16 @@ class Hub:
     # -- outbound (called by the adapter) ------------------------------------------------------
 
     async def post_message(self, chat_id: str, text: str, *, role: str = "bot", status: str = "final",
-                           meta: Optional[Dict[str, Any]] = None, push: bool = True) -> Dict[str, Any]:
+                           meta: Optional[Dict[str, Any]] = None, push: bool = True) -> Optional[Dict[str, Any]]:
         if not push:
             meta = {**(meta or {}), "notify": False}
         message = await self.publish(
             lambda: self.store.add_message(chat_id, role, text, status=status, meta=meta),
             lambda row: [{"type": "message.new", "chat_id": chat_id, "message": row},
                          {"type": "chat.update", "chat": self.store.get_chat(chat_id)}])
+        if message is None:
+            logger.debug("[winglet] discarded output for deleted chat %s", chat_id)
+            return None
         if push and self._notifiable(message):
             self.schedule_push(chat_id, message["id"], final=status == "final")
         return message
@@ -1932,10 +1965,17 @@ class Hub:
         if kind == "ping":
             await ws.send_json({"type": "pong", "t": data.get("t")})
         elif kind == "message.send":
+            if device["role"] == "owner" and self._approval_command(str(data.get("text") or "")):
+                await ws.send_json({"type": "error", "message": "Approve from the app using signed HTTP."})
+                return
             with contextlib.suppress(MessageRejected):
                 await self.user_message(device, str(data.get("chat_id") or ""), str(data.get("text") or ""),
                                         str(data.get("client_id") or ""))
         elif kind == "inbox.respond":
+            item = self.store.get_inbox(str(data.get("id") or ""))
+            if item and item["kind"] == "approval" and str(data.get("choice") or "") != "deny":
+                await ws.send_json({"type": "error", "message": "Approve from the app using signed HTTP."})
+                return
             try:
                 await self.respond(str(data.get("id") or ""), choice=str(data.get("choice") or ""),
                                    answer=data.get("answer"), device=device)
@@ -2332,7 +2372,12 @@ class Hub:
         sign_key = str(data.get("sign_key") or "")
         if data.get("pinned") is not True or not keys.valid_public_key(sign_key):
             return _error(400, "Verify by scanning a code, so this phone can check the server's key.")
-        if self.store.redeem_pair_code(str(data.get("code") or "")) is None:
+        if self.store.device_sign_key(device["id"]):
+            problem = await self._signature_problem(request, device)
+            if problem:
+                needs = {"needs": "verify"} if problem in (VERIFY_FIRST, BAD_SIGNATURE) else {}
+                return _json({"error": problem, **needs}, status=403)
+        if self.store.redeem_pair_code(str(data.get("code") or ""), target_role=device["role"]) is None:
             self._pair_failed(throttle)
             return _error(403, "This code is invalid or expired. Make a new one and try again.")
         self._pair_failures.pop(throttle, None)
@@ -2360,12 +2405,14 @@ class Hub:
     # -- pickers (/model, /reasoning, /fast, command confirmations) ------------------------------
 
     async def post_picker(self, chat_id: str, kind: str, title: str, data: Dict[str, Any],
-                          callback: Callable[..., Awaitable[Any]], ttl: float = PICKER_SECONDS) -> Dict[str, Any]:
+                          callback: Callable[..., Awaitable[Any]], ttl: float = PICKER_SECONDS) -> Optional[Dict[str, Any]]:
         """A card in the chat the owner taps to answer. ``callback`` gets the choice and returns the
         reply, which replaces the card's question."""
         picker_id = new_id()
         meta = {"picker": {"id": picker_id, "kind": kind, **data, "status": "open", "expires_at": time.time() + ttl}}
         message = await self.post_message(chat_id, title, role="bot", meta=meta, push=False)
+        if message is None:
+            return None
         self._pickers[picker_id] = {"callback": callback, "chat_id": chat_id, "message_id": message["id"],
                                     "kind": kind, "expires": time.monotonic() + ttl}
         return message
@@ -3053,7 +3100,14 @@ class Hub:
             if kind == "restart":
                 await self._finish_job(job["id"], "succeeded", "Back online.")
             elif kind == "winglet_update":
-                await self._finish_job(job["id"], "succeeded", f"Updated to Winglet {VERSION}.", to=VERSION)
+                previous = detail.get("from")
+                if not previous:
+                    state, message = "unknown", "The server restarted, but the starting Winglet version was not recorded."
+                elif previous == VERSION:
+                    state, message = "failed", f"The server restarted, but Winglet is still at version {VERSION}."
+                else:
+                    state, message = "succeeded", f"Updated to Winglet {VERSION}."
+                await self._finish_job(job["id"], state, message, to=VERSION)
             elif kind == "hermes_update":
                 now = self.hermes_version() or ""
                 state, message, lines = "unknown", "The server restarted, but the update didn't report how it went.", []
@@ -3066,11 +3120,14 @@ class Hub:
                     receipt = status.get("receipt") or {}
                     ours = detail.get("action_id") and status.get("action_id") == detail.get("action_id")
                     recent = _iso_ts(receipt.get("started_at")) >= job["created_at"] - 5
-                    if ours or (recent and receipt.get("outcome") == "success"):
-                        state, message = "succeeded", "Hermes is up to date."
-                    elif recent and receipt.get("outcome"):
-                        state, message = "failed", "The update didn't finish. Its log is below."
-                if state == "unknown" and now and now != detail.get("from"):
+                    if ours or recent:
+                        outcome = receipt.get("outcome")
+                        code = status.get("exit_code") if ours else receipt.get("exit_code")
+                        if (outcome and outcome != "success") or (code is not None and code != 0):
+                            state, message = "failed", "The update didn't finish. Its log is below."
+                        elif outcome == "success" or code == 0:
+                            state, message = "succeeded", "Hermes is up to date."
+                if state == "unknown" and detail.get("from") and now and now != detail.get("from"):
                     state, message = "succeeded", "Hermes is up to date."
                 await self._finish_job(job["id"], state, message, to=now, lines=lines)
             else:
@@ -3312,6 +3369,7 @@ class Hub:
         body = await self._body(request)
         if body.get("consent") is not True:
             return _error(400, "Review the addition and confirm installation first.")
+        self._need_hermes()
         job = await self._begin_job(request, device, "ability_install", {"message": "Installing reviewed addition…"}, body=body)
         if isinstance(job, web.Response):
             return job
@@ -3320,13 +3378,27 @@ class Hub:
         return _json({"job": job}, status=202)
 
     async def _install_custom_ability(self, job_id, device_id, body):
-        h = self._need_hermes()
+        # Every failure must finish the job: a job left running blocks every later job.
+        h = self.hermes
+        if h is None:
+            await self._finish_job(job_id, "failed", "This server can't do that yet.")
+            return
         try:
             device = self.store.get_device(device_id)
             if not device or device.get("role") != "owner":
-                raise ValueError("Owner access was removed before installation.")
-            result = await self._call(h.apply_custom_ability, str(body.get("token") or ""), device_id,
-                                      body.get("dependencies") is True, body.get("enable") is True)
+                await self._finish_job(job_id, "failed", "Owner access was removed before installation.")
+                return
+            try:
+                result = await self._call(h.apply_custom_ability, str(body.get("token") or ""), device_id,
+                                          body.get("dependencies") is True, body.get("enable") is True)
+            except web.HTTPException as exc:
+                # _call turns Hermes refusals into HTTP errors; keep Hermes's reason for the job.
+                try:
+                    reason = json.loads(exc.text or "{}").get("error") or ""
+                except ValueError:
+                    reason = ""
+                await self._finish_job(job_id, "failed", _clip(str(reason or "Hermes refused the installation."), 500))
+                return
             if result.get("action"):
                 async def started():
                     return result["action"]
@@ -3689,6 +3761,10 @@ class Hub:
                     envelope = encrypted_push.seal(sub["data"]["key"], sub["data"]["kid"], self.server_id(), sub["device_id"], note)
                     status = await webpush.send(client, sub["data"]["subscription"], envelope, pem, PUSH_SUBJECT, urgency=urgency)
                 elif sub["kind"] == "webpush":
+                    if not webpush.allowed_endpoint(sub["data"].get("endpoint", "")):
+                        self.store.remove_push_sub(endpoint=sub["endpoint"], device_id=sub["device_id"])
+                        result["expired"] += 1
+                        return
                     outgoing = note
                     if sub["data"].get("guard_v") == 1:
                         stamp = int(time.time())
@@ -3757,7 +3833,7 @@ class Hub:
         endpoint = str(sub.get("endpoint") or "") if isinstance(sub, dict) else ""
         keys = (sub.get("keys") if isinstance(sub, dict) else None) or {}
         try:
-            valid = (endpoint.startswith("https://") and len(webpush.b64url_decode(keys["p256dh"])) == 65
+            valid = (webpush.allowed_endpoint(endpoint) and len(webpush.b64url_decode(keys["p256dh"])) == 65
                      and len(webpush.b64url_decode(keys["auth"])) >= 16)
         except Exception:
             valid = False

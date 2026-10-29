@@ -3369,6 +3369,7 @@ class Hub:
         body = await self._body(request)
         if body.get("consent") is not True:
             return _error(400, "Review the addition and confirm installation first.")
+        self._need_hermes()
         job = await self._begin_job(request, device, "ability_install", {"message": "Installing reviewed addition…"}, body=body)
         if isinstance(job, web.Response):
             return job
@@ -3377,13 +3378,27 @@ class Hub:
         return _json({"job": job}, status=202)
 
     async def _install_custom_ability(self, job_id, device_id, body):
-        h = self._need_hermes()
+        # Every failure must finish the job: a job left running blocks every later job.
+        h = self.hermes
+        if h is None:
+            await self._finish_job(job_id, "failed", "This server can't do that yet.")
+            return
         try:
             device = self.store.get_device(device_id)
             if not device or device.get("role") != "owner":
-                raise ValueError("Owner access was removed before installation.")
-            result = await self._call(h.apply_custom_ability, str(body.get("token") or ""), device_id,
-                                      body.get("dependencies") is True, body.get("enable") is True)
+                await self._finish_job(job_id, "failed", "Owner access was removed before installation.")
+                return
+            try:
+                result = await self._call(h.apply_custom_ability, str(body.get("token") or ""), device_id,
+                                          body.get("dependencies") is True, body.get("enable") is True)
+            except web.HTTPException as exc:
+                # _call turns Hermes refusals into HTTP errors; keep Hermes's reason for the job.
+                try:
+                    reason = json.loads(exc.text or "{}").get("error") or ""
+                except ValueError:
+                    reason = ""
+                await self._finish_job(job_id, "failed", _clip(str(reason or "Hermes refused the installation."), 500))
+                return
             if result.get("action"):
                 async def started():
                     return result["action"]

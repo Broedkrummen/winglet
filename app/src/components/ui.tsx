@@ -359,15 +359,15 @@ export function ConfirmButton({ title, confirmTitle, onConfirm, icon, size = 'md
 }
 
 /** A search box with a clear button, the same on every screen. */
-export function SearchField({ value, onChangeText, placeholder, style }: {
-  value: string; onChangeText: (text: string) => void; placeholder: string; style?: StyleProp<ViewStyle>;
+export function SearchField({ value, onChangeText, placeholder, style, autoFocus = false }: {
+  value: string; onChangeText: (text: string) => void; placeholder: string; style?: StyleProp<ViewStyle>; autoFocus?: boolean;
 }) {
   const t = useTheme();
   const s = useStyles();
   return (
     <View style={[s.search, style]}>
       <Search size={16} color={t.colors.textTertiary} />
-      <TextInput value={value} onChangeText={onChangeText} placeholder={placeholder} placeholderTextColor={t.colors.textTertiary}
+      <TextInput value={value} onChangeText={onChangeText} placeholder={placeholder} placeholderTextColor={t.colors.textTertiary} autoFocus={autoFocus}
         style={s.searchInput} autoCapitalize="none" autoCorrect={false} accessibilityLabel={placeholder} returnKeyType="search" />
       {value ? (
         <Pressable onPress={() => onChangeText('')} accessibilityRole="button" accessibilityLabel="Clear search" hitSlop={10} style={s.searchClear}>

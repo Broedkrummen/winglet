@@ -38,6 +38,8 @@ function harness(initialCache?: Map<string, any>) {
   let submissionsGate: (() => Promise<void>) | undefined;
   let invalidClaim = false;
   const transfers: any[] = [];
+  let retirementResult = true;
+  let retirementCalls = 0;
   let nonce = 0;
   const transport = async (_server: unknown, path: string) => {
     requests.push({ path });
@@ -91,6 +93,7 @@ function harness(initialCache?: Map<string, any>) {
           size: file.size, hold_id: `target-hold-${file.slot}` };
       },
     },
+    './localRetention': { retireConfirmedHolds: async () => { retirementCalls++; return retirementResult; } },
     '../../lib/cache': { cacheGetStrict: async (key: string, fallback: any) => cache.has(key) ? copy(cache.get(key)) : fallback,
       cacheSetStrict: async (key: string, value: any) => { if (failStorage) throw new Error('disk full'); cache.set(key, copy(value)); } },
     '../../lib/control': { idempotencyKey: () => `operation-${++nonce}` },
@@ -113,6 +116,7 @@ function harness(initialCache?: Map<string, any>) {
     return { started, release };
   };
   return { runtime: exports, useApp, usePrefs, useLock, cache, records, requests, server, transfers,
+    retirementCalls: () => retirementCalls, setRetirementResult: (value: boolean) => { retirementResult = value; },
     deferClaim: () => gate(value => { claimGate = value; }),
     deferMaterialize: () => gate(value => { materializeGate = value; }), invalidClaim: () => { invalidClaim = true; },
     deferSubmissions: () => gate(value => { submissionsGate = value; }),
@@ -150,6 +154,25 @@ test('explicit shared source release uses the existing claim and cannot enqueue 
   assert.ok(request.path.endsWith('/drafts/home%3Achat/submissions/claimed-id/release-files'));
   assert.equal(request.body.confirmation, 'release-retained-files-without-confirmed-delivery');
   assert.ok(!h.requests.some(item => item.path.endsWith('/messages') || item.path.endsWith('/stop')));
+});
+
+test('confirmed delivery retries local cleanup after protected files become unused without resending the receipt', async () => {
+  const h = harness();
+  await h.runtime.connectPersonalSync(h.server);
+  await h.runtime.prepareSyncedDraft('home', 'chat', 'confirmed body', '', [{
+    localId: 'file-slot', name: 'file.txt', mime: 'text/plain', kind: 'file', size: 1, status: 'ready', progress: 1,
+    upload: { id: 'source-file', url: '/api/media/source-file/file.txt', name: 'file.txt', mime: 'text/plain', kind: 'file', size: 1 },
+  }]);
+  h.useApp.setState({ runtime: { home: { messages: { chat: [{ id: 'server-message', role: 'user', status: 'final', meta: { client_id: 'shared-claim-id' } }] } } } });
+  h.setRetirementResult(false);
+  await h.runtime.refreshPersonalSync();
+  assert.equal(h.retirementCalls(), 1);
+  h.setRetirementResult(true);
+  await h.runtime.refreshPersonalSync();
+  assert.equal(h.retirementCalls(), 2);
+  await h.runtime.refreshPersonalSync();
+  assert.equal(h.retirementCalls(), 2);
+  assert.equal(h.requests.filter(request => request.path.endsWith('/delivered')).length, 1);
 });
 
 test('explicit Send freezes reply and steering prefix under the shared submission ID', async () => {

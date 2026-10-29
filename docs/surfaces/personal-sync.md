@@ -15,6 +15,7 @@ One person links desktop and phone to one designated Hermes sync home. Being ano
 - Keep unresolved choices discoverable in the Settings row. Never steal typing focus or navigate in response to incoming state.
 - Below setup, expose retained-file recovery for removed pairings on each paired bot. Load explicitly, paginate, offer Download before an explicit two-step Release. Explain that storage release neither stops execution nor proves delivery. Hide results while locked and reject stale paired endpoints.
 - Shared submission recovery lists bounded frozen previews from the private sync group. Label target-message confirmation separately from task completion. Offer private file Download and explicit shared-source-pin Release; explain that local drafts, outboxes and copies have separate retention. Preserve stable submission identifiers and pagination. Clear displayed summaries when the home or lock changes.
+- Files retained for this device lists only uploads owned by the current pairing on the selected bot. Download precedes explicit release. Refuse release while live or saved drafts/outboxes reference the file; explain how to remove the reference and retry. A stale server hold version requires refresh and another review. Keep ordinary grace-period cleanup distinct from task cancellation.
 
 ## Boundaries
 

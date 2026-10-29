@@ -12,6 +12,7 @@ import { connectPersonalSync, disconnectPersonalSync, invitePersonalDevice, pers
 import type { Value } from '../features/sync/model';
 import { RetainedFiles } from '../features/sync/RetainedFiles';
 import { SubmissionRecovery } from '../features/sync/SubmissionRecovery';
+import { CurrentRetainedFiles } from '../features/sync/CurrentRetainedFiles';
 
 export default function SyncSettings() {
   const s = useStyles();
@@ -94,6 +95,7 @@ export default function SyncSettings() {
         onConfirm={() => run(disconnectPersonalSync)} loading={busy} />
     </>}
     <SubmissionRecovery />
+    <CurrentRetainedFiles />
     <RetainedFiles />
   </Screen>;
 }

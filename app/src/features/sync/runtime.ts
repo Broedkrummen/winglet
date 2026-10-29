@@ -8,6 +8,7 @@ import { draftKey, useApp } from '../../lib/store';
 import type { DraftFile, ReplyRef, Server, Upload } from '../../lib/types';
 import { materializeSyncFile, readSyncFile, stageSyncFile, stagingHoldId, validateSyncFile, type SyncFile } from './fileTransfer';
 import { changedValues, portablePreferences, preferencePatch } from './preferences';
+import { retireConfirmedHolds } from './localRetention';
 import { emptyReplica, receive, recordKey, stage, SyncReplica, visibleValues, type Candidate, type Kind, type RecordState,
   type Json, type Pending, type Replica, type Value } from './model';
 
@@ -505,21 +506,22 @@ async function settleConfirmedClaims() {
   const engine = replica, config = home, source = serverFor();
   if (!engine || !config || !source || !allowed()) return;
   for (const [clientId, claim] of Object.entries(engine.state.claims ?? {})) {
-    if (claim.settled) continue;
+    if (claim.localFilesRetired) continue;
     const state = useApp.getState();
     const target = state.servers.find(server => server.id === claim.serverId);
     const message = state.runtime?.[claim.serverId]?.messages?.[claim.chatId]?.find(item => item.role === 'user'
       && item.meta?.client_id === clientId && item.id !== clientId && item.status === 'final');
-    if (!target || !message || (target.fingerprint ?? '') !== claim.fingerprint) continue;
+    if (!target || (!claim.settled && !message) || (target.fingerprint ?? '') !== claim.fingerprint) continue;
     if (engine !== replica || home !== config || !allowed()) return;
-    await signedApi(source, 'POST', path(`/drafts/${encodeApiComponent(claim.recordId)}/submissions/${encodeApiComponent(clientId)}/delivered`),
-      { server_id: claim.serverId, chat_id: claim.chatId, message_id: message.id, client_id: clientId });
-    const holds = new Set([...claim.sourceHolds, ...claim.attachments.map(file => file.hold_id)]);
-    for (const holdId of holds) {
-      if (engine !== replica || home !== config || !allowed()) return;
-      await signedApi(target, 'DELETE', `/api/chats/${encodeApiComponent(claim.chatId)}/uploads/hold`, { hold_id: holdId });
+    if (!claim.settled) {
+      await signedApi(source, 'POST', path(`/drafts/${encodeApiComponent(claim.recordId)}/submissions/${encodeApiComponent(clientId)}/delivered`),
+        { server_id: claim.serverId, chat_id: claim.chatId, message_id: message!.id, client_id: clientId });
+      await engine.edit(value => ({ ...value, claims: { ...value.claims, [clientId]: { ...claim, settled: true } } }));
     }
-    await engine.edit(value => ({ ...value, claims: { ...value.claims, [clientId]: { ...claim, settled: true } } }));
+    if (engine !== replica || home !== config || !allowed()) return;
+    const retired = await retireConfirmedHolds(target, claim.chatId, new Set([...claim.sourceHolds, ...claim.attachments.map(file => file.hold_id)]));
+    if (retired) await engine.edit(value => ({ ...value, claims: { ...value.claims,
+      [clientId]: { ...value.claims![clientId], localFilesRetired: true } } }));
   }
 }
 

@@ -80,6 +80,71 @@ def test_target_commit_failure_rolls_back_metadata_and_removes_only_its_new_copy
     assert not list(hub.media_dir.iterdir())
 
 
+async def test_current_device_retention_is_private_and_stale_release_cannot_remove_a_renewed_hold(client, hub):
+    owner = await pair_phone(client, hub, 'Owner')
+    other = await pair_phone(client, hub, 'Other owner')
+    hub.store.add_upload('current-held', owner.id, 'general', 'file.pdf', 'application/pdf', 'file', len(DATA))
+    assert hub.store.hold_uploads(['current-held'], owner.id, 'general', 'current-hold')
+    path = '/api/uploads/retained?scope=current'
+    listing = await (await client.get(path, headers=owner.auth)).json()
+    assert listing['scope'] == 'current'
+    first = listing['files'][0]
+    assert first['source_device'] == owner.id and first['version']
+    assert (await (await client.get(path, headers=other.auth)).json())['files'] == []
+    assert (await client.get('/api/uploads/retained?scope=all', headers=owner.auth)).status == 400
+    assert hub.store.hold_uploads(['current-held'], owner.id, 'general', 'current-hold')
+    release = '/api/chats/general/uploads/hold'
+    legacy = json.dumps({'hold_id': first['hold_id']}).encode()
+    assert (await client.delete(release, data=legacy, headers=owner.signed('DELETE', release, legacy))).status == 409
+    assert hub.store.upload_held('current-held')
+    body = json.dumps({'hold_id': first['hold_id'], 'upload_id': first['upload']['id'], 'expected_version': first['version']}).encode()
+    assert (await client.delete(release, data=body, headers=owner.signed('DELETE', release, body))).status == 409
+    assert hub.store.upload_held('current-held')
+    current = (await (await client.get(path, headers=owner.auth)).json())['files'][0]
+    body = json.dumps({'hold_id': current['hold_id'], 'upload_id': current['upload']['id'], 'expected_version': current['version']}).encode()
+    assert (await client.delete(release, data=body, headers=other.signed('DELETE', release, body))).status == 409
+    assert (await client.delete(release, data=body, headers=owner.signed('DELETE', release, body))).status == 200
+    assert not hub.store.upload_held('current-held')
+
+
+def test_legacy_upload_holds_gain_versions_without_losing_existing_retention(tmp_path):
+    path = tmp_path / 'legacy.db'
+    store = Store(path)
+    store._exec('ALTER TABLE upload_holds DROP COLUMN version')
+    store._exec('INSERT INTO upload_holds VALUES (?,?,?,?)', ('legacy-upload', 'legacy-device', 'general', 'legacy-hold'))
+    store.close()
+    reloaded = Store(path)
+    row = reloaded._one('SELECT * FROM upload_holds WHERE upload_id=?', ('legacy-upload',))
+    assert row['hold_id'] == 'legacy-hold' and row['device_id'] == 'legacy-device'
+    assert len(row['version']) == 32
+    version = row['version']
+    reloaded.close()
+    again = Store(path)
+    assert again._one('SELECT version FROM upload_holds WHERE upload_id=?', ('legacy-upload',))['version'] == version
+    again.close()
+
+
+async def test_retention_release_rechecks_bot_scope_after_reading_body(client, hub, monkeypatch):
+    from aiohttp import web
+    owner = await pair_phone(client, hub, 'Owner')
+    hub.store.add_upload('moved-file', owner.id, 'general', 'file.pdf', 'application/pdf', 'file', len(DATA))
+    assert hub.store.hold_uploads(['moved-file'], owner.id, 'general', 'move-hold')
+    row = hub.store.own_upload_holds(owner.id, '')[0]
+    original = web.Request.json
+
+    async def move_after_body(request, *args, **kwargs):
+        result = await original(request, *args, **kwargs)
+        hub.store._exec("UPDATE chats SET bot='another-bot' WHERE id='general'")
+        return result
+
+    monkeypatch.setattr(web.Request, 'json', move_after_body)
+    path = '/api/chats/general/uploads/hold'
+    body = json.dumps({'hold_id': row['hold_id'], 'upload_id': row['id'], 'expected_version': row['version']}).encode()
+    response = await client.delete(path, data=body, headers=owner.signed('DELETE', path, body))
+    assert response.status == 404
+    assert hub.store.upload_held('moved-file')
+
+
 async def test_private_bytes_require_signed_upload_and_explicit_group_membership(client, hub):
     a = await pair_phone(client, hub, 'Desktop')
     b = await pair_phone(client, hub, 'Phone')

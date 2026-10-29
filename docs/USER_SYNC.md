@@ -20,8 +20,9 @@ All paths are relative to their own paired server. Bot selection remains inside 
 | `GET /api/user-sync/{group}/blobs/{id}` | Current owner/group member, no public signature bypass; attachment/octet-stream, no-store and sandbox headers. |
 | `PUT /api/chats/{chat}/staged-files/{source_id}?slot=...&sha256=...&name=...&voice=0` | Signed target owner; verifies bytes and target scope, creates an uploader-owned retained target copy. Same device/chat/source/slot retries return that copy. |
 | `POST /api/chats/{chat}/uploads/hold` | Signed owner; `{upload_ids, hold_id}` retains that device's own unclaimed uploads. A different existing hold cannot be silently replaced. |
-| `DELETE /api/chats/{chat}/uploads/hold` | Signed owner; `{hold_id}` releases own retention. `{hold_id, source_device}` permits explicit recovery cleanup only after that source pairing was removed. |
+| `DELETE /api/chats/{chat}/uploads/hold` | Signed owner; `{hold_id, upload_id, expected_version}` releases one reviewed own hold using compare-and-set. Legacy own release without a version is refused. `{hold_id, source_device}` permits recovery cleanup only after that source pairing was removed. |
 | `GET /api/uploads/retained?after=...` | Owner; bounded, bot-scoped recovery listing for files held by removed devices. Export/recover or explicitly discard before releasing. |
+| `GET /api/uploads/retained?scope=current&after=...` | Owner; at most 100 own pairing uploads, hold versions and a cursor. Echoes `scope: current`; older responses without that contract require a server update. |
 | `POST /api/user-sync/{group}/drafts/{record}/submit` | Signed group member; `{expected_revision}` claims one stable submission ID for the exact conflict-free generation. It enqueues no work. |
 | `GET /api/user-sync/{group}/submissions?after=...` | Current owner/group member; at most 20 frozen submission summaries, bounded text preview and file descriptors, plus linked-device confirmation/release status. No executable outbox or credentials. |
 | `POST .../drafts/{record}/submissions/{submission}/delivered` | Signed group member; target-bound `{server_id, chat_id, message_id, client_id}` records linked-device confirmation and retires submission pins. |
@@ -55,9 +56,11 @@ Bulk byte writes happen before SQLite transactions. Final admission rechecks aut
 
 ## Remaining integration and verification
 
-1. Extend retained-file recovery to current-device removed attachments and unused local target/source copies. Group-wide abandoned-submission review, private Download and explicit shared-pin Release are connected; local holds intentionally remain independently protected. Failed-message discard commits its outbox removal strictly and preserves the message on storage failure. Do not retire local retention before confirmed discard; never label source-file release as task cancellation.
+1. Current-device retained-file review, Download and versioned Release are connected. Release checks both live and strict saved draft/outbox references and temporarily guards new local outbox admission. Storage failure preserves retention. Every acquisition renews its version; stale release is refused. Migrated holds receive stable initial versions without losing retention. Final server mutation rechecks chat visibility and bot scope in its transaction. These controls do not cancel execution or immediately delete bytes; the ordinary unclaimed-upload grace period still applies.
 2. Complete full restart/file recovery, including stale source uploads already claimed by a previous message and all attachment/reply cache disagreements. Verify claim settlement and unused-copy release across real reconnects.
 3. Extend browser verification to all restart/recovery and active-edit cases. Current checks cover settings in light/dark desktop/phone layouts, removed-device Download/Release, receiving a manual attachment, reopening after persistence, and concurrent Send producing one actual target message. Loading/status copy reflects file/reply sync. Physical Android/iPhone checks remain separate from exports.
 4. Connect read/resume state and the remaining portable libraries in the approved plan.
 
 These are remaining steps in feature #1, not a reduction of the approved 18-feature scope.
+
+Confirmed-delivery cleanup uses the same versioned, reference-aware path. It separately records home settlement and local retirement, retrying protected copies after draft/outbox persistence catches up without resending the receipt. Each pass examines at most 20 pages (2,000 retained uploads); remaining or refreshed holds stay protected and available for explicit review. Unknown network/storage outcomes never authorize cancellation or a new submission ID.

@@ -4,6 +4,7 @@ import vm from 'node:vm';
 import { test } from 'node:test';
 import ts from 'typescript';
 import { createStore } from 'zustand/vanilla';
+import * as uploadRetirement from '../src/lib/uploadRetirement.ts';
 
 class ApiError extends Error {
   status: number;
@@ -80,6 +81,7 @@ function harness(os = 'web') {
     './recovery': { RecoveryCoordinator: FakeCoordinator },
     '../features/phone-tools/runtime': { phoneHello: () => phoneCalls.push('hello'), phoneEvent: () => phoneCalls.push('event'), phoneDisconnect: () => phoneCalls.push('disconnect'), phoneVisibility: () => phoneCalls.push('visibility') },
     './messages': helpers,
+    './uploadRetirement': uploadRetirement,
     './messageLimits': compile('../src/lib/messageLimits.ts', {}),
     '../features/projects/logic': projectHelpers,
     '../features/event-replay/session': replaySession,
@@ -347,6 +349,21 @@ test('failed shared preparation keeps the composition and never queues a fallbac
   assert.equal(await h.sendDraft('s', 'general', 'Keep me'), false);
   assert.equal(h.store.getState().drafts['s:general'], 'Keep me');
   assert.equal(h.outbox().length, 0);
+});
+
+test('outbox admission cannot race explicit retirement of its attached upload', async () => {
+  const h = harness();
+  await h.connect(); h.disconnect();
+  const finish = uploadRetirement.beginUploadRetirement(['s'], 'held-file');
+  try {
+    assert.equal(await h.store.getState().sendMessage('s', 'general', 'keep this', {
+      attachments: [{ id: 'held-file', name: 'file.txt', size: 3 }], waitForDelivery: false,
+    }), false);
+    assert.equal(h.outbox().length, 0);
+  } finally { finish(); }
+  assert.equal(await h.store.getState().sendMessage('s', 'general', 'retry after cleanup', {
+    attachments: [{ id: 'held-file', name: 'file.txt', size: 3 }], waitForDelivery: false,
+  }), true);
 });
 
 test('oversized text and busy-mode prefixes retain the full draft without queueing', async () => {

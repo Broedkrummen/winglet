@@ -6,6 +6,7 @@ import { RecoveryCoordinator } from './recovery';
 import { sound } from './sounds';
 import { api, ApiError, signedApi, wsUrl } from './api';
 import { cacheGet, cacheRemove, cacheSet, cacheSetStrict } from './cache';
+import { assertUploadsAvailable } from './uploadRetirement';
 import { mergeSnapshot } from '../features/event-replay/merge';
 import { SyncSession, type ReplayCursor, type SyncHost } from '../features/event-replay/session';
 import type { SyncSnapshot } from '../features/event-replay/protocol';
@@ -217,7 +218,9 @@ export const useApp = create<AppState>((set, get) => {
       }
       const entries = get().runtime[serverId]?.outbox ?? [];
       if (!accept) { await cacheSet(`outbox:${serverId}`, entries); return; }
-      await cacheSetStrict(`outbox:${serverId}`, accept(entries));
+      const accepted = accept(entries);
+      assertUploadsAvailable(serverId, accepted.flatMap(entry => entry.attachments ?? []));
+      await cacheSetStrict(`outbox:${serverId}`, accepted);
       if (get().servers.find((s) => s.id === serverId) !== server) {
         if (!get().servers.some((s) => s.id === serverId)) await cacheRemove(`outbox:${serverId}`);
         throw new Error('This bot changed. Try sending again.');

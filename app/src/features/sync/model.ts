@@ -4,7 +4,7 @@ import type { Upload } from '../../lib/types';
 export type FileCache = { homeServerId: string; groupId: string; sourceUploadId: string; manifest: SyncFile;
   sourceHoldId?: string; targetUpload?: Upload & { hold_id: string } };
 export type LocalClaim = { recordId: string; serverId: string; chatId: string; fingerprint: string; manifest: SyncFile[];
-  attachments: (Upload & { hold_id: string })[]; sourceHolds: string[]; settled?: boolean };
+  attachments: (Upload & { hold_id: string })[]; sourceHolds: string[]; settled?: boolean; localFilesRetired?: boolean };
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 export type Value = { deleted: true } | { deleted: false; value: Json };
 export type Candidate = Value & { device_id: string; operation_id: string; at: number };

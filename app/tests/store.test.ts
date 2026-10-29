@@ -4,6 +4,7 @@ import vm from 'node:vm';
 import { test } from 'node:test';
 import ts from 'typescript';
 import { createStore } from 'zustand/vanilla';
+import * as uploadRetirement from '../src/lib/uploadRetirement.ts';
 
 class ApiError extends Error {
   status: number;
@@ -24,6 +25,7 @@ function harness(os = 'web') {
   const cache = new Map<string, any>();
   let strictWrite = async (key: string, value: any) => { cache.set(key, structuredClone(value)); };
   let persisted: any;
+  let prepareSyncedDraft: (...args: any[]) => Promise<any> = async () => undefined;
   class FakeSocket {
     readyState = 1;
     sent: any[] = [];
@@ -79,6 +81,7 @@ function harness(os = 'web') {
     './recovery': { RecoveryCoordinator: FakeCoordinator },
     '../features/phone-tools/runtime': { phoneHello: () => phoneCalls.push('hello'), phoneEvent: () => phoneCalls.push('event'), phoneDisconnect: () => phoneCalls.push('disconnect'), phoneVisibility: () => phoneCalls.push('visibility') },
     './messages': helpers,
+    './uploadRetirement': uploadRetirement,
     './messageLimits': compile('../src/lib/messageLimits.ts', {}),
     '../features/projects/logic': projectHelpers,
     '../features/event-replay/session': replaySession,
@@ -99,12 +102,14 @@ function harness(os = 'web') {
       setJSON: async (key: string, value: any) => { if (key === 'winglet.servers') persisted = value; } },
   });
   const { sendDraft } = compile('../src/lib/attach.ts', {
+    '../features/sync/runtime': { prepareSyncedDraft: (...args: any[]) => prepareSyncedDraft(...args) },
     'react-native': { Platform: { OS: os } }, './haptics': { haptic: { light() {}, error() {} } },
     './media': {}, './store': { useApp: store },
   });
   const tick = () => new Promise(resolve => setImmediate(resolve));
   return {
     sendDraft, setStrictWrite: (write: typeof strictWrite) => { strictWrite = write; },
+    setSyncPreparation: (prepare: typeof prepareSyncedDraft) => { prepareSyncedDraft = prepare; },
     store, cache, played, phoneCalls, taskModel, setRequest: (fn: typeof request) => { request = fn; },
     setRecovery: (fn: typeof recoveryRequest) => { recoveryRequest = fn; },
     disconnect: () => { socket.readyState = 3; socket.onclose?.({ code: 1006 }); },
@@ -319,6 +324,48 @@ test('failed durable acceptance keeps text, files and reply without claiming a q
   assert.equal(h.store.getState().drafts['s:general'], undefined);
 });
 
+test('a shared draft uses its claimed ID and target copies only after durable outbox acceptance', async () => {
+  const h = harness();
+  await h.connect(); h.disconnect();
+  const state = h.store.getState();
+  state.setDraft('s', 'general', 'Shared');
+  state.updateDraftFiles('s', 'general', () => [{ localId: 'pick', status: 'ready', upload: { id: 'source' } }]);
+  h.setSyncPreparation(async () => ({ clientId: 'shared-submission', attachments: [{ id: 'target-copy' }] }));
+  h.setStrictWrite(async () => { throw new Error('disk full'); });
+  assert.equal(await h.sendDraft('s', 'general', 'Shared'), false);
+  assert.equal(h.store.getState().drafts['s:general'], 'Shared');
+  assert.equal(h.outbox().length, 0);
+  h.setStrictWrite(async (key, value) => { h.cache.set(key, structuredClone(value)); });
+  assert.equal(await h.sendDraft('s', 'general', 'Shared'), true);
+  assert.equal(h.outbox()[0].client_id, 'shared-submission');
+  assert.equal(h.outbox()[0].attachments[0].id, 'target-copy');
+});
+
+test('failed shared preparation keeps the composition and never queues a fallback send', async () => {
+  const h = harness();
+  await h.connect(); h.disconnect();
+  h.store.getState().setDraft('s', 'general', 'Keep me');
+  h.setSyncPreparation(async () => { throw new Error('home unavailable'); });
+  assert.equal(await h.sendDraft('s', 'general', 'Keep me'), false);
+  assert.equal(h.store.getState().drafts['s:general'], 'Keep me');
+  assert.equal(h.outbox().length, 0);
+});
+
+test('outbox admission cannot race explicit retirement of its attached upload', async () => {
+  const h = harness();
+  await h.connect(); h.disconnect();
+  const finish = uploadRetirement.beginUploadRetirement(['s'], 'held-file');
+  try {
+    assert.equal(await h.store.getState().sendMessage('s', 'general', 'keep this', {
+      attachments: [{ id: 'held-file', name: 'file.txt', size: 3 }], waitForDelivery: false,
+    }), false);
+    assert.equal(h.outbox().length, 0);
+  } finally { finish(); }
+  assert.equal(await h.store.getState().sendMessage('s', 'general', 'retry after cleanup', {
+    attachments: [{ id: 'held-file', name: 'file.txt', size: 3 }], waitForDelivery: false,
+  }), true);
+});
+
 test('oversized text and busy-mode prefixes retain the full draft without queueing', async () => {
   const h = harness(); await h.connect(); h.disconnect();
   const text = 'x'.repeat(16000) + '\nOnly summarize; do not execute.';
@@ -437,9 +484,23 @@ test('a message the server refuses fails, and can be deleted', async () => {
   const failed = h.messages()[0];
   assert.equal(failed.status, 'failed');
   assert.equal(h.outbox()[0].failed, true);
-  h.store.getState().discardMessage('s', 'general', failed.id);
+  await h.store.getState().discardMessage('s', 'general', failed.id);
   assert.equal(h.messages().length, 0);
   assert.equal(h.outbox().length, 0);
+});
+
+test('failed durable discard keeps both the failed message and its recoverable outbox entry', async () => {
+  const h = harness();
+  await h.connect();
+  await h.hello();
+  h.setRequest(echoServer([], () => 404));
+  await h.store.getState().sendMessage('s', 'general', 'keep until deletion is saved');
+  const failed = h.messages()[0];
+  h.setStrictWrite(async () => { throw new Error('disk full'); });
+  assert.equal(await h.store.getState().discardMessage('s', 'general', failed.id), false);
+  assert.equal(h.messages()[0].id, failed.id);
+  assert.equal(h.outbox()[0].client_id, failed.id);
+  assert.equal(h.store.getState().toasts.at(-1).title, 'Message kept');
 });
 
 test('drafts are kept per chat and cleared when empty', async () => {

@@ -2,7 +2,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
 import { Platform } from 'react-native';
-import { ApiError } from './api';
+import { ApiError, botPath } from './api';
 import type { Server, Upload } from './types';
 
 /** A file chosen on this device, before it's uploaded. */
@@ -95,7 +95,7 @@ export type UploadHandle = { promise: Promise<Upload>; abort: () => void };
 export function uploadFile(server: Server, chatId: string, f: PickedFile, onProgress: (p: number) => void, kind?: 'voice'): UploadHandle {
   const xhr = new XMLHttpRequest();
   const promise = new Promise<Upload>((resolve, reject) => {
-    xhr.open('POST', `${server.url}/api/chats/${encodeURIComponent(chatId)}/uploads`);
+    xhr.open('POST', `${server.url}${botPath(server, `/api/chats/${encodeURIComponent(chatId)}/uploads`)}`);
     xhr.setRequestHeader('Authorization', `Bearer ${server.token}`);
     xhr.setRequestHeader('Accept', 'application/json');
     xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };

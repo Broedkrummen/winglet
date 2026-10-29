@@ -59,10 +59,16 @@ async function request<T>(url: string, init: RequestInit & { token?: string; tim
   return data as T;
 }
 
+/** Encode a component without allowing fetch to rewrite the signed query. */
+export function encodeApiComponent(value: string): string {
+  // RFC 3986 keeps fetch from rewriting apostrophes after the path has been signed.
+  return encodeURIComponent(value).replace(/[!'()*]/g, character => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
 /** A path for this bot: another bot on the same server is picked with `bot=` (inside the signed path). */
 export function botPath(server: Server, path: string): string {
   if (!server.profile) return path;
-  return `${path}${path.includes('?') ? '&' : '?'}bot=${encodeURIComponent(server.profile)}`;
+  return `${path}${path.includes('?') ? '&' : '?'}bot=${encodeApiComponent(server.profile)}`;
 }
 
 export function api<T>(server: Server, path: string, init: RequestInit & { timeoutMs?: number } = {}): Promise<T> {
@@ -183,6 +189,40 @@ export async function signedApi<T>(server: Server, method: 'POST' | 'PATCH' | 'P
     if (e instanceof ApiError && e.data?.needs === 'verify') throw needsVerify(server, e.status, e.data);
     throw e;
   }
+}
+
+/** Raw bytes use exactly the same request signature protocol as JSON owner actions. */
+export async function signedBytesApi<T>(server: Server, path: string, bytes: Uint8Array<ArrayBuffer>): Promise<T> {
+  const secret = await getItem(keyOf(server));
+  if (!secret) throw needsVerify(server, 403);
+  const full = botPath(server, path);
+  const body = bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? bytes.buffer : bytes.slice().buffer;
+  try {
+    return await request<T>(`${server.url}${full}`, { method: 'PUT', body, token: server.token, timeoutMs: 65000,
+      headers: { ...signedHeaders(secret, server.deviceId, 'PUT', full, bytes), 'Content-Type': 'application/octet-stream' } });
+  } catch (error) {
+    if (error instanceof ApiError && error.data?.needs === 'verify') throw needsVerify(server, error.status, error.data);
+    throw error;
+  }
+}
+
+/** Authenticated private bytes never travel through a token-bearing media URL or redirect. */
+export async function apiBytes(server: Server, path: string): Promise<Uint8Array<ArrayBuffer>> {
+  if (!path.startsWith('/api/')) throw new ApiError('Expected a relative server file path.', 400);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 65000);
+  try {
+    const response = await fetch(`${server.url}${botPath(server, path)}`, { headers: { Authorization: `Bearer ${server.token}` },
+      redirect: 'error', signal: controller.signal });
+    if (!response.ok) {
+      const body = await response.json().catch(() => null);
+      throw new ApiError(body?.error || `File request failed (${response.status}).`, response.status);
+    }
+    return new Uint8Array(await response.arrayBuffer());
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError('The file transfer was interrupted. Your original file is kept; reconnect and retry.', 0);
+  } finally { clearTimeout(timer); }
 }
 
 /** The socket URL. Current servers take the token in the first frame instead, so it isn't in a URL. */

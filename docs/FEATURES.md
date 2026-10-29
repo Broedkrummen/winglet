@@ -13,7 +13,7 @@ The [README](../README.md#what-it-does) has the overview. This page lists everyt
 - **Start talking in place.** The landing opens quietly; sending reveals the full conversation on the same screen,
   with previous messages and your new exchange. Your bot keeps its conversation context.
 - **Keep chats organized.** Pin side chats above recent ones, or archive and restore them from Chats → Archived.
-  Pins and archives stay on this device; archiving keeps the conversation and its messages.
+  Pins and archives are local until you explicitly link a sync home; archiving keeps the conversation and its messages.
 - **Find the work that matters.** All, Running and Needs you filters in the sidebar and Chats show active
   conversations and requests, including requests in archived chats. Unsent text, attachments and replies
   appear as draft previews; search finds draft text and attachment names.
@@ -36,6 +36,11 @@ The [README](../README.md#what-it-does) has the overview. This page lists everyt
   same delivery ID. Draft text, finished attachments and reply context survive app restarts.
   On Android, offline chat, inbox, draft and outbox values are encrypted with a device key kept in the
   OS keychain. The web app uses origin-scoped IndexedDB.
+- **Choose a personal sync home.** Settings → Sync explicitly links your devices through one Hermes server.
+  Portable appearance/settings and text drafts sync; pairing keys, biometric lock and physical permissions remain local.
+  Competing values require your choice, and incoming text does not replace an active composer. Invitations are
+  single-use and expire; linked devices can revoke access. Draft-file sharing, send claims and the other planned
+  libraries are not yet wired into this client checkpoint; this is not completion of the full cross-device feature.
 - **One screen for the connection.** See how phones reach the server, whether the tunnel is up, and
   whether this phone's notifications are getting through. Moved the server to Tailscale or a new domain?
   Point the Android app at the new address; it only moves once your server has signed that address as

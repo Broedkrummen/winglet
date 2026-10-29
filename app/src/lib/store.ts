@@ -6,6 +6,7 @@ import { RecoveryCoordinator } from './recovery';
 import { sound } from './sounds';
 import { api, ApiError, signedApi, wsUrl } from './api';
 import { cacheGet, cacheRemove, cacheSet, cacheSetStrict } from './cache';
+import { assertUploadsAvailable } from './uploadRetirement';
 import { mergeSnapshot } from '../features/event-replay/merge';
 import { SyncSession, type ReplayCursor, type SyncHost } from '../features/event-replay/session';
 import type { SyncSnapshot } from '../features/event-replay/protocol';
@@ -118,7 +119,7 @@ type AppState = {
   sendMessage: (serverId: string, chatId: string, text: string, opts?: string | SendOptions) => Promise<boolean>;
   updateDraftFiles: (serverId: string, chatId: string, fn: (files: DraftFile[]) => DraftFile[]) => void;
   setReplyTo: (serverId: string, chatId: string, ref?: ReplyRef) => void;
-  discardMessage: (serverId: string, chatId: string, clientId: string) => void;
+  discardMessage: (serverId: string, chatId: string, clientId: string) => Promise<boolean>;
   setDraft: (serverId: string, chatId: string, text: string) => void;
   respond: (serverId: string, itemId: string, reply: { choice?: string; answer?: string | string[] }) => Promise<void>;
   createChat: (serverId: string, title?: string) => Promise<Chat | undefined>;
@@ -217,7 +218,9 @@ export const useApp = create<AppState>((set, get) => {
       }
       const entries = get().runtime[serverId]?.outbox ?? [];
       if (!accept) { await cacheSet(`outbox:${serverId}`, entries); return; }
-      await cacheSetStrict(`outbox:${serverId}`, accept(entries));
+      const accepted = accept(entries);
+      assertUploadsAvailable(serverId, accepted.flatMap(entry => entry.attachments ?? []));
+      await cacheSetStrict(`outbox:${serverId}`, accepted);
       if (get().servers.find((s) => s.id === serverId) !== server) {
         if (!get().servers.some((s) => s.id === serverId)) await cacheRemove(`outbox:${serverId}`);
         throw new Error('This bot changed. Try sending again.');
@@ -900,8 +903,9 @@ export const useApp = create<AppState>((set, get) => {
         toast({ serverId, title: 'Message too long', body: limitError });
         return false;
       }
-      if (retryClientId && get().runtime[serverId]?.messages[chatId]?.some((m) =>
-        !isLocal(m) && m.meta?.client_id === retryClientId)) return true;
+      const knownClientId = retryClientId ?? o.clientId;
+      if (knownClientId && get().runtime[serverId]?.messages[chatId]?.some((m) =>
+        !isLocal(m) && m.meta?.client_id === knownClientId)) return true;
       // A retry reuses the original id so the server can tell it already has the message.
       const clientId = retryClientId ?? o.clientId ?? `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
       // Hands-free turns belong to this live session. They never enter the durable offline outbox.
@@ -933,11 +937,16 @@ export const useApp = create<AppState>((set, get) => {
       return true;
     },
 
-    discardMessage: (serverId, chatId, clientId) => {
-      updateOutbox(serverId, (o) => o.filter((x) => x.client_id !== clientId));
+    discardMessage: async (serverId, chatId, clientId) => {
+      try { await saveOutbox(serverId, entries => entries.filter(entry => entry.client_id !== clientId)); }
+      catch (error) {
+        toast({ serverId, title: 'Message kept', body: error instanceof Error ? error.message : 'Could not save this deletion. Free local storage and try again.' });
+        return false;
+      }
       patch(serverId, (s) => ({
         messages: { ...s.messages, [chatId]: (s.messages[chatId] ?? []).filter((m) => !(m.id === clientId && isLocal(m))) },
       }));
+      return true;
     },
 
     updateDraftFiles: (serverId, chatId, fn) => {

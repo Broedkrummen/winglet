@@ -63,6 +63,15 @@ CREATE TABLE IF NOT EXISTS uploads (
 );
 CREATE INDEX IF NOT EXISTS uploads_device ON uploads (device_id, created_at);
 CREATE INDEX IF NOT EXISTS uploads_chat ON uploads (chat_id);
+CREATE TABLE IF NOT EXISTS upload_holds (
+    upload_id TEXT PRIMARY KEY, device_id TEXT NOT NULL, chat_id TEXT NOT NULL, hold_id TEXT NOT NULL,
+    version TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS sync_materializations (
+    device_id TEXT NOT NULL, chat_id TEXT NOT NULL, source_id TEXT NOT NULL, slot TEXT NOT NULL,
+    upload_id TEXT NOT NULL UNIQUE, sha256 TEXT NOT NULL,
+    PRIMARY KEY(device_id,chat_id,source_id,slot)
+);
 CREATE TABLE IF NOT EXISTS push_prefs (
     device_id TEXT PRIMARY KEY, data TEXT NOT NULL DEFAULT '{}'
 );
@@ -127,6 +136,7 @@ _MIGRATIONS = [
     ("chats", "bot", "TEXT"),
     # When a message was deleted, so old tombstones can be dropped.
     ("message_deletions", "deleted_at", "REAL NOT NULL DEFAULT 0"),
+    ("upload_holds", "version", "TEXT NOT NULL DEFAULT ''"),
 ]
 ROLES = ("owner", "member")
 AUDIT_KEEP_SECONDS = 180 * 86400
@@ -205,6 +215,7 @@ class Store:
                     self._db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
             # Tombstones from before deleted_at count from now.
             self._db.execute("UPDATE message_deletions SET deleted_at = ? WHERE deleted_at = 0", (_now(),))
+            self._db.execute("UPDATE upload_holds SET version=lower(hex(randomblob(16))) WHERE version=''")
             # Keys and tokens live here: keep the file private to this user.
             with contextlib.suppress(OSError):
                 os.chmod(self.path, 0o600)
@@ -253,7 +264,11 @@ class Store:
                 raise
             else:
                 if own:
-                    self._db.commit()
+                    try:
+                        self._db.commit()
+                    except BaseException:
+                        self._db.rollback()
+                        raise
 
     # -- key/value ---------------------------------------------------------------
 
@@ -367,7 +382,7 @@ class Store:
         return [self._device(r) for r in self._all("SELECT * FROM devices ORDER BY created_at")]
 
     def remove_device(self, device_id: str, *, keep_an_owner: bool = False) -> bool:
-        with self._lock:
+        with self.transaction():
             if keep_an_owner:
                 device = self.get_device(device_id)
                 if device and device["role"] == "owner" and self.owner_count() <= 1:
@@ -730,6 +745,7 @@ class Store:
                 rows.append(row)
             for row in rows:
                 self._exec("UPDATE uploads SET message_id = ? WHERE id = ?", (message_id, row["id"]))
+                self._exec('DELETE FROM upload_holds WHERE upload_id=?', (row['id'],))
             return [self.get_upload(r["id"]) for r in rows]
 
     def upload_bytes_since(self, device_id: str, since: float) -> int:
@@ -750,7 +766,57 @@ class Store:
         return [dict(r) for r in self._all("SELECT * FROM uploads WHERE chat_id = ?", (chat_id,))]
 
     def delete_upload(self, upload_id: str) -> None:
-        self._exec("DELETE FROM uploads WHERE id = ?", (upload_id,))
+        with self.transaction():
+            self._exec('DELETE FROM upload_holds WHERE upload_id=?', (upload_id,))
+            self._exec('DELETE FROM sync_materializations WHERE upload_id=?', (upload_id,))
+            self._exec("DELETE FROM uploads WHERE id = ?", (upload_id,))
+
+    def upload_held(self, upload_id: str) -> bool:
+        return self._one('SELECT 1 FROM upload_holds WHERE upload_id=?', (upload_id,)) is not None
+
+    def hold_uploads(self, upload_ids: List[str], device_id: str, chat_id: str, hold_id: str) -> bool:
+        with self.transaction():
+            device = self.get_device(device_id)
+            if not device or device['role'] != 'owner':
+                return False
+            rows = [self.get_upload(upload_id) for upload_id in upload_ids]
+            if any(row is None or row['device_id'] != device_id or row['chat_id'] != chat_id or row['message_id'] is not None for row in rows):
+                return False
+            if any(self._one('SELECT 1 FROM upload_holds WHERE upload_id=? AND hold_id!=?', (row['id'], hold_id)) for row in rows):
+                return False
+            for row in rows:
+                self._exec('INSERT INTO upload_holds (upload_id,device_id,chat_id,hold_id,version) VALUES (?,?,?,?,?) ON CONFLICT(upload_id) '
+                           'DO UPDATE SET hold_id=excluded.hold_id,version=excluded.version', (row['id'], device_id, chat_id, hold_id, uuid.uuid4().hex))
+            return True
+
+    def release_uploads(self, device_id: str, chat_id: str, hold_id: str) -> None:
+        self._exec('DELETE FROM upload_holds WHERE device_id=? AND chat_id=? AND hold_id=?', (device_id, chat_id, hold_id))
+
+    def orphan_upload_holds(self, bot: str, after: str = '') -> List[Dict[str, Any]]:
+        return [dict(row) for row in self._all('SELECT u.*,h.hold_id FROM upload_holds h JOIN uploads u ON u.id=h.upload_id '
+            'JOIN chats c ON c.id=u.chat_id LEFT JOIN devices d ON d.id=h.device_id '
+            "WHERE d.id IS NULL AND u.id>? AND COALESCE(c.bot,'')=? ORDER BY u.id LIMIT 101", (after, bot))]
+
+    def own_upload_holds(self, device: str, bot: str, after: str = '') -> List[Dict[str, Any]]:
+        return [dict(row) for row in self._all('SELECT u.*,h.hold_id,h.version FROM upload_holds h JOIN uploads u ON u.id=h.upload_id '
+            'JOIN chats c ON c.id=u.chat_id WHERE h.device_id=? AND u.id>? AND COALESCE(c.bot,\'\')=? ORDER BY u.id LIMIT 101',
+            (device, after, bot))]
+
+    def release_upload_version(self, actor: str, chat: str, upload: str, hold: str, version: str) -> bool:
+        with self.transaction():
+            device = self.get_device(actor)
+            if not device or device['role'] != 'owner':
+                return False
+            return self._exec('DELETE FROM upload_holds WHERE device_id=? AND chat_id=? AND upload_id=? AND hold_id=? AND version=?',
+                              (actor, chat, upload, hold, version)) == 1
+
+    def release_orphan_uploads(self, actor: str, source_device: str, chat_id: str, hold_id: str) -> bool:
+        with self.transaction():
+            device = self.get_device(actor)
+            if not device or device['role'] != 'owner' or self.get_device(source_device):
+                return False
+            self.release_uploads(source_device, chat_id, hold_id)
+            return True
 
     # -- notification preferences --------------------------------------------------------
 

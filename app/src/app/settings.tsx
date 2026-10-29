@@ -14,6 +14,7 @@ import { isOwner, useApp, useServerState } from '../lib/store';
 import { usePrefs } from '../lib/prefs';
 import { ACCENTS, WIDE_BREAKPOINT } from '../lib/theme';
 import { makeStyles, useTheme } from '../lib/themeContext';
+import { usePersonalSync } from '../features/sync/runtime';
 
 export default function SettingsScreen() {
   const t = useTheme();
@@ -27,6 +28,7 @@ export default function SettingsScreen() {
   const prefs = usePrefs((st) => st.prefs);
   const update = usePrefs((st) => st.update);
   const appUpdate = useAppUpdate((st) => st.update);
+  const sync = usePersonalSync();
   const addBot = useAddBot();
   const [canLock, setCanLock] = useState<boolean | null>(null);
   useEffect(() => {
@@ -68,6 +70,7 @@ export default function SettingsScreen() {
       </View>
       <ListRow title="Appearance" value={`${themeLabel} · ${ACCENTS[prefs.accent].label}`} icon={<Palette />} onPress={() => router.push('/appearance')} />
       <ListRow title="Notifications" icon={<Bell />} onPress={() => router.push('/notifications')} />
+      <ListRow title="Sync" subtitle={sync.conflicts.length ? `${sync.conflicts.length} choices needed` : sync.home ? 'Devices linked to your Hermes home' : 'Connect your devices'} onPress={() => router.push('/sync-settings')} />
       {Platform.OS === 'android' ? <ListRow title="App lock" icon={<Fingerprint />}
         right={<Toggle label="App lock" value={prefs.appLock} onValueChange={async (on) => {
           if (!canLock) return;

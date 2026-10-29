@@ -9,6 +9,7 @@ import type { DraftFile, ReplyRef, Server, Upload } from '../../lib/types';
 import { materializeSyncFile, readSyncFile, stageSyncFile, stagingHoldId, validateSyncFile, type SyncFile } from './fileTransfer';
 import { changedValues, portablePreferences, preferencePatch } from './preferences';
 import { retireConfirmedHolds } from './localRetention';
+import { parseReadingEntry, readingKey, readingValues, resumeAnchor, validPosition } from './reading';
 import { emptyReplica, receive, recordKey, stage, SyncReplica, visibleValues, type Candidate, type Kind, type RecordState,
   type DraftRecovery, type Json, type Pending, type Replica, type Value } from './model';
 
@@ -16,8 +17,8 @@ type Home = { serverId: string; deviceId: string; groupId: string };
 type SyncPage = { records: (RecordState & { kind: Kind; id: string })[]; next: { kind: string; id: string } | null };
 export type Conflict = { kind: Kind; id: string; field: string; revision: number; candidates: Candidate[] };
 type SyncState = { home?: Home; status: 'off' | 'ready' | 'syncing' | 'error' | 'offline' | 'locked';
-  error?: string; pending: number; conflicts: Conflict[]; deferredDrafts: number; lastSync?: number };
-export const usePersonalSync = create<SyncState>(() => ({ status: 'off', pending: 0, conflicts: [], deferredDrafts: 0 }));
+  error?: string; pending: number; conflicts: Conflict[]; deferredDrafts: number; deferredReading: number; lastSync?: number };
+export const usePersonalSync = create<SyncState>(() => ({ status: 'off', pending: 0, conflicts: [], deferredDrafts: 0, deferredReading: 0 }));
 const CONFIG = 'user-sync:home:v1';
 let replica: SyncReplica | undefined;
 let home: Home | undefined;
@@ -91,6 +92,7 @@ export async function connectPersonalSync(server: Server, token?: string) {
   const local = useApp.getState();
   for (const key of new Set([...Object.keys(local.drafts), ...Object.keys(local.draftFiles ?? {}), ...Object.keys(local.replyTo ?? {})]))
     await captureDraft(key, local.drafts[key] ?? '');
+  for (const [key, entry] of Object.entries(local.reading ?? {})) if (entry.fingerprint) await capture('read_position', key, readingValues(entry));
   await refreshPersonalSync();
 }
 
@@ -101,7 +103,7 @@ export async function disconnectPersonalSync() {
   replica = undefined;
   bootFailure = undefined;
   uncaptured.clear();
-  usePersonalSync.setState({ home: undefined, status: 'off', error: undefined, pending: 0, conflicts: [], deferredDrafts: 0, lastSync: undefined });
+  usePersonalSync.setState({ home: undefined, status: 'off', error: undefined, pending: 0, conflicts: [], deferredDrafts: 0, deferredReading: 0, lastSync: undefined });
   try { await cacheSetStrict(CONFIG, null); }
   catch {
     const error = new Error('Sync stopped for this session, but the disconnection could not be saved. '
@@ -165,6 +167,8 @@ async function reconcileLocal() {
     });
   };
   await preserve('preferences', 'app', portablePreferences(usePrefs.getState().prefs));
+  for (const [key, entry] of Object.entries(useApp.getState().reading ?? {}))
+    if (entry.fingerprint) await preserve('read_position', key, readingValues(entry));
   const local = useApp.getState();
   const keys = new Set([...Object.keys(local.drafts), ...Object.keys(local.draftFiles), ...Object.keys(local.replyTo)]);
   for (const key of Object.keys(engine.state.records)) {
@@ -347,6 +351,7 @@ async function applyIncomingState() {
       throw new Error('File sync paused. Your current draft is kept.');
   };
   let deferredDrafts = 0;
+  let deferredReading = 0;
   const observe = async (key: string, fields: Record<string, number>) => engine.edit(state => ({ ...state,
     observed: { ...state.observed, [key]: { ...state.observed?.[key], ...fields } } }));
   for (const [key, record] of Object.entries(engine.state.records)) {
@@ -364,6 +369,30 @@ async function applyIncomingState() {
         try { if (Object.keys(patch).length) usePrefs.getState().update(patch); }
         finally { applying = false; }
         await observe(key, Object.fromEntries(Object.entries(observed).filter(([field]) => field in patch)));
+      } else if (kind === 'read_position') {
+        const raw = (field: string) => values[field] && !values[field].deleted ? values[field].value : undefined;
+        const serverId = raw('server_id'), fingerprint = raw('server_fingerprint'), chatId = raw('chat_id');
+        if (typeof serverId !== 'string' || typeof fingerprint !== 'string' || !fingerprint || typeof chatId !== 'string'
+          || readingKey(serverId, fingerprint, chatId) !== id) continue;
+        const local = useApp.getState();
+        if (!local.servers.some(server => server.id === serverId && server.fingerprint === fingerprint)) continue;
+        const prior = local.reading[id];
+        const watermark = raw('watermark');
+        const entry = parseReadingEntry({ serverId, fingerprint, chatId,
+          watermark: Math.max(prior?.watermark ?? 0, validPosition(watermark) ? watermark : 0), resume: prior?.resume });
+        if (!entry) continue;
+        const applied = Object.fromEntries(Object.entries(observed).filter(([field]) => ['server_id', 'server_fingerprint', 'chat_id', 'watermark'].includes(field)));
+        if (values.resume) {
+          const resume = values.resume.deleted ? undefined : resumeAnchor(values.resume.value);
+          if (!values.resume.deleted && !resume) throw new Error('The shared reading anchor is invalid. Keep local state and refresh.');
+          const active = local.visibleChat?.serverId === serverId && local.visibleChat.chatId === chatId;
+          if (active && prior?.resume && JSON.stringify(prior.resume) !== JSON.stringify(resume)) deferredReading++;
+          else { entry.resume = resume; applied.resume = observed.resume; }
+        }
+        applying = true;
+        try { if (JSON.stringify(prior) !== JSON.stringify(entry)) local.applyReading(id, entry); }
+        finally { applying = false; }
+        await observe(key, applied);
       } else if (kind === 'draft') {
         const location = draftLocation(id);
         const text = values.text;
@@ -426,7 +455,7 @@ async function applyIncomingState() {
         await observe(key, observed);
       }
   }
-  usePersonalSync.setState({ deferredDrafts });
+  usePersonalSync.setState({ deferredDrafts, deferredReading });
 }
 
 export function refreshPersonalSync(): Promise<void> {
@@ -675,6 +704,7 @@ export function subscribePersonalSync(): () => void {
   let previousDrafts = useApp.getState().drafts;
   let previousFiles = useApp.getState().draftFiles;
   let previousReplies = useApp.getState().replyTo;
+  let previousReading = useApp.getState().reading;
   const prefs = usePrefs.subscribe(state => {
     const next = portablePreferences(state.prefs);
     const changes = changedValues(previousPrefs, next);
@@ -682,6 +712,13 @@ export function subscribePersonalSync(): () => void {
     if (!applying && home) void capture('preferences', 'app', changes).then(() => refreshPersonalSync()).catch(fail);
   });
   const app = useApp.subscribe(state => {
+    const reading = previousReading;
+    previousReading = state.reading;
+    if (!applying && home && reading !== state.reading) for (const [key, entry] of Object.entries(state.reading ?? {})) {
+      if (!entry.fingerprint) continue;
+      const changes = changedValues(reading?.[key] ? readingValues(reading[key]) : {}, readingValues(entry));
+      if (Object.keys(changes).length) void capture('read_position', key, changes).then(() => refreshPersonalSync()).catch(fail);
+    }
     const before = previousDrafts;
     const beforeFiles = previousFiles, beforeReplies = previousReplies;
     previousDrafts = state.drafts;

@@ -1,6 +1,6 @@
 import { BlurTargetView } from 'expo-blur';
 import * as Clipboard from 'expo-clipboard';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ActivityIndicator, FlatList, Keyboard, Platform, Pressable, Share as SystemShare, StyleSheet, Text, View } from 'react-native';
 import { Gesture, GestureDetector, ScrollView } from 'react-native-gesture-handler';
@@ -15,6 +15,8 @@ import { actionHint, canBranch, canEdit, canRegenerate, laterCount, type BranchM
 import { useBranching } from '../features/branching/useBranching';
 import { routineHref } from '../features/routine-history/model';
 import { mediaUrl } from '../lib/api';
+import { useLock } from '../lib/appLock';
+import { readingKey, visibleReading } from '../features/sync/reading';
 import { startNewChat } from '../lib/actions';
 import { projectOf } from '../features/projects/logic';
 import { connectionView } from '../lib/connection';
@@ -49,7 +51,7 @@ import { GoalSheet, GoalStrip, useChatGoal } from './Goal';
 import { PausedBanner } from './PausedBanner';
 import { Glass } from './Glass';
 import {
-  ArrowDown, CalendarClock, Check, ChevronDown, Clock, Copy, FileText, Folder, GitBranch, MoreHorizontal, Pencil, Reply, RotateCcw, Share,
+  ArrowDown, CalendarClock, Check, ChevronDown, Clock, Copy, FileText, Folder, GitBranch, MoreHorizontal, Pencil, Reply, RotateCcw, Share, X,
 } from './icons';
 import { InboxCard } from './InboxCards';
 import { Markdown } from './Markdown';
@@ -97,6 +99,7 @@ export function ChatView({ server, chatId, showBack, embedded, landing }: { serv
   const s = useStyles();
   const simple = usePrefs((st) => st.prefs.view === 'simple');
   const [simpleOptions, setSimpleOptions] = useState(false);
+  const resumePoint = useApp(state => state.reading[readingKey(server.id, server.fingerprint ?? '', chatId)]?.resume);
   const insets = useSafeAreaInsets();
   const reduced = useReducedMotion();
   // Not the messages of every chat: only this one's, below. Another chat streaming doesn't re-render this one.
@@ -156,11 +159,12 @@ export function ChatView({ server, chatId, showBack, embedded, landing }: { serv
   // The More sheet is the moment these gates matter: a reply may have settled since the last load.
   useEffect(() => { if (selected && branching.supported && branching.online) void branching.refresh(); }, [selected, branching.supported, branching.online, branching.refresh]);
 
-  useEffect(() => {
+  useFocusEffect(useCallback(() => {
     if (landing?.prepareChat) return;
-    setVisibleChat({ serverId: server.id, chatId });
-    return () => setVisibleChat(undefined);
-  }, [server.id, chatId, setVisibleChat, landing?.prepareChat]);
+    const visible = { serverId: server.id, chatId };
+    setVisibleChat(visible);
+    return () => { if (useApp.getState().visibleChat === visible) setVisibleChat(undefined); };
+  }, [server.id, chatId, setVisibleChat, landing?.prepareChat]));
 
   // Show what this phone remembers straight away; the server's copy replaces it when it arrives.
   useEffect(() => {
@@ -298,6 +302,10 @@ export function ChatView({ server, chatId, showBack, embedded, landing }: { serv
         onProcesses={runtime?.info?.features?.processes && isOwner(runtime) ? () => setProcessesOpen(true) : undefined}
         onDeleted={() => router.replace('/chats')} onArchived={() => router.replace('/chats')} />
       <Sheet visible={simpleOptions} onClose={() => setSimpleOptions(false)} title="Conversation options" scrollable>
+        {resumePoint ? <>
+          <SheetAction icon={<Clock />} label="Resume reading" onPress={() => { setSimpleOptions(false); requestFocus(server.id, chatId, resumePoint.message_id); }} />
+          <SheetAction icon={<X />} label="Clear saved reading position" onPress={() => { setSimpleOptions(false); useApp.getState().observeReading(server.id, chatId, 0, null); }} />
+        </> : null}
         <Text style={{ ...t.type.footnote, color: t.colors.textSecondary, paddingHorizontal: 16, paddingBottom: 12 }}>{chat?.title ?? 'Main conversation'}</Text>
         <ModelButton server={server} chatId={chatId} variant="header" prepareChat={landing?.prepareChat} />
         <SheetAction icon={<MoreHorizontal />} label="Chat settings and tools" onPress={() => { setSimpleOptions(false); setMenu(true); }} />
@@ -386,6 +394,50 @@ const MessageList = memo(function MessageList({ server, chatId, messages, loaded
   const inbox = useApp((st) => st.runtime[server.id]?.inbox);
   const layout = usePrefs((st) => st.prefs.view === 'simple' ? 'bubbles' : st.prefs.layout);
   const list = useRef<FlatList<Row>>(null);
+  const readingContext = useRef({ server, chatId });
+  readingContext.current = { server, chatId };
+  const focused = useRef(false);
+  const userScrolled = useRef(false);
+  const visibleMessages = useRef<Message[]>([]);
+  const rememberVisible = useRef(() => {
+    const state = useApp.getState(), context = readingContext.current;
+    if (!focused.current || !state.foreground || useLock.getState().locked) return;
+    const current = state.servers.find(item => item.id === context.server.id);
+    if (!current || current.fingerprint !== context.server.fingerprint) return;
+    const reading = visibleReading(visibleMessages.current);
+    if (reading.watermark) state.observeReading(current.id, context.chatId, reading.watermark,
+      userScrolled.current ? reading.anchor : undefined);
+  });
+  useFocusEffect(useCallback(() => {
+    focused.current = true;
+    const timer = setTimeout(() => rememberVisible.current(), 750);
+    return () => { clearTimeout(timer); focused.current = false; userScrolled.current = false; };
+  }, []));
+  const viewability = useRef({ minimumViewTime: 750, viewAreaCoveragePercentThreshold: 25 }).current;
+  const onViewable = useRef(({ viewableItems }: { viewableItems: { item: Row; isViewable: boolean }[] }) => {
+    const messages = viewableItems.filter(item => item.isViewable && item.item.kind === 'msg')
+      .map(item => (item.item as Extract<Row, { kind: 'msg' }>).m);
+    visibleMessages.current = messages;
+    rememberVisible.current();
+  }).current;
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const element = list.current?.getNativeScrollRef?.() as unknown as HTMLElement | null;
+    if (!element?.addEventListener) return;
+    const interact = (event: Event) => {
+      if (event.type === 'keydown' && !['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes((event as KeyboardEvent).key)) return;
+      userScrolled.current = true;
+      rememberVisible.current();
+    };
+    element.addEventListener('wheel', interact, { passive: true });
+    element.addEventListener('pointerdown', interact, { passive: true });
+    element.addEventListener('keydown', interact);
+    return () => {
+      element.removeEventListener('wheel', interact);
+      element.removeEventListener('pointerdown', interact);
+      element.removeEventListener('keydown', interact);
+    };
+  }, [loaded, !!messages.length, server.id, chatId]);
   // Scrolled away from the latest: the newest message then, so only later ones count as new.
   const [away, setAway] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
@@ -444,6 +496,7 @@ const MessageList = memo(function MessageList({ server, chatId, messages, loaded
       return;
     }
     haptic.selection();
+    visibleMessages.current = [];
     list.current?.scrollToIndex({ index, viewPosition: 0.5, animated: true });
     setFlash(id);
     setTimeout(() => setFlash((f) => (f === id ? null : f)), 1600);
@@ -492,6 +545,7 @@ const MessageList = memo(function MessageList({ server, chatId, messages, loaded
   const jumped = useRef<string | null>(null);
   const [paged, setPaged] = useState(0);
   useEffect(() => {
+    if (focus) userScrolled.current = false;
     if (!focus) jumped.current = null; // so the same message can be asked for again
     if (!focus || !loaded) return;
     if (messages.some((m) => m.id === focus)) {
@@ -554,6 +608,10 @@ const MessageList = memo(function MessageList({ server, chatId, messages, loaded
         style={{ flex: 1 }}
         contentContainerStyle={{ paddingTop: bottom + 10, paddingBottom: top + 10 }}
         data={rows}
+        viewabilityConfig={viewability}
+        onViewableItemsChanged={onViewable}
+        onScrollBeginDrag={() => { userScrolled.current = true; rememberVisible.current(); }}
+        onTouchStart={() => { userScrolled.current = true; rememberVisible.current(); }}
         keyExtractor={(r) => r.key}
         renderItem={({ item }) => item.kind === 'day' ? <DayChip label={item.label} /> : item.kind === 'activity' ? (
           <ActivityRow items={item.items} working={item.working} flash={flash !== null && item.items.some((m) => m.id === flash)} />
@@ -563,6 +621,7 @@ const MessageList = memo(function MessageList({ server, chatId, messages, loaded
             inboxItem={item.m.meta?.inbox_id ? inbox?.[item.m.meta.inbox_id] : undefined} />
         )}
         onScroll={(e) => {
+          if (userScrolled.current) rememberVisible.current();
           const far = e.nativeEvent.contentOffset.y > AWAY_PX;
           if (far && away === null) setAway(messages[messages.length - 1]?.id ?? '');
           else if (!far && away !== null) setAway(null);

@@ -6,6 +6,8 @@ import { chatKey, changeChatOrganization } from '../lib/chatOrganization';
 import { usePrefs } from '../lib/prefs';
 import { mutedUntil, pushPrefsKey, usePushPrefs } from '../lib/pushPrefs';
 import { homeChat, useApp } from '../lib/store';
+import { requestFocus } from '../lib/focus';
+import { readingKey } from '../features/sync/reading';
 import { makeStyles } from '../lib/themeContext';
 import type { Server } from '../lib/types';
 import { Activity, Archive, ArchiveRestore, Bell, BellOff, Clock, Download, FileDiff, Folder, Cpu, Images, Pencil, Pin, PinOff, Target, Trash2 } from './icons';
@@ -37,6 +39,7 @@ export function ChatMenu({ server, chatId, title, visible, onClose, onGoal, hasG
 }) {
   const s = useStyles();
   const chat = useApp((st) => st.runtime[server.id]?.chats[chatId]);
+  const resume = useApp(state => state.reading[readingKey(server.id, server.fingerprint ?? '', chatId)]?.resume);
   const renameChat = useApp((st) => st.renameChat);
   const deleteChat = useApp((st) => st.deleteChat);
   const features = useApp((st) => st.runtime[server.id]?.info?.features);
@@ -82,6 +85,13 @@ export function ChatMenu({ server, chatId, title, visible, onClose, onGoal, hasG
       {mode === 'menu' ? (
         <>
           <SheetGroup>
+            {resume ? <>
+              <SheetAction icon={<Clock />} label="Resume reading" onPress={() => {
+                close(); router.navigate({ pathname: '/chat/[serverId]/[chatId]', params: { serverId: server.id, chatId } });
+                requestFocus(server.id, chatId, resume.message_id);
+              }} />
+              <SheetAction icon={<Clock />} label="Clear saved reading position" onPress={() => { useApp.getState().observeReading(server.id, chatId, 0, null); close(); }} />
+            </> : null}
             {side ? <SheetAction icon={archived ? <ArchiveRestore /> : pinned ? <PinOff /> : <Pin />}
               label={archived ? 'Restore chat' : pinned ? 'Unpin chat' : 'Pin chat'} onPress={() => organize(archived ? 'restore' : pinned ? 'unpin' : 'pin')} /> : null}
             {side && !archived ? <SheetAction icon={<Archive />} label="Archive chat" onPress={() => organize('archive')} /> : null}

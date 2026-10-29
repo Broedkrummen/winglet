@@ -7,6 +7,7 @@ import { sound } from './sounds';
 import { api, ApiError, signedApi, wsUrl } from './api';
 import { cacheGet, cacheRemove, cacheSet, cacheSetStrict } from './cache';
 import { assertUploadsAvailable } from './uploadRetirement';
+import { parseReadingEntry, readingKey, resumeAnchor, validPosition, type ReadingEntry, type ResumeAnchor } from '../features/sync/reading';
 import { mergeSnapshot } from '../features/event-replay/merge';
 import { SyncSession, type ReplayCursor, type SyncHost } from '../features/event-replay/session';
 import type { SyncSnapshot } from '../features/event-replay/protocol';
@@ -96,6 +97,9 @@ type AppState = {
   draftFiles: Record<string, DraftFile[]>;
   /** The message each chat's composer is replying to, by draftKey. */
   replyTo: Record<string, ReplyRef>;
+  reading: Record<string, ReadingEntry>;
+  observeReading: (serverId: string, chatId: string, watermark: number, resume?: ResumeAnchor | null) => void;
+  applyReading: (key: string, entry: ReadingEntry) => void;
   visibleChat?: { serverId: string; chatId: string };
   init: () => Promise<void>;
   addServer: (server: Server) => Promise<void>;
@@ -641,6 +645,19 @@ export const useApp = create<AppState>((set, get) => {
     drafts: {},
     draftFiles: {},
     replyTo: {},
+    reading: {},
+    observeReading: (serverId, chatId, watermark, resume) => {
+      const server = get().servers.find(item => item.id === serverId);
+      if (!server || !validPosition(watermark)) return;
+      const fingerprint = server.fingerprint ?? '';
+      const key = readingKey(serverId, fingerprint, chatId);
+      const previous = get().reading[key];
+      const anchor = resume === null ? undefined : resume === undefined ? previous?.resume : resumeAnchor(resume);
+      if (resume && !anchor) return;
+      const entry: ReadingEntry = { serverId, fingerprint, chatId, watermark: Math.max(previous?.watermark ?? 0, watermark), ...(anchor ? { resume: anchor } : {}) };
+      if (JSON.stringify(previous) !== JSON.stringify(entry)) set(state => ({ reading: { ...state.reading, [key]: entry } }));
+    },
+    applyReading: (key, entry) => set(state => ({ reading: { ...state.reading, [key]: entry } })),
 
     init: async () => {
       if (get().ready) return;
@@ -649,9 +666,14 @@ export const useApp = create<AppState>((set, get) => {
       const drafts = await cacheGet<Record<string, string>>('drafts', {});
       const draftFiles = await cacheGet<Record<string, DraftFile[]>>('draftFiles', {});
       const replyTo = await cacheGet<Record<string, ReplyRef>>('replyTo', {});
+      const savedReading = await cacheGet<Record<string, ReadingEntry>>('reading', {});
+      const reading = Object.fromEntries(Object.entries(savedReading).flatMap(([key, value]) => {
+        const entry = parseReadingEntry(value);
+        return entry && readingKey(entry.serverId, entry.fingerprint, entry.chatId) === key ? [[key, entry]] : [];
+      }));
       const runtime: Record<string, ServerState> = {};
       for (const s of servers) runtime[s.id] = emptyRuntime();
-      set({ servers, runtime, drafts, draftFiles, replyTo, selection: selection.serverId ? selection : { serverId: servers[0]?.id }, ready: true });
+      set({ servers, runtime, drafts, draftFiles, replyTo, reading, selection: selection.serverId ? selection : { serverId: servers[0]?.id }, ready: true });
       await Promise.all(servers.map((s) => hydrateServer(s.id)));
       servers.forEach(connect);
     },

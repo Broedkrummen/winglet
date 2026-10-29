@@ -59,7 +59,15 @@ Bulk byte writes happen before SQLite transactions. Final admission rechecks aut
 1. Current-device retained-file review, Download and versioned Release are connected. Release checks both live and strict saved draft/outbox references and temporarily guards new local outbox admission. Storage failure preserves retention. Every acquisition renews its version; stale release is refused. Migrated holds receive stable initial versions without losing retention. Final server mutation rechecks chat visibility and bot scope in its transaction. These controls do not cancel execution or immediately delete bytes; the ordinary unclaimed-upload grace period still applies.
 2. Startup now journals text, attachment and reply snapshots before refresh can apply incoming state. Uncached ready files stage when online; immutable zero-base recovery branches preserve competing versions for explicit choice. Previously observed local clears are preserved too. A source already attached to a real message can use an explicit original-owner/message-backed staging fallback without a second hold or changing the original message. An unrecoverable source remains durably queued and pauses sync; explicit terminal recovery decisions and broader failure/reconnect checks remain to be completed.
 3. Extend browser verification to all restart/recovery and active-edit cases. Current checks cover settings in light/dark desktop/phone layouts, removed-device Download/Release, receiving a manual attachment, reopening after persistence, and concurrent Send producing one actual target message. Loading/status copy reflects file/reply sync. Physical Android/iPhone checks remain separate from exports.
-4. Connect read/resume state and the remaining portable libraries in the approved plan.
+4. Connect the remaining portable libraries in the approved plan.
+
+## Reading progress and resume
+
+Reading state is scoped to server, installation fingerprint and conversation. Only visible final transcript messages with native positions advance the watermark, which merges by maximum on both client and server. The resume anchor is separate: user scrolling can move it backward, Clear removes it without lowering progress, and concurrent changes use the existing explicit conflict chooser.
+
+Incoming state never navigates a device. Resume reading in the conversation options (Simple view) or chat menu (Full view) explicitly fetches and focuses the saved message, including older paginated history. Different incoming anchors wait while an existing anchor is active in the focused conversation. Tracking requires a focused, foreground, unlocked chat; cached state survives reopening.
+
+Signed-route desktop and phone browser checks cover initial viewport preservation, older-message resume, user-scroll capture, clear without progress regression and both themes. Physical Android/iPhone behavior remains unverified.
 
 These are remaining steps in feature #1, not a reduction of the approved 18-feature scope.
 

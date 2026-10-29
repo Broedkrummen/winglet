@@ -75,6 +75,34 @@ def test_submissions_are_private_paginated_and_show_retention_without_claiming_e
         service.submissions(group, b)
 
 
+def test_read_progress_merges_by_max_while_competing_resume_anchors_require_a_choice(linked):
+    _, service, group, a, b = linked
+    def save(device, operation, base, **values):
+        return service.write(group, device, 'read_position', 'reading-key', operation_id=operation, base_revision=base,
+            changes={key: {'deleted': False, 'value': value} for key, value in values.items()})
+    first = save(a, 'read-a', 0, watermark=20, resume={'message_id': 'older', 'position': 8})
+    second = save(b, 'read-b', 0, watermark=50, resume={'message_id': 'newer', 'position': 35})
+    assert [c['value'] for c in second['fields']['watermark']['candidates']] == [50]
+    assert len(second['fields']['resume']['candidates']) == 2
+    behind = save(a, 'read-behind', first['revision'], watermark=10)
+    assert behind['fields']['watermark'] == second['fields']['watermark']
+    selected = service.write(group, a, 'read_position', 'reading-key', operation_id='choose-resume', base_revision=behind['revision'], resolve=True,
+        changes={'resume': {'deleted': False, 'value': {'message_id': 'older', 'position': 8}}})
+    assert selected['fields']['watermark']['candidates'][0]['value'] == 50
+    assert len(selected['fields']['resume']['candidates']) == 1
+
+
+@pytest.mark.parametrize('value', [True, -1, 1.5, 9007199254740992, None])
+def test_read_progress_refuses_invalid_or_deleted_positions(linked, value):
+    _, service, group, a, _ = linked
+    with pytest.raises(SyncError):
+        service.write(group, a, 'read_position', 'reading-key', operation_id='invalid', base_revision=0,
+            changes={'watermark': {'deleted': False, 'value': value}})
+    with pytest.raises(SyncError):
+        service.write(group, a, 'read_position', 'reading-key', operation_id='deleted', base_revision=0,
+            changes={'watermark': {'deleted': True}})
+
+
 def test_disjoint_changes_merge_but_competing_text_requires_choice(linked):
     _, service, group, a, b = linked
     write(service, group, a, 'text-a', 0, text='hello')

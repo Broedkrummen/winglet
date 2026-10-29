@@ -70,6 +70,7 @@ export default function SyncSettings() {
       </ListGroup>
       <Footnote>Settings, drafts, attached files and reply context sync now. The remaining libraries are still being added. Pairing credentials, biometrics and device permissions stay on each device. Sending a shared draft needs a reachable sync home.</Footnote>
       {sync.deferredDrafts ? <Footnote>A draft changed on another device. Its incoming composition will be applied after you leave that chat; your active composer stays as it is.</Footnote> : null}
+      {sync.deferredReading ? <Footnote>A reading position changed on another device. It will be available after you leave this chat; your current view stays in place.</Footnote> : null}
       <View style={s.actions}>
         <Button title="Sync now" variant="secondary" loading={busy} onPress={() => void run(refreshPersonalSync)} />
         <Button title="Invite another device" disabled={sync.status === 'offline' || locked} loading={busy}

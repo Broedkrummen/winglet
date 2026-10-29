@@ -370,6 +370,22 @@ class UserSync:
                 raise SyncError('Each field needs a deleted flag and optional JSON value.')
             if (not value['deleted'] and 'value' not in value) or (value['deleted'] and 'value' in value):
                 raise SyncError('Deleted fields cannot carry a value; live fields require one.')
+            if kind == 'read_position':
+                if field not in {'watermark', 'resume', 'server_id', 'server_fingerprint', 'chat_id'}:
+                    raise SyncError('Invalid reading-state field.')
+                item = value.get('value')
+                if field == 'watermark' and (value['deleted'] or type(item) is not int or not 0 <= item <= 9007199254740991):
+                    raise SyncError('Read progress requires a nonnegative safe integer and cannot be deleted.')
+                if field == 'resume' and not value['deleted']:
+                    if not isinstance(item, dict) or set(item) not in ({'message_id'}, {'message_id', 'position'}):
+                        raise SyncError('Invalid reading resume anchor.')
+                    _identifier(item['message_id'])
+                    if 'position' in item and (type(item['position']) is not int or not 1 <= item['position'] <= 9007199254740991):
+                        raise SyncError('Invalid reading resume position.')
+                if field in {'server_id', 'server_fingerprint', 'chat_id'}:
+                    if value['deleted']:
+                        raise SyncError('Reading identity cannot be deleted.')
+                    _identifier(item)
         payload = [kind, record_id, base_revision, changes, resolve]
         if base_fields is not None:
             payload.append(base_fields)
@@ -390,6 +406,18 @@ class UserSync:
             old_generation = record['fields'].get('generation')
             for field, value in changes.items():
                 old = record['fields'].get(field)
+                if kind == 'read_position' and field == 'watermark':
+                    history = old['candidates'] if old else []
+                    if any(c['deleted'] or type(c.get('value')) is not int or not 0 <= c['value'] <= 9007199254740991 for c in history):
+                        raise SyncError('Invalid saved read progress. Keep the record for recovery.')
+                    previous = max(history, key=lambda c: c['value'], default=None)
+                    if previous and previous['value'] >= value['value']:
+                        if len(history) > 1:
+                            record['fields'][field] = {'revision': revision, 'candidates': [previous]}
+                        continue
+                    record['fields'][field] = {'revision': revision, 'candidates': [{**value, 'device_id': device,
+                        'operation_id': operation_id, 'at': time.time()}]}
+                    continue
                 if old and not resolve and any(_json({k: c[k] for k in ('value', 'deleted') if k in c}) == _json(value)
                                                for c in old['candidates']):
                     # Repeating an observed value is not a new edit or conflict-resolution authority.

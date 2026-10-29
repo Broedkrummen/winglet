@@ -1,5 +1,5 @@
 import { sha256 } from '@noble/hashes/sha2.js';
-import { apiBytes, encodeApiComponent, signedApi, signedBytesApi } from '../../lib/api';
+import { ApiError, apiBytes, encodeApiComponent, signedApi, signedBytesApi } from '../../lib/api';
 import type { AttachmentKind, DraftFile, Server, Upload } from '../../lib/types';
 
 export type SyncBlob = { id: string; sha256: string; name: string; mime: string; kind: AttachmentKind; size: number };
@@ -28,8 +28,14 @@ export async function stageSyncFile(home: Server, groupId: string, target: Serve
     throw new Error('This file does not have a private server upload to stage. Attach it again.');
   // Retention is established before reading; a later outage cannot expire the only server copy.
   check();
-  await signedApi(target, 'POST', `/api/chats/${encodeApiComponent(chatId)}/uploads/hold`,
-    { upload_ids: [file.upload.id], hold_id: stagingHoldId(target, chatId, file) });
+  const retainPath = `/api/chats/${encodeApiComponent(chatId)}/uploads/hold`;
+  const retainBody = { upload_ids: [file.upload.id], hold_id: stagingHoldId(target, chatId, file) };
+  try { await signedApi(target, 'POST', retainPath, retainBody); }
+  catch (error) {
+    if (!(error instanceof ApiError) || error.status !== 409) throw error;
+    check();
+    await signedApi(target, 'POST', retainPath, { ...retainBody, allow_message_backed: true });
+  }
   check();
   const bytes = await apiBytes(target, file.upload.url);
   if (bytes.length !== file.upload.size) throw new Error('The source file size changed. Keep the original and attach it again.');

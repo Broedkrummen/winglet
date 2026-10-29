@@ -333,14 +333,15 @@ export function LoadError({ message, onRetry, style }: { message: string; onRetr
  * A button for something that can't be undone: the first tap arms it ("Tap again to …"), the second does it.
  * It disarms itself after a few seconds.
  */
-export function ConfirmButton({ title, confirmTitle, onConfirm, icon, size = 'md', style, accessibilityLabel, loading }: {
+export function ConfirmButton({ title, confirmTitle, onConfirm, icon, size = 'md', style, accessibilityLabel, loading, disabled }: {
   title: string; confirmTitle?: string; onConfirm: () => unknown; icon?: ReactNode; size?: 'sm' | 'md' | 'lg';
-  style?: StyleProp<ViewStyle>; accessibilityLabel?: string; loading?: boolean;
+  style?: StyleProp<ViewStyle>; accessibilityLabel?: string; loading?: boolean; disabled?: boolean;
 }) {
   const [armed, setArmed] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
   const press = () => {
+    if (disabled || loading) return;
     if (timer.current) clearTimeout(timer.current);
     if (!armed) {
       haptic.light();
@@ -353,21 +354,21 @@ export function ConfirmButton({ title, confirmTitle, onConfirm, icon, size = 'md
   };
   const label = armed ? confirmTitle ?? `Tap again to ${title.charAt(0).toLowerCase()}${title.slice(1)}` : title;
   return (
-    <Button title={label} variant={armed ? 'danger' : 'ghost'} size={size} icon={icon} style={style} loading={loading} onPress={press}
+    <Button title={label} variant={armed ? 'danger' : 'ghost'} size={size} icon={icon} style={style} loading={loading} disabled={disabled} onPress={press}
       accessibilityLabel={armed ? `Confirm: ${accessibilityLabel ?? title}` : accessibilityLabel ?? title} feedback="none" />
   );
 }
 
 /** A search box with a clear button, the same on every screen. */
-export function SearchField({ value, onChangeText, placeholder, style }: {
-  value: string; onChangeText: (text: string) => void; placeholder: string; style?: StyleProp<ViewStyle>;
+export function SearchField({ value, onChangeText, placeholder, style, autoFocus = false }: {
+  value: string; onChangeText: (text: string) => void; placeholder: string; style?: StyleProp<ViewStyle>; autoFocus?: boolean;
 }) {
   const t = useTheme();
   const s = useStyles();
   return (
     <View style={[s.search, style]}>
       <Search size={16} color={t.colors.textTertiary} />
-      <TextInput value={value} onChangeText={onChangeText} placeholder={placeholder} placeholderTextColor={t.colors.textTertiary}
+      <TextInput value={value} onChangeText={onChangeText} placeholder={placeholder} placeholderTextColor={t.colors.textTertiary} autoFocus={autoFocus}
         style={s.searchInput} autoCapitalize="none" autoCorrect={false} accessibilityLabel={placeholder} returnKeyType="search" />
       {value ? (
         <Pressable onPress={() => onChangeText('')} accessibilityRole="button" accessibilityLabel="Clear search" hitSlop={10} style={s.searchClear}>

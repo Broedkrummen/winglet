@@ -1,6 +1,7 @@
 /** Personal composition replication. This queue never contains executable messages. */
 import type { SyncFile } from './fileTransfer';
-import type { Upload } from '../../lib/types';
+import type { DraftFile, Upload } from '../../lib/types';
+export type DraftRecovery = { operation: string; id: string; fields: Record<string, Value>; files?: DraftFile[] };
 export type FileCache = { homeServerId: string; groupId: string; sourceUploadId: string; manifest: SyncFile;
   sourceHoldId?: string; targetUpload?: Upload & { hold_id: string } };
 export type LocalClaim = { recordId: string; serverId: string; chatId: string; fingerprint: string; manifest: SyncFile[];
@@ -16,6 +17,7 @@ export type Pending = { kind: Kind; id: string; mutation: Mutation; predecessors
 export type Replica = { version: 1; records: Record<string, RecordState>; pending: Pending[]; receipts: Record<string, RecordState>;
   observed?: Record<string, Record<string, number>>; rejectedResolutions?: Pending[];
   fileCache?: Record<string, FileCache>; claims?: Record<string, LocalClaim>;
+  recoveringDrafts?: DraftRecovery[];
   deferredDrafts?: Record<string, Record<string, Value>> };
 export const emptyReplica = (): Replica => ({ version: 1, records: {}, pending: [], receipts: {} });
 export const recordKey = (kind: Kind, id: string) => JSON.stringify([kind, id]);
@@ -44,7 +46,7 @@ export function stage(replica: Replica, kind: Kind, id: string, operation: strin
   if (!Object.keys(changes).length) return replica;
   changes = Object.fromEntries(Object.entries(changes).map(([field, value]) => [field,
     value.deleted ? { deleted: true } : { deleted: false, value: value.value }]));
-  if (replica.pending.length >= 1000) throw new Error('Sync has 1,000 unsent changes. Reconnect before adding more.');
+  if (replica.pending.length + (replica.recoveringDrafts?.length ?? 0) >= 1000) throw new Error('Sync has 1,000 unsent changes. Reconnect before adding more.');
   const record = replica.records[recordKey(kind, id)] ?? emptyRecord();
   const predecessors: Record<string, string> = {};
   const bases: Record<string, number> = {};

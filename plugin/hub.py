@@ -127,6 +127,7 @@ class Forbidden(PermissionError):
 ROUTE_POLICY = {
     "h_user_sync_groups": "owner", "h_user_sync_records": "owner", "h_user_sync_read": "owner",
     "h_user_sync_members": "owner", "h_user_sync_submissions": "owner",
+    "h_user_sync_preset_version": "owner",
     "h_sync_blob_put": "owner_signed", "h_sync_blob_get": "owner",
     "h_sync_materialize": "owner_signed",
     "h_upload_hold": "owner_signed", "h_upload_release": "owner_signed",
@@ -156,6 +157,8 @@ ROUTE_POLICY = {
     "h_chat_goal": "device", "h_goals": "device", "h_search": "device", "h_chat_files": "device",
     "h_checkpoints": "owner", "h_checkpoint": "owner", "h_checkpoint_restore": "owner_signed",
     "h_task": "device",
+    "h_bookmark_source": "device", "h_bookmark_snapshot_read": "device",
+    "h_bookmark_snapshot_save": "signed", "h_bookmark_snapshot_delete": "signed",
     "h_process_list": "owner", "h_process_detail": "owner", "h_process_stop": "owner_signed",
     "h_projects": "device", "h_project_create": "signed", "h_project_update": "signed",
     "h_project_order": "signed", "h_project_delete": "signed", "h_project_chat_create": "signed",
@@ -514,6 +517,8 @@ class Hub:
         sync_blobs_routes.register_routes(app)
         from . import upload_holds_routes
         upload_holds_routes.register_routes(app)
+        from . import bookmarks
+        bookmarks.register_routes(app)
         r.add_get("/{tail:.*}", self.h_static)
         app.on_startup.append(self._start_janitor)
         app.on_shutdown.append(self._close_sockets)

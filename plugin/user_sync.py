@@ -41,6 +41,10 @@ CREATE TABLE IF NOT EXISTS sync_operations (
     fingerprint TEXT NOT NULL, result TEXT NOT NULL,
     PRIMARY KEY(group_id, device_id, operation_id)
 );
+CREATE TABLE IF NOT EXISTS sync_preset_versions (
+    group_id TEXT NOT NULL, record_id TEXT NOT NULL, version TEXT NOT NULL, definition TEXT NOT NULL,
+    PRIMARY KEY(group_id, record_id, version)
+);
 CREATE TABLE IF NOT EXISTS sync_submissions (
     group_id TEXT NOT NULL, record_id TEXT NOT NULL, generation TEXT NOT NULL,
     submission_id TEXT NOT NULL UNIQUE, fingerprint TEXT NOT NULL, created_at REAL NOT NULL,
@@ -173,6 +177,17 @@ class UserSync:
         with self._transaction() as db:
             self._member(db, group, device)
             return self._read(db, group, kind, record_id)
+
+    def preset_version(self, group, device, record_id, version):
+        _identifier(record_id)
+        _identifier(version)
+        with self._transaction() as db:
+            self._member(db, group, device)
+            row = db.execute('SELECT definition FROM sync_preset_versions WHERE group_id=? AND record_id=? AND version=?',
+                             (group, record_id, version)).fetchone()
+            if not row:
+                raise SyncError('This preset version is unavailable.', 404)
+            return {'definition': json.loads(row['definition'])}
 
     def groups(self, device):
         with self._transaction() as db:
@@ -370,6 +385,59 @@ class UserSync:
                 raise SyncError('Each field needs a deleted flag and optional JSON value.')
             if (not value['deleted'] and 'value' not in value) or (value['deleted'] and 'value' in value):
                 raise SyncError('Deleted fields cannot carry a value; live fields require one.')
+            if kind == 'preset':
+                if field not in {'definition', 'removed'}:
+                    raise SyncError('Invalid task preset field.')
+                if not value['deleted']:
+                    if field == 'removed':
+                        if type(value['value']) is not bool:
+                            raise SyncError('Invalid preset removal flag.')
+                    else:
+                        from .presets import validate_definition
+                        try:
+                            validate_definition(value['value'])
+                        except ValueError as exc:
+                            raise SyncError(str(exc)) from exc
+            if kind == 'bookmark':
+                if field not in {'source', 'snapshot', 'title', 'note', 'tags', 'removed'}:
+                    raise SyncError('Invalid bookmark field. Source text and credentials stay on the source server.')
+                if not value['deleted']:
+                    item = value['value']
+                    if field == 'source':
+                        if not isinstance(item, dict) or set(item) != {'server_id', 'server_fingerprint', 'chat_id', 'message_id'}:
+                            raise SyncError('A bookmark needs its exact source identity.')
+                        for part in item.values():
+                            _identifier(part)
+                    elif field == 'snapshot':
+                        if not isinstance(item, dict) or set(item) != {'id', 'sha256'}:
+                            raise SyncError('A bookmark snapshot contains only a source-local reference.')
+                        _identifier(item['id'])
+                        if not isinstance(item['sha256'], str) or len(item['sha256']) != 64 or any(c not in '0123456789abcdef' for c in item['sha256']):
+                            raise SyncError('Invalid bookmark snapshot hash.')
+                    elif field in {'title', 'note'}:
+                        if not isinstance(item, str) or len(item) > (160 if field == 'title' else 8000):
+                            raise SyncError('Bookmark title or note is too long.')
+                    elif field == 'tags':
+                        if not isinstance(item, list) or len(item) > 20 or any(not isinstance(tag, str) or not 1 <= len(tag) <= 64 for tag in item):
+                            raise SyncError('Use at most 20 bookmark tags of 1–64 characters.')
+                    elif type(item) is not bool:
+                        raise SyncError('Invalid bookmark removal flag.')
+            if kind == 'read_position':
+                if field not in {'watermark', 'resume', 'server_id', 'server_fingerprint', 'chat_id'}:
+                    raise SyncError('Invalid reading-state field.')
+                item = value.get('value')
+                if field == 'watermark' and (value['deleted'] or type(item) is not int or not 0 <= item <= 9007199254740991):
+                    raise SyncError('Read progress requires a nonnegative safe integer and cannot be deleted.')
+                if field == 'resume' and not value['deleted']:
+                    if not isinstance(item, dict) or set(item) not in ({'message_id'}, {'message_id', 'position'}):
+                        raise SyncError('Invalid reading resume anchor.')
+                    _identifier(item['message_id'])
+                    if 'position' in item and (type(item['position']) is not int or not 1 <= item['position'] <= 9007199254740991):
+                        raise SyncError('Invalid reading resume position.')
+                if field in {'server_id', 'server_fingerprint', 'chat_id'}:
+                    if value['deleted']:
+                        raise SyncError('Reading identity cannot be deleted.')
+                    _identifier(item)
         payload = [kind, record_id, base_revision, changes, resolve]
         if base_fields is not None:
             payload.append(base_fields)
@@ -385,11 +453,36 @@ class UserSync:
             record = self._read(db, group, kind, record_id)
             if base_revision > record['revision'] or (resolve and base_revision != record['revision']):
                 raise SyncError('Refresh before resolving these changes.', 409)
+            definition = changes.get('definition') if kind == 'preset' else None
+            if definition and not definition['deleted']:
+                value = definition['value']
+                encoded = _json(value)
+                prior = db.execute('SELECT definition FROM sync_preset_versions WHERE group_id=? AND record_id=? AND version=?',
+                                   (group, record_id, value['version'])).fetchone()
+                if prior and prior['definition'] != encoded:
+                    raise SyncError('This preset version already has different contents. Create a new version.', 409)
+                if not prior:
+                    count = db.execute('SELECT COUNT(*) FROM sync_preset_versions WHERE group_id=?', (group,)).fetchone()[0]
+                    if count >= 10000:
+                        raise SyncError('This sync group has reached its 10,000 preset-version limit. Existing versions are kept.', 413)
+                    db.execute('INSERT INTO sync_preset_versions VALUES (?,?,?,?)', (group, record_id, value['version'], encoded))
             revision = record['revision'] + 1
             old_content = _draft_content(record['fields']) if kind == 'draft' else None
             old_generation = record['fields'].get('generation')
             for field, value in changes.items():
                 old = record['fields'].get(field)
+                if kind == 'read_position' and field == 'watermark':
+                    history = old['candidates'] if old else []
+                    if any(c['deleted'] or type(c.get('value')) is not int or not 0 <= c['value'] <= 9007199254740991 for c in history):
+                        raise SyncError('Invalid saved read progress. Keep the record for recovery.')
+                    previous = max(history, key=lambda c: c['value'], default=None)
+                    if previous and previous['value'] >= value['value']:
+                        if len(history) > 1:
+                            record['fields'][field] = {'revision': revision, 'candidates': [previous]}
+                        continue
+                    record['fields'][field] = {'revision': revision, 'candidates': [{**value, 'device_id': device,
+                        'operation_id': operation_id, 'at': time.time()}]}
+                    continue
                 if old and not resolve and any(_json({k: c[k] for k in ('value', 'deleted') if k in c}) == _json(value)
                                                for c in old['candidates']):
                     # Repeating an observed value is not a new edit or conflict-resolution authority.

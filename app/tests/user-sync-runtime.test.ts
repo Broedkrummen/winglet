@@ -6,6 +6,7 @@ import { create } from 'zustand';
 import ts from 'typescript';
 import * as model from '../src/features/sync/model.ts';
 import * as preferences from '../src/features/sync/preferences.ts';
+import * as reading from '../src/features/sync/reading.ts';
 
 const tick = () => new Promise<void>(resolve => setImmediate(resolve));
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value));
@@ -20,7 +21,8 @@ function harness(initialCache?: Map<string, any>) {
   const requests: { path: string; body?: any }[] = [];
   const server = { id: 'home', deviceId: 'desktop', fingerprint: 'fixture-fingerprint', url: 'https://home.test', token: 'local-secret', bot: { title: 'Hermes' } };
   const useApp = create<any>((set: any) => ({ servers: [server], ready: true, foreground: true, network: true,
-    selection: { serverId: 'home' }, drafts: {}, draftFiles: {}, replyTo: {}, runtime: {}, visibleChat: undefined,
+    selection: { serverId: 'home' }, drafts: {}, draftFiles: {}, replyTo: {}, reading: {}, runtime: {}, visibleChat: undefined,
+    applyReading: (key: string, entry: any) => set((state: any) => ({ reading: { ...state.reading, [key]: entry } })),
     setDraft: (serverId: string, chatId: string, text: string) => set((state: any) => ({ drafts: { ...state.drafts, [`${serverId}:${chatId}`]: text } })),
     updateDraftFiles: (serverId: string, chatId: string, fn: (files: any[]) => any[]) => set((state: any) => ({ draftFiles: {
       ...state.draftFiles, [`${serverId}:${chatId}`]: fn(state.draftFiles[`${serverId}:${chatId}`] ?? []),
@@ -94,6 +96,7 @@ function harness(initialCache?: Map<string, any>) {
       },
     },
     './localRetention': { retireConfirmedHolds: async () => { retirementCalls++; return retirementResult; } },
+    './reading': reading,
     '../../lib/cache': { cacheGetStrict: async (key: string, fallback: any) => cache.has(key) ? copy(cache.get(key)) : fallback,
       cacheSetStrict: async (key: string, value: any) => { if (failStorage) throw new Error('disk full'); cache.set(key, copy(value)); } },
     '../../lib/control': { idempotencyKey: () => `operation-${++nonce}` },
@@ -274,11 +277,79 @@ test('restart disagreement preserves both durable snapshots without rebasing one
   const journal = [...restarted.cache].find(([key]) => key.startsWith('user-sync:journal:'))![1];
   const edits = journal.pending.filter((p: model.Pending) => p.kind === 'draft' && p.id === 'home:chat');
   assert.equal(edits[0].mutation.changes.text.value, 'journal version');
-  const recovery = edits.at(-1);
-  assert.equal(recovery.mutation.changes.text.value, 'core cache version');
-  assert.equal(recovery.mutation.base_fields.text, 0);
-  assert.equal(recovery.prepared, true);
-  assert.deepEqual(recovery.predecessors, {});
+  assert.equal(journal.recoveringDrafts[0].fields.text.value, 'core cache version');
+  await restarted.runtime.refreshPersonalSync();
+  const recovery = restarted.requests.find(request => request.body?.changes?.text?.value === 'core cache version')!.body;
+  assert.equal(recovery.base_fields.text, 0);
+  assert.equal(recovery.base_revision, 0);
+});
+
+test('restart journals reply and uncached file snapshots offline before allowing incoming replacement', async () => {
+  const first = harness();
+  await first.runtime.connectPersonalSync(first.server);
+  const restarted = harness(first.cache);
+  const file = { localId: 'saved-file', name: 'saved.txt', mime: 'text/plain', kind: 'file', size: 1, progress: 1, status: 'ready',
+    upload: { id: 'source', url: '/api/media/source/saved.txt', name: 'saved.txt', size: 1, mime: 'text/plain', kind: 'file' } };
+  restarted.useApp.setState({ network: false, draftFiles: { 'home:chat': [file] },
+    replyTo: { 'home:chat': { id: 'quote', text: 'saved quote', role: 'bot' } } });
+  await restarted.runtime.bootPersonalSync();
+  await restarted.runtime.refreshPersonalSync();
+  assert.equal(restarted.transfers.length, 0);
+  const journal = [...restarted.cache].find(([key]) => key.startsWith('user-sync:journal:'))![1];
+  assert.equal(journal.recoveringDrafts[0].files[0].upload.id, 'source');
+  assert.equal(journal.recoveringDrafts[0].fields.reply.value.id, 'quote');
+  restarted.useApp.setState({ network: true });
+  await restarted.runtime.refreshPersonalSync();
+  assert.equal(restarted.transfers[0].kind, 'stage');
+  const request = restarted.requests.find(item => item.body?.changes?.files?.value?.[0]?.slot === 'saved-file')!;
+  assert.equal(request.body.base_fields.files, 0);
+  assert.equal(request.body.base_fields.reply, 0);
+  assert.equal(request.body.changes.reply.value.id, 'quote');
+  assert.ok(!JSON.stringify(request.body).includes('/api/media/'));
+});
+
+test('a previously observed cleared draft is preserved as a recovery choice after restart', async () => {
+  const first = harness();
+  first.useApp.getState().setDraft('home', 'chat', 'previous text');
+  await first.runtime.connectPersonalSync(first.server);
+  const restarted = harness(first.cache);
+  await restarted.runtime.bootPersonalSync();
+  const journal = [...restarted.cache].find(([key]) => key.startsWith('user-sync:journal:'))![1];
+  assert.equal(journal.recoveringDrafts.find((item: model.DraftRecovery) => item.id === 'home:chat').fields.text.value, '');
+});
+
+test('incoming read progress does not navigate or replace an active resume anchor until the chat is left', async () => {
+  const h = harness();
+  const key = reading.readingKey('home', h.server.fingerprint, 'chat');
+  const old = { serverId: 'home', fingerprint: h.server.fingerprint, chatId: 'chat', watermark: 10,
+    resume: { message_id: 'local-anchor', position: 8 } };
+  h.useApp.setState({ reading: { [key]: old }, visibleChat: { serverId: 'home', chatId: 'chat' } });
+  await h.runtime.connectPersonalSync(h.server);
+  const record = h.records.get(`read_position/${key}`)!;
+  h.records.set(`read_position/${key}`, { revision: record.revision + 1, fields: { ...record.fields,
+    watermark: remoteField(50, record.revision + 1), resume: remoteField({ message_id: 'remote-anchor', position: 35 }, record.revision + 1),
+  } });
+  const selection = h.useApp.getState().selection;
+  await h.runtime.refreshPersonalSync();
+  assert.equal(h.useApp.getState().reading[key].watermark, 50);
+  assert.equal(h.useApp.getState().reading[key].resume.message_id, 'local-anchor');
+  assert.equal(h.useApp.getState().selection, selection);
+  assert.equal(h.runtime.usePersonalSync.getState().deferredReading, 1);
+  h.useApp.setState({ visibleChat: undefined });
+  await h.runtime.applyDeferredDrafts();
+  assert.equal(h.useApp.getState().reading[key].resume.message_id, 'remote-anchor');
+  assert.equal(h.useApp.getState().selection, selection);
+});
+
+test('read state from a different installation fingerprint is never applied to the paired target', async () => {
+  const h = harness(); await h.runtime.connectPersonalSync(h.server);
+  const key = reading.readingKey('home', 'other-installation', 'chat');
+  const values = reading.readingValues({ serverId: 'home', fingerprint: 'other-installation', chatId: 'chat', watermark: 999,
+    resume: { message_id: 'wrong-message', position: 999 } });
+  h.records.set(`read_position/${key}`, { revision: 1, fields: Object.fromEntries(Object.entries(values).map(([field, value]) =>
+    [field, { revision: 1, candidates: [{ ...value, device_id: 'phone', operation_id: 'remote', at: 1 }] }])) });
+  await h.runtime.refreshPersonalSync();
+  assert.equal(h.useApp.getState().reading[key], undefined);
 });
 
 test('a changed target pairing during a download cannot receive its stale draft result', async () => {
@@ -433,4 +504,29 @@ test('disconnect stops this session even when its durable configuration cannot b
   assert.equal(h.runtime.usePersonalSync.getState().home, undefined);
   assert.equal(h.requests.length, before);
   stop();
+});
+
+test('bookmark editors retain viewed field bases across unseen updates and journal offline', async () => {
+  const h = harness();
+  await h.runtime.connectPersonalSync(h.server);
+  const candidate = (value: string) => ({ deleted: false, value, device_id: 'phone', operation_id: value, at: 1 });
+  h.records.set('bookmark/answer', { revision: 1, fields: { note: { revision: 1, candidates: [candidate('original')] } } });
+  await h.runtime.refreshPersonalSync();
+  const view = h.runtime.usePersonalSync.getState().bookmarks[0];
+  const scope = h.runtime.usePersonalSync.getState().scope;
+  h.records.set('bookmark/answer', { revision: 2, fields: { note: { revision: 2, candidates: [candidate('unseen remote edit')] } } });
+  await h.runtime.refreshPersonalSync();
+  h.useApp.setState({ network: false });
+  await h.runtime.savePersonalBookmark(scope, 'answer', { note: { deleted: false, value: 'local edit' } }, view.bases);
+  const saved = [...h.cache.values()].find((value: any) => value?.version === 1 && value.pending?.some((item: any) => item.kind === 'bookmark')) as any;
+  const pending = saved.pending.find((item: any) => item.kind === 'bookmark');
+  assert.equal(pending.mutation.base_fields.note, 1);
+  assert.equal(pending.mutation.changes.note.value, 'local edit');
+  assert.equal(h.runtime.usePersonalSync.getState().bookmarks[0].values.note.value, 'local edit');
+  h.useLock.setState({ locked: true });
+  await assert.rejects(h.runtime.savePersonalBookmark(scope, 'answer', { note: { deleted: true } }, view.bases), /unlock/);
+  h.useLock.setState({ locked: false });
+  await h.runtime.disconnectPersonalSync();
+  await assert.rejects(h.runtime.savePersonalBookmark(scope, 'answer', { note: { deleted: true } }, view.bases), /same sync home/);
+  assert.equal(h.runtime.usePersonalSync.getState().bookmarks.length, 0);
 });

@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import ts from 'typescript';
 import { createStore } from 'zustand/vanilla';
 import * as uploadRetirement from '../src/lib/uploadRetirement.ts';
+import * as reading from '../src/features/sync/reading.ts';
 
 class ApiError extends Error {
   status: number;
@@ -82,6 +83,7 @@ function harness(os = 'web') {
     '../features/phone-tools/runtime': { phoneHello: () => phoneCalls.push('hello'), phoneEvent: () => phoneCalls.push('event'), phoneDisconnect: () => phoneCalls.push('disconnect'), phoneVisibility: () => phoneCalls.push('visibility') },
     './messages': helpers,
     './uploadRetirement': uploadRetirement,
+    '../features/sync/reading': reading,
     './messageLimits': compile('../src/lib/messageLimits.ts', {}),
     '../features/projects/logic': projectHelpers,
     '../features/event-replay/session': replaySession,
@@ -512,6 +514,18 @@ test('drafts are kept per chat and cleared when empty', async () => {
   h.store.getState().setDraft('s', 'general', '');
   assert.equal('s:general' in h.store.getState().drafts, false);
   assert.equal(h.store.getState().drafts['s:other'], 'elsewhere');
+});
+
+test('read progress never moves backward while the resume anchor can move independently', async () => {
+  const h = harness(); await h.connect();
+  const state = h.store.getState();
+  state.observeReading('s', 'general', 50, { message_id: 'newer', position: 40 });
+  state.observeReading('s', 'general', 10, { message_id: 'older', position: 8 });
+  const entry: any = Object.values(h.store.getState().reading)[0];
+  assert.equal(entry.watermark, 50);
+  assert.equal(entry.resume.message_id, 'older');
+  state.observeReading('s', 'general', 0, null);
+  assert.equal((Object.values(h.store.getState().reading)[0] as any).resume, undefined);
 });
 
 test('after a restart, cached messages show at once and the queued outbox is still there', async () => {

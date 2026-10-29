@@ -9,15 +9,18 @@ import type { DraftFile, ReplyRef, Server, Upload } from '../../lib/types';
 import { materializeSyncFile, readSyncFile, stageSyncFile, stagingHoldId, validateSyncFile, type SyncFile } from './fileTransfer';
 import { changedValues, portablePreferences, preferencePatch } from './preferences';
 import { retireConfirmedHolds } from './localRetention';
+import { parseReadingEntry, readingKey, readingValues, resumeAnchor, validPosition } from './reading';
 import { emptyReplica, receive, recordKey, stage, SyncReplica, visibleValues, type Candidate, type Kind, type RecordState,
-  type Json, type Pending, type Replica, type Value } from './model';
+  type DraftRecovery, type Json, type Pending, type Replica, type Value } from './model';
 
 type Home = { serverId: string; deviceId: string; groupId: string };
 type SyncPage = { records: (RecordState & { kind: Kind; id: string })[]; next: { kind: string; id: string } | null };
 export type Conflict = { kind: Kind; id: string; field: string; revision: number; candidates: Candidate[] };
+export type PersonalRecord = { id: string; values: Record<string, Value>; bases: Record<string, number>; conflicted: boolean };
 type SyncState = { home?: Home; status: 'off' | 'ready' | 'syncing' | 'error' | 'offline' | 'locked';
-  error?: string; pending: number; conflicts: Conflict[]; deferredDrafts: number; lastSync?: number };
-export const usePersonalSync = create<SyncState>(() => ({ status: 'off', pending: 0, conflicts: [], deferredDrafts: 0 }));
+  error?: string; pending: number; conflicts: Conflict[]; deferredDrafts: number; deferredReading: number; lastSync?: number;
+  scope?: string; bookmarks: PersonalRecord[] };
+export const usePersonalSync = create<SyncState>(() => ({ status: 'off', pending: 0, conflicts: [], deferredDrafts: 0, deferredReading: 0, bookmarks: [] }));
 const CONFIG = 'user-sync:home:v1';
 let replica: SyncReplica | undefined;
 let home: Home | undefined;
@@ -42,7 +45,34 @@ function publish() {
     for (const [field, value] of Object.entries(record.fields)) if (value.candidates.length > 1)
       conflicts.push({ kind, id, field, revision: record.revision, candidates: value.candidates });
   }
-  usePersonalSync.setState({ home, conflicts, pending: replica?.state.pending.length ?? 0 });
+  const ids = new Set<string>();
+  if (replica) {
+    for (const key of Object.keys(replica.state.records)) { const [kind, id] = JSON.parse(key); if (kind === 'bookmark') ids.add(id); }
+    for (const pending of replica.state.pending) if (pending.kind === 'bookmark') ids.add(pending.id);
+  }
+  const bookmarks = [...ids].map(id => {
+    const record = replica!.state.records[recordKey('bookmark', id)];
+    return { id, values: visibleValues(replica!.state, 'bookmark', id),
+      bases: Object.fromEntries(Object.entries(record?.fields ?? {}).map(([field, value]) => [field, value.revision])),
+      conflicted: Object.values(record?.fields ?? {}).some(value => value.candidates.length > 1) };
+  });
+  usePersonalSync.setState({ home, conflicts, bookmarks, scope: home ? `${epoch}:${journalKey(home)}` : undefined,
+    pending: (replica?.state.pending.length ?? 0) + (replica?.state.recoveringDrafts?.length ?? 0) });
+}
+
+/** Editors retain their viewed field bases; a later refresh must not rebase unseen changes. */
+export async function savePersonalBookmark(scope: string, id: string, changes: Record<string, Value>, bases: Record<string, number>) {
+  const engine = replica;
+  if (!engine || !scope || scope !== usePersonalSync.getState().scope || useLock.getState().locked)
+    throw new Error('Reconnect to the same sync home and unlock Winglet before saving. Your edits are kept.');
+  await engine.edit(state => {
+    if (engine !== replica || scope !== usePersonalSync.getState().scope || useLock.getState().locked)
+      throw new Error('The sync home changed. Your edits are kept.');
+    const key = recordKey('bookmark', id);
+    const next = stage({ ...state, observed: { ...state.observed, [key]: bases } }, 'bookmark', id, idempotencyKey(), changes);
+    return { ...next, observed: state.observed };
+  });
+  void refreshPersonalSync();
 }
 
 function fail(error: unknown) {
@@ -91,6 +121,7 @@ export async function connectPersonalSync(server: Server, token?: string) {
   const local = useApp.getState();
   for (const key of new Set([...Object.keys(local.drafts), ...Object.keys(local.draftFiles ?? {}), ...Object.keys(local.replyTo ?? {})]))
     await captureDraft(key, local.drafts[key] ?? '');
+  for (const [key, entry] of Object.entries(local.reading ?? {})) if (entry.fingerprint) await capture('read_position', key, readingValues(entry));
   await refreshPersonalSync();
 }
 
@@ -101,7 +132,7 @@ export async function disconnectPersonalSync() {
   replica = undefined;
   bootFailure = undefined;
   uncaptured.clear();
-  usePersonalSync.setState({ home: undefined, status: 'off', error: undefined, pending: 0, conflicts: [], deferredDrafts: 0, lastSync: undefined });
+  usePersonalSync.setState({ home: undefined, scope: undefined, bookmarks: [], status: 'off', error: undefined, pending: 0, conflicts: [], deferredDrafts: 0, deferredReading: 0, lastSync: undefined });
   try { await cacheSetStrict(CONFIG, null); }
   catch {
     const error = new Error('Sync stopped for this session, but the disconnection could not be saved. '
@@ -156,7 +187,7 @@ async function reconcileLocal() {
     if (!Object.keys(changes).length) return;
     // Two durable caches can disagree after a crash. Neither proves which edit came last.
     await engine.edit(state => {
-      if (state.pending.length >= 1000) throw new Error('Sync has 1,000 unsent changes. Reconnect before recovering more changes.');
+      if (state.pending.length + (state.recoveringDrafts?.length ?? 0) >= 1000) throw new Error('Sync has 1,000 unsent changes. Reconnect before recovering more changes.');
       return { ...state, pending: [...state.pending, {
       kind, id, prepared: true, predecessors: {}, mutation: { operation_id: idempotencyKey(), base_revision: 0,
         base_fields: Object.fromEntries(Object.keys(changes).map(field => [field, 0])), changes,
@@ -165,7 +196,85 @@ async function reconcileLocal() {
     });
   };
   await preserve('preferences', 'app', portablePreferences(usePrefs.getState().prefs));
-  for (const [key, text] of Object.entries(useApp.getState().drafts)) await preserve('draft', key, { text: { deleted: false, value: text } });
+  for (const [key, entry] of Object.entries(useApp.getState().reading ?? {}))
+    if (entry.fingerprint) await preserve('read_position', key, readingValues(entry));
+  const local = useApp.getState();
+  const keys = new Set([...Object.keys(local.drafts), ...Object.keys(local.draftFiles), ...Object.keys(local.replyTo)]);
+  for (const key of Object.keys(engine.state.records)) {
+    const [kind, id] = JSON.parse(key) as [Kind, string];
+    if (kind === 'draft' && ['text', 'files', 'reply'].some(field => (engine.state.observed?.[key]?.[field] ?? 0) > 0)) keys.add(id);
+  }
+  for (const id of keys) {
+    if (!draftLocation(id)) continue;
+    const observed = engine.state.observed?.[recordKey('draft', id)];
+    const fields: Record<string, Value> = {};
+    if (Object.hasOwn(local.drafts, id) || observed?.text) fields.text = { deleted: false, value: local.drafts[id] ?? '' };
+    if (Object.hasOwn(local.replyTo, id) || observed?.reply) fields.reply = local.replyTo[id]
+      ? { deleted: false, value: local.replyTo[id] as unknown as Json } : { deleted: true };
+    const files = Object.hasOwn(local.draftFiles, id) || observed?.files
+      ? (local.draftFiles[id] ?? []).filter(file => !file.autoSend) : undefined;
+    const recovery: DraftRecovery = { operation: idempotencyKey(), id, fields, ...(files ? { files } : {}) };
+    await engine.edit(state => {
+      const matching = state.recoveringDrafts?.some(old => old.id === id && JSON.stringify([old.fields, old.files]) === JSON.stringify([fields, files]));
+      if (matching) return state;
+      if (state.pending.length + (state.recoveringDrafts?.length ?? 0) >= 1000) throw new Error('Reconnect before recovering more than 1,000 sync changes.');
+      return { ...state, recoveringDrafts: [...state.recoveringDrafts ?? [], recovery] };
+    });
+  }
+}
+
+/** Preserve each durable cache snapshot as a separate, unobserved branch. */
+async function recoverDraftCaches() {
+  const engine = replica, config = home, source = serverFor();
+  if (!engine || !config || !source) return;
+  for (const recovery of engine.state.recoveringDrafts ?? []) {
+    const location = draftLocation(recovery.id);
+    const target = useApp.getState().servers.find(server => server.id === location?.serverId);
+    if (!location || !target) throw new Error('Reconnect the original target pairing to recover its saved draft.');
+    const check = () => {
+      if (replica !== engine || home !== config || serverFor() !== source || !allowed()
+        || !useApp.getState().servers.includes(target)) throw new Error('Draft recovery paused. The saved composition is kept.');
+    };
+    check();
+    const fields = { ...recovery.fields };
+    if (recovery.files) {
+      const files: SyncFile[] = [];
+      for (const file of recovery.files) {
+        if (file.status !== 'ready' || !file.upload) throw new Error('A saved attachment is not ready. Keep its original and retry recovery.');
+        let manifest = cachedFile(recovery.id, file);
+        if (!manifest) {
+          if (!source.fingerprint || !target.fingerprint) throw new Error('Verify both paired servers before recovering saved attachments.');
+          manifest = await stageSyncFile(source, config.groupId, target, location.chatId, file, check);
+          check();
+          const shared = manifest;
+          await engine.edit(state => ({ ...state, fileCache: { ...state.fileCache, [cacheKey(recovery.id, file.localId)]: {
+            homeServerId: config.serverId, groupId: config.groupId, sourceUploadId: file.upload!.id,
+            manifest: shared, sourceHoldId: stagingHoldId(target, location.chatId, file),
+          } } }));
+        }
+        files.push(manifest);
+      }
+      fields.files = { deleted: false, value: files as unknown as Json };
+      fields.files_ready = { deleted: false, value: true };
+      fields.server_id = { deleted: false, value: target.id };
+      fields.chat_id = { deleted: false, value: location.chatId };
+      fields.server_fingerprint = { deleted: false, value: target.fingerprint ?? '' };
+    }
+    check();
+    await engine.edit(state => {
+      const record = state.records[recordKey('draft', recovery.id)];
+      const changes = changedValues(visibleValues(state, 'draft', recovery.id), fields);
+      for (const field of Object.keys(changes)) if (record?.fields[field]?.candidates.some(candidate =>
+        !Object.keys(changedValues({ [field]: candidate }, { [field]: changes[field] })).length)) delete changes[field];
+      const recoveringDrafts = state.recoveringDrafts?.filter(item => item.operation !== recovery.operation);
+      if (!Object.keys(changes).length) return { ...state, recoveringDrafts };
+      return { ...state, recoveringDrafts, pending: [...state.pending, {
+        kind: 'draft', id: recovery.id, prepared: true, predecessors: {}, mutation: { operation_id: recovery.operation,
+          base_revision: 0, base_fields: Object.fromEntries(Object.keys(changes).map(field => [field, 0])), changes,
+        },
+      }] };
+    });
+  }
 }
 
 function draftLocation(key: string) {
@@ -271,6 +380,7 @@ async function applyIncomingState() {
       throw new Error('File sync paused. Your current draft is kept.');
   };
   let deferredDrafts = 0;
+  let deferredReading = 0;
   const observe = async (key: string, fields: Record<string, number>) => engine.edit(state => ({ ...state,
     observed: { ...state.observed, [key]: { ...state.observed?.[key], ...fields } } }));
   for (const [key, record] of Object.entries(engine.state.records)) {
@@ -288,11 +398,35 @@ async function applyIncomingState() {
         try { if (Object.keys(patch).length) usePrefs.getState().update(patch); }
         finally { applying = false; }
         await observe(key, Object.fromEntries(Object.entries(observed).filter(([field]) => field in patch)));
+      } else if (kind === 'read_position') {
+        const raw = (field: string) => values[field] && !values[field].deleted ? values[field].value : undefined;
+        const serverId = raw('server_id'), fingerprint = raw('server_fingerprint'), chatId = raw('chat_id');
+        if (typeof serverId !== 'string' || typeof fingerprint !== 'string' || !fingerprint || typeof chatId !== 'string'
+          || readingKey(serverId, fingerprint, chatId) !== id) continue;
+        const local = useApp.getState();
+        if (!local.servers.some(server => server.id === serverId && server.fingerprint === fingerprint)) continue;
+        const prior = local.reading[id];
+        const watermark = raw('watermark');
+        const entry = parseReadingEntry({ serverId, fingerprint, chatId,
+          watermark: Math.max(prior?.watermark ?? 0, validPosition(watermark) ? watermark : 0), resume: prior?.resume });
+        if (!entry) continue;
+        const applied = Object.fromEntries(Object.entries(observed).filter(([field]) => ['server_id', 'server_fingerprint', 'chat_id', 'watermark'].includes(field)));
+        if (values.resume) {
+          const resume = values.resume.deleted ? undefined : resumeAnchor(values.resume.value);
+          if (!values.resume.deleted && !resume) throw new Error('The shared reading anchor is invalid. Keep local state and refresh.');
+          const active = local.visibleChat?.serverId === serverId && local.visibleChat.chatId === chatId;
+          if (active && prior?.resume && JSON.stringify(prior.resume) !== JSON.stringify(resume)) deferredReading++;
+          else { entry.resume = resume; applied.resume = observed.resume; }
+        }
+        applying = true;
+        try { if (JSON.stringify(prior) !== JSON.stringify(entry)) local.applyReading(id, entry); }
+        finally { applying = false; }
+        await observe(key, applied);
       } else if (kind === 'draft') {
         const location = draftLocation(id);
         const text = values.text;
         if (!location || !text || text.deleted || typeof text.value !== 'string') continue;
-        if (sendBarriers.has(id) || engine.state.deferredDrafts?.[id]
+        if (sendBarriers.has(id) || engine.state.deferredDrafts?.[id] || engine.state.recoveringDrafts?.some(item => item.id === id)
           || Object.values(record.fields).some(field => field.candidates.length !== 1)
           || engine.state.pending.some(p => p.kind === 'draft' && p.id === id)
           || (values.files_ready && !values.files_ready.deleted && values.files_ready.value === false)) { deferredDrafts++; continue; }
@@ -336,6 +470,7 @@ async function applyIncomingState() {
         if ((latest.drafts[id] ?? '') !== (state.drafts[id] ?? '') || latest.draftFiles?.[id] !== originalFiles
           || latest.replyTo?.[id] !== originalReply || engine.state.records[key]?.revision !== record.revision
           || engine.state.pending.some(p => p.kind === 'draft' && p.id === id)
+          || engine.state.recoveringDrafts?.some(item => item.id === id)
           || (((state.drafts[id] ?? '') !== text.value || fileDifference || replyDifference)
             && latest.visibleChat?.serverId === location.serverId && latest.visibleChat.chatId === location.chatId)) {
           deferredDrafts++; continue;
@@ -349,13 +484,17 @@ async function applyIncomingState() {
         await observe(key, observed);
       }
   }
-  usePersonalSync.setState({ deferredDrafts });
+  usePersonalSync.setState({ deferredDrafts, deferredReading });
 }
 
 export function refreshPersonalSync(): Promise<void> {
   if (refreshing) return refreshing;
-  const currentEpoch = epoch;
-  refreshing = refresh().catch(error => { if (epoch === currentEpoch) fail(error); }).finally(() => { refreshing = undefined; });
+  refreshing = (async () => {
+    await bootPersonalSync();
+    const currentEpoch = epoch;
+    try { await refresh(); }
+    catch (error) { if (epoch === currentEpoch) fail(error); }
+  })().finally(() => { refreshing = undefined; });
   return refreshing;
 }
 
@@ -369,6 +508,7 @@ async function refresh() {
   usePersonalSync.setState({ status: 'syncing', error: undefined });
   const root = path();
   const check = () => { if (epoch !== currentEpoch || !allowed()) throw new Error('Sync paused. Your pending changes are kept.'); };
+  await recoverDraftCaches();
   for (const id of Object.keys(engine.state.deferredDrafts ?? {})) await flushDeferredDraft(id);
   const send = async (pending: Pending): Promise<RecordState> => {
     check();
@@ -593,6 +733,7 @@ export function subscribePersonalSync(): () => void {
   let previousDrafts = useApp.getState().drafts;
   let previousFiles = useApp.getState().draftFiles;
   let previousReplies = useApp.getState().replyTo;
+  let previousReading = useApp.getState().reading;
   const prefs = usePrefs.subscribe(state => {
     const next = portablePreferences(state.prefs);
     const changes = changedValues(previousPrefs, next);
@@ -600,6 +741,13 @@ export function subscribePersonalSync(): () => void {
     if (!applying && home) void capture('preferences', 'app', changes).then(() => refreshPersonalSync()).catch(fail);
   });
   const app = useApp.subscribe(state => {
+    const reading = previousReading;
+    previousReading = state.reading;
+    if (!applying && home && reading !== state.reading) for (const [key, entry] of Object.entries(state.reading ?? {})) {
+      if (!entry.fingerprint) continue;
+      const changes = changedValues(reading?.[key] ? readingValues(reading[key]) : {}, readingValues(entry));
+      if (Object.keys(changes).length) void capture('read_position', key, changes).then(() => refreshPersonalSync()).catch(fail);
+    }
     const before = previousDrafts;
     const beforeFiles = previousFiles, beforeReplies = previousReplies;
     previousDrafts = state.drafts;

@@ -24,6 +24,9 @@ async def _run(request, action):
         elif action == 'read':
             result = await asyncio.to_thread(service.read, group, device,
                                              request.match_info['kind'], request.match_info['record_id'])
+        elif action == 'preset_version':
+            result = await asyncio.to_thread(service.preset_version, group, device,
+                                             request.match_info['record_id'], request.match_info['version'])
         else:
             if request.content_length is not None and request.content_length > 512 * 1024:
                 raise SyncError('Sync request is too large.', 413)
@@ -75,6 +78,7 @@ async def h_user_sync_join(request): return await _run(request, 'join')
 async def h_user_sync_revoke(request): return await _run(request, 'revoke')
 async def h_user_sync_records(request): return await _run(request, 'records')
 async def h_user_sync_read(request): return await _run(request, 'read')
+async def h_user_sync_preset_version(request): return await _run(request, 'preset_version')
 async def h_user_sync_write(request): return await _run(request, 'write')
 async def h_user_sync_submit(request): return await _run(request, 'submit')
 async def h_user_sync_settle(request): return await _run(request, 'settle')
@@ -94,4 +98,5 @@ def register_routes(app):
     app.router.add_post('/api/user-sync/{group_id}/drafts/{record_id}/submissions/{submission_id}/release-files', h_user_sync_release_files)
     app.router.add_get('/api/user-sync/{group_id}/records', h_user_sync_records)
     app.router.add_get('/api/user-sync/{group_id}/records/{kind}/{record_id}', h_user_sync_read)
+    app.router.add_get('/api/user-sync/{group_id}/presets/{record_id}/versions/{version}', h_user_sync_preset_version)
     app.router.add_post('/api/user-sync/{group_id}/records/{kind}/{record_id}', h_user_sync_write)

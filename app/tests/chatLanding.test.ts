@@ -4,6 +4,7 @@ import vm from 'node:vm';
 import { test } from 'node:test';
 import ts from 'typescript';
 import { chatKey } from '../src/lib/chatOrganization.ts';
+import * as reading from '../src/features/sync/reading.ts';
 
 const fallback: any = new Proxy(function () {}, { get: (_t, key) => key === 'then' ? undefined : key === Symbol.toPrimitive ? () => 0 : fallback, apply: () => fallback });
 function harness() {
@@ -13,7 +14,7 @@ function harness() {
   const jsx = (type: any, props: any) => ({ type, props });
   const runtime: any = { status: 'online', chats: { general: { id: 'general', title: 'Main', kind: 'chat' }, fresh: { id: 'fresh', title: 'New topic', kind: 'chat' } },
     messages: { general: [{ id: 'old', text: 'Previous history' }] }, loaded: { general: true }, typing: {} };
-  const st: any = { runtime: { bot: runtime }, network: {}, hydrateChat: () => {}, setVisibleChat: () => {}, setReplyTo: () => {} };
+  const st: any = { runtime: { bot: runtime }, reading: {}, network: {}, hydrateChat: () => {}, setVisibleChat: () => {}, setReplyTo: () => {} };
   const modules: Record<string, any> = {
     react: { memo: (fn: any) => fn, useCallback: (fn: any) => fn, useMemo: (fn: any) => fn(), useEffect: () => {},
       useState: (value: any) => { const i = cursor++; if (!(i in hooks)) hooks[i] = value; return [hooks[i], (next: any) => { hooks[i] = typeof next === 'function' ? next(hooks[i]) : next; }]; },
@@ -25,6 +26,7 @@ function harness() {
     '../lib/motion': { useReducedMotion: () => true },
     '../lib/prefs': { usePrefs: (select: any) => select({ prefs: { view } }) },
     '../lib/chatOrganization': { chatKey },
+    '../features/sync/reading': reading,
     '../lib/store': { useApp: Object.assign((select: any) => select(st), { getState: () => st }), useServerState: () => runtime, isTyping: () => false, homeChat: () => 'general' },
     '../lib/connection': { connectionView: () => ({ kind: 'online' }) },
     '../lib/focus': { useFocusRequest: () => null },

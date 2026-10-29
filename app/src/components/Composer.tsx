@@ -1,4 +1,6 @@
 import { VoicePanel } from '../features/live-voice/VoicePanel';
+import { keyboardTarget } from '../features/keyboard/webContext';
+import { useLock } from '../lib/appLock';
 import { Image } from 'expo-image';
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
@@ -104,8 +106,12 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
   useEffect(() => {
     if (Platform.OS !== 'web') return;
     const onKey = (e: KeyboardEvent) => {
-      const el = e.target as HTMLElement | null;
-      const typing = !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+      const state = useApp.getState();
+      const context = keyboardTarget(e, window.location.pathname);
+      if (e.defaultPrevented || e.isComposing || e.keyCode === 229 || e.repeat || useLock.getState().locked
+        || !state.foreground || state.visibleChat?.serverId !== server.id || state.visibleChat?.chatId !== chatId
+        || context.modal || context.desktopInput) return;
+      const typing = context.editing;
       if (e.key === '/' && !typing && !e.metaKey && !e.ctrlKey && !e.altKey) {
         e.preventDefault();
         input.current?.focus();

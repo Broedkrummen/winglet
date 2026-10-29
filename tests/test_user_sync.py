@@ -75,6 +75,34 @@ def test_submissions_are_private_paginated_and_show_retention_without_claiming_e
         service.submissions(group, b)
 
 
+def test_read_progress_merges_by_max_while_competing_resume_anchors_require_a_choice(linked):
+    _, service, group, a, b = linked
+    def save(device, operation, base, **values):
+        return service.write(group, device, 'read_position', 'reading-key', operation_id=operation, base_revision=base,
+            changes={key: {'deleted': False, 'value': value} for key, value in values.items()})
+    first = save(a, 'read-a', 0, watermark=20, resume={'message_id': 'older', 'position': 8})
+    second = save(b, 'read-b', 0, watermark=50, resume={'message_id': 'newer', 'position': 35})
+    assert [c['value'] for c in second['fields']['watermark']['candidates']] == [50]
+    assert len(second['fields']['resume']['candidates']) == 2
+    behind = save(a, 'read-behind', first['revision'], watermark=10)
+    assert behind['fields']['watermark'] == second['fields']['watermark']
+    selected = service.write(group, a, 'read_position', 'reading-key', operation_id='choose-resume', base_revision=behind['revision'], resolve=True,
+        changes={'resume': {'deleted': False, 'value': {'message_id': 'older', 'position': 8}}})
+    assert selected['fields']['watermark']['candidates'][0]['value'] == 50
+    assert len(selected['fields']['resume']['candidates']) == 1
+
+
+@pytest.mark.parametrize('value', [True, -1, 1.5, 9007199254740992, None])
+def test_read_progress_refuses_invalid_or_deleted_positions(linked, value):
+    _, service, group, a, _ = linked
+    with pytest.raises(SyncError):
+        service.write(group, a, 'read_position', 'reading-key', operation_id='invalid', base_revision=0,
+            changes={'watermark': {'deleted': False, 'value': value}})
+    with pytest.raises(SyncError):
+        service.write(group, a, 'read_position', 'reading-key', operation_id='deleted', base_revision=0,
+            changes={'watermark': {'deleted': True}})
+
+
 def test_disjoint_changes_merge_but_competing_text_requires_choice(linked):
     _, service, group, a, b = linked
     write(service, group, a, 'text-a', 0, text='hello')
@@ -191,7 +219,7 @@ def test_listing_is_bounded_and_cursor_does_not_skip_records(linked):
     _, service, group, a, _ = linked
     for index in range(101):
         service.write(group, a, 'bookmark', f'{index:03}', operation_id=f'op-{index}', base_revision=0,
-                      changes={'note': {'deleted': False, 'value': index}})
+                      changes={'note': {'deleted': False, 'value': str(index)}})
     first = service.listing(group, a)
     assert len(first['records']) == 100
     second = service.listing(group, a, first['next']['kind'], first['next']['id'])
@@ -240,3 +268,46 @@ def test_accumulated_record_field_limit_matches_client_and_rolls_back(linked):
         service.write(group, a, 'preferences', 'app', operation_id='overflow', base_revision=1,
             changes={'extra': {'deleted': False, 'value': 'no'}})
     assert service.read(group, a, 'preferences', 'app')['revision'] == 1
+
+@pytest.mark.parametrize('field,value', [
+    ('text', 'source contents'), ('source', {'server_id': 's', 'token': 'secret'}),
+    ('snapshot', {'id': 'snapshot', 'sha256': '0' * 64, 'text': 'cached private answer'}),
+    ('note', 4), ('tags', ['x' * 65]), ('removed', 'true'),
+])
+def test_bookmarks_reject_embedded_source_contents_credentials_and_invalid_metadata(linked, field, value):
+    _, service, group, a, _ = linked
+    with pytest.raises(SyncError):
+        service.write(group, a, 'bookmark', 'answer', operation_id='invalid', base_revision=0,
+                      changes={field: {'deleted': False, 'value': value}})
+
+
+def test_bookmark_notes_keep_concurrent_versions_for_explicit_choice(linked):
+    _, service, group, a, b = linked
+    source = {'server_id': 'server', 'server_fingerprint': 'fingerprint', 'chat_id': 'chat', 'message_id': 'message'}
+    first = service.write(group, a, 'bookmark', 'answer', operation_id='create', base_revision=0,
+                          changes={'source': {'deleted': False, 'value': source}, 'note': {'deleted': False, 'value': 'Original'}})
+    service.write(group, a, 'bookmark', 'answer', operation_id='desktop-note', base_revision=first['revision'],
+                  changes={'note': {'deleted': False, 'value': 'Desktop note'}})
+    conflict = service.write(group, b, 'bookmark', 'answer', operation_id='phone-note', base_revision=first['revision'],
+                             changes={'note': {'deleted': False, 'value': 'Phone note'}})
+    assert {item['value'] for item in conflict['fields']['note']['candidates']} == {'Desktop note', 'Phone note'}
+    assert conflict['fields']['source']['candidates'][0]['value'] == source
+
+def test_preset_versions_are_immutable_and_old_definitions_survive_edits(linked):
+    from test_presets import definition
+    _, service, group, a, b = linked
+    original = definition()
+    first = service.write(group, a, 'preset', 'research', operation_id='create-preset', base_revision=0,
+                          changes={'definition': {'deleted': False, 'value': original}})
+    changed = {**original, 'name': 'Different task'}
+    with pytest.raises(SyncError, match='new version'):
+        service.write(group, a, 'preset', 'research', operation_id='reuse-version', base_revision=first['revision'],
+                      changes={'definition': {'deleted': False, 'value': changed}})
+    changed['version'] = 'version-two'
+    service.write(group, b, 'preset', 'research', operation_id='edit-preset', base_revision=first['revision'],
+                  changes={'definition': {'deleted': False, 'value': changed}})
+    assert service.preset_version(group, a, 'research', original['version'])['definition'] == original
+    assert service.preset_version(group, b, 'research', changed['version'])['definition'] == changed
+    service.revoke(group, a, b)
+    with pytest.raises(SyncError):
+        service.preset_version(group, b, 'research', original['version'])

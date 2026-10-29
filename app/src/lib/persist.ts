@@ -20,6 +20,7 @@ export function attachPersistence(): () => void {
     timer = undefined;
     const state = useApp.getState();
     for (const key of dirty) {
+      if (key === 'reading') { cacheSet('reading', state.reading); continue; }
       if (key === 'drafts') {
         cacheSet('drafts', state.drafts);
         continue;
@@ -48,6 +49,7 @@ export function attachPersistence(): () => void {
   };
 
   const unsubscribe = useApp.subscribe((state) => {
+    if (state.reading !== prev.reading) dirty.add('reading');
     if (state.drafts !== prev.drafts) dirty.add('drafts');
     if (state.draftFiles !== prev.draftFiles) dirty.add('draftFiles');
     if (state.replyTo !== prev.replyTo) dirty.add('replyTo');

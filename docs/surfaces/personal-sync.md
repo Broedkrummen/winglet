@@ -13,6 +13,7 @@ One person links desktop and phone to one designated Hermes sync home. Being ano
 - After enrollment, show connection state, pending changes, choices needed and linked devices. Expose manual refresh and a short-lived invitation without persisting its token into synced state.
 - Conflicts show each exact candidate, its device and timestamp. Expand long values; select a candidate or combine text. A stale choice must refresh the conflict rather than silently win.
 - Keep unresolved choices discoverable in the Settings row. Never steal typing focus or navigate in response to incoming state.
+- Below setup, expose retained-file recovery for removed pairings on each paired bot. Load explicitly, paginate, offer Download before an explicit two-step Release. Explain that storage release neither stops execution nor proves delivery. Hide results while locked and reject stale paired endpoints.
 
 ## Boundaries
 
@@ -20,7 +21,7 @@ Incoming text waits while its composer is active. Its unseen revision cannot bec
 
 Disconnect stops this session immediately, even when persistence fails; explain the recovery needed before a restart. Unlink revokes server membership. Neither action silently destroys local drafts or the recovery journal.
 
-This delivery checkpoint supports portable preferences and text drafts. The full feature's attachment, send, read/resume and remaining library integration remains governed by the approved implementation plan. Do not describe the whole feature as finished until that acceptance is verified.
+This delivery checkpoint supports portable preferences, text/file drafts, replies and shared submission IDs. Read/resume, remaining libraries and complete file recovery remain governed by the approved implementation plan. Do not describe the whole feature as finished until that acceptance is verified.
 
 ## Verification
 

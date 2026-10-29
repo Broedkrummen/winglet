@@ -467,9 +467,23 @@ test('a message the server refuses fails, and can be deleted', async () => {
   const failed = h.messages()[0];
   assert.equal(failed.status, 'failed');
   assert.equal(h.outbox()[0].failed, true);
-  h.store.getState().discardMessage('s', 'general', failed.id);
+  await h.store.getState().discardMessage('s', 'general', failed.id);
   assert.equal(h.messages().length, 0);
   assert.equal(h.outbox().length, 0);
+});
+
+test('failed durable discard keeps both the failed message and its recoverable outbox entry', async () => {
+  const h = harness();
+  await h.connect();
+  await h.hello();
+  h.setRequest(echoServer([], () => 404));
+  await h.store.getState().sendMessage('s', 'general', 'keep until deletion is saved');
+  const failed = h.messages()[0];
+  h.setStrictWrite(async () => { throw new Error('disk full'); });
+  assert.equal(await h.store.getState().discardMessage('s', 'general', failed.id), false);
+  assert.equal(h.messages()[0].id, failed.id);
+  assert.equal(h.outbox()[0].client_id, failed.id);
+  assert.equal(h.store.getState().toasts.at(-1).title, 'Message kept');
 });
 
 test('drafts are kept per chat and cleared when empty', async () => {

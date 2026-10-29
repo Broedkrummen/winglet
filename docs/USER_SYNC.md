@@ -52,9 +52,9 @@ Bulk byte writes happen before SQLite transactions. Final admission rechecks aut
 
 ## Remaining integration and verification
 
-1. Add reviewable retained-file recovery/release controls, including removed attachments and abandoned claims. Confirm local discard persistence before retiring retention; never label source-file release as task cancellation.
+1. Extend retained-file recovery beyond the shipped removed-device Download/Release controls to current-device removed attachments and abandoned claims. Failed-message discard now commits its outbox removal strictly and preserves the message on storage failure. Do not retire retention before confirmed discard; never label source-file release as task cancellation.
 2. Complete full restart/file recovery, including stale source uploads already claimed by a previous message and all attachment/reply cache disagreements. Verify claim settlement and unused-copy release across real reconnects.
-3. Update loading/status copy and run bounded desktop/phone light/dark browser checks for file Send, conflict recovery and active edits. Physical Android/iPhone checks remain separate from exports.
+3. Extend browser verification to all restart/recovery and active-edit cases. Current checks cover settings in light/dark desktop/phone layouts, removed-device Download/Release, receiving a manual attachment, reopening after persistence, and concurrent Send producing one actual target message. Loading/status copy reflects file/reply sync. Physical Android/iPhone checks remain separate from exports.
 4. Connect read/resume state and the remaining portable libraries in the approved plan.
 
 These are remaining steps in feature #1, not a reduction of the approved 18-feature scope.

@@ -367,14 +367,14 @@ class UserSync:
             old_generation = record['fields'].get('generation')
             for field, value in changes.items():
                 old = record['fields'].get(field)
+                if old and not resolve and any(_json({k: c[k] for k in ('value', 'deleted') if k in c}) == _json(value)
+                                               for c in old['candidates']):
+                    # Repeating an observed value is not a new edit or conflict-resolution authority.
+                    continue
                 candidate = {**value, 'device_id': device, 'operation_id': operation_id, 'at': time.time()}
                 field_base = base_fields[field] if base_fields is not None else base_revision
                 if old and not resolve and (old['revision'] > field_base or len(old['candidates']) > 1):
                     candidates = old['candidates'] + [candidate]
-                    # Equal values do not require a choice; keep the existing provenance.
-                    unique = { _json({k: c[k] for k in ('value', 'deleted') if k in c}) for c in candidates }
-                    if len(unique) == 1:
-                        candidates = old['candidates']
                 else:
                     candidates = [candidate]
                 record['fields'][field] = {'revision': revision, 'candidates': candidates}

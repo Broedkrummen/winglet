@@ -161,7 +161,7 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
   const send = async (value?: string) => {
     if (sending.current || (value === undefined && !ready)) return;
     sending.current = true;
-    setPreparing(!!prepareChat);
+    setPreparing(true);
     try {
       const destination = prepareChat ? await prepareChat() : chatId;
       if (!destination) return;
@@ -297,7 +297,7 @@ export function Composer({ server, chatId, busy, bottomInset, target, onHeight, 
           {!busy && !text.trim() && !files.length && voice ? (
             <VoiceButton server={server} chatId={chatId} onSent={onSent} prepareChat={prepareChat} onBeforeSend={onBeforeSend} />
           ) : (
-            <Tap key="send" feedback="none" accessibilityLabel={preparing ? 'Starting chat' : uploading ? 'Waiting for uploads' : 'Send'} accessibilityState={{ disabled: !ready || preparing }}
+            <Tap key="send" feedback="none" accessibilityLabel={preparing ? 'Preparing message' : uploading ? 'Waiting for uploads' : 'Send'} accessibilityState={{ disabled: !ready || preparing }}
               disabled={!ready || preparing} onPress={() => send()} scaleTo={0.9} style={[s.sendBtn, { backgroundColor: ready ? t.colors.ink : t.colors.surfaceSunken }]}>
               {uploading || preparing ? <ActivityIndicator size="small" color={t.colors.textSecondary} /> : (
                 <ArrowUp size={19} color={ready ? t.colors.onInk : t.colors.textTertiary} strokeWidth={2.5} />

@@ -43,6 +43,15 @@ def test_unfinished_file_preparation_cannot_be_claimed(linked):
         service.claim_submission(group, a, 'chat-1', draft['revision'])
 
 
+def test_equal_value_replay_does_not_make_a_later_observed_edit_conflict(linked):
+    _, service, group, a, b = linked
+    first = write(service, group, a, 'first', 0, text='same')
+    repeated = write(service, group, b, 'equal', 0, text='same')
+    assert repeated['fields']['text'] == first['fields']['text']
+    edited = write(service, group, a, 'new', first['revision'], text='intentional change')
+    assert [c['value'] for c in edited['fields']['text']['candidates']] == ['intentional change']
+
+
 def test_disjoint_changes_merge_but_competing_text_requires_choice(linked):
     _, service, group, a, b = linked
     write(service, group, a, 'text-a', 0, text='hello')

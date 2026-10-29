@@ -54,3 +54,13 @@ The server supplies draft generations and rotates them after claimed content cha
 Settings copy/loading-state updates and two-browser file/send verification are still pending. No UI component source changed in this checkpoint. Earlier screenshot evidence does not establish Composer integration behavior. Feature #1 remains incomplete.
 
 Validation: **700 Python tests passed, 31 skipped; 499 app tests passed; TypeScript, web/Android exports, bundle references and third-party notices passed**. All 40 bundled files match the web export by SHA-256. Exports do not establish physical-device behavior; no native runtime installation or paid-call test occurred.
+
+## Recovery controls and browser integration checkpoint
+
+Settings now exposes per-bot removed-device retained files with paginated inspection, Download and explicit Release. Results hide while locked; stale pairings and unavailable connections are rejected. Copy explains that storage release does not cancel a task or prove delivery. Current-device abandoned attachment/claim controls remain pending. Composer shows preparation while the shared claim is verified. Failed-message deletion uses strict serialized outbox persistence and keeps the message when that write fails.
+
+Identical-value retries no longer advance field revisions or add duplicate conflict candidates; a later edit based on the original field does not spuriously conflict with the identical replay. A regression test covers that sequence.
+
+Browser evidence: two isolated Chromium contexts used real signed routes and synthetic owners/files. Settings light/dark desktop/phone layouts and removed-device recovery were inspected in bounded batches. Download and explicit release passed. A manual attachment arrived on the inactive phone, survived reopening after batched persistence committed, and concurrent Send from both clients produced one actual server-confirmed user message (database count verified). An earlier check incorrectly matched the draft preview and navigated before receipt/persistence; the final check waits for both and for an actual target message. These checks do not establish all restart scenarios, live Hermes adapter execution or physical-device behavior. Conservative startup preference recovery can still ask for a choice; it does not silently pick a version.
+
+Current suites: **701 Python tests passed, 31 skipped; 500 app tests passed**. TypeScript and Android export passed. The final web export excludes the temporary local diagnostic hook. Full sync and the other selected features remain incomplete.

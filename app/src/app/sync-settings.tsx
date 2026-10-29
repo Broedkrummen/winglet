@@ -10,6 +10,7 @@ import { connectPersonalSync, disconnectPersonalSync, invitePersonalDevice, pers
   refreshPersonalSync, resolvePersonalConflict, revokePersonalDevice, usePersonalSync,
   type Conflict, type SyncMember } from '../features/sync/runtime';
 import type { Value } from '../features/sync/model';
+import { RetainedFiles } from '../features/sync/RetainedFiles';
 
 export default function SyncSettings() {
   const s = useStyles();
@@ -65,8 +66,8 @@ export default function SyncSettings() {
         <ListRow title="Pending changes" value={String(sync.pending)} />
         <ListRow title="Choices needed" value={String(sync.conflicts.length)} />
       </ListGroup>
-      <Footnote>Settings and text drafts sync now. Attached draft files and the remaining libraries are still being added. Pairing credentials, biometrics and device permissions stay on each device.</Footnote>
-      {sync.deferredDrafts ? <Footnote>A draft changed on another device. Its incoming text will be applied after you leave that chat; your active composer stays as it is.</Footnote> : null}
+      <Footnote>Settings, drafts, attached files and reply context sync now. The remaining libraries are still being added. Pairing credentials, biometrics and device permissions stay on each device. Sending a shared draft needs a reachable sync home.</Footnote>
+      {sync.deferredDrafts ? <Footnote>A draft changed on another device. Its incoming composition will be applied after you leave that chat; your active composer stays as it is.</Footnote> : null}
       <View style={s.actions}>
         <Button title="Sync now" variant="secondary" loading={busy} onPress={() => void run(refreshPersonalSync)} />
         <Button title="Invite another device" disabled={sync.status === 'offline' || locked} loading={busy}
@@ -91,6 +92,7 @@ export default function SyncSettings() {
       <ConfirmButton title="Disconnect sync home" confirmTitle="Disconnect? Local drafts and the recovery journal will stay on this device."
         onConfirm={() => run(disconnectPersonalSync)} loading={busy} />
     </>}
+    <RetainedFiles />
   </Screen>;
 }
 

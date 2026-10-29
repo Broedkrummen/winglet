@@ -118,7 +118,7 @@ type AppState = {
   sendMessage: (serverId: string, chatId: string, text: string, opts?: string | SendOptions) => Promise<boolean>;
   updateDraftFiles: (serverId: string, chatId: string, fn: (files: DraftFile[]) => DraftFile[]) => void;
   setReplyTo: (serverId: string, chatId: string, ref?: ReplyRef) => void;
-  discardMessage: (serverId: string, chatId: string, clientId: string) => void;
+  discardMessage: (serverId: string, chatId: string, clientId: string) => Promise<boolean>;
   setDraft: (serverId: string, chatId: string, text: string) => void;
   respond: (serverId: string, itemId: string, reply: { choice?: string; answer?: string | string[] }) => Promise<void>;
   createChat: (serverId: string, title?: string) => Promise<Chat | undefined>;
@@ -934,11 +934,16 @@ export const useApp = create<AppState>((set, get) => {
       return true;
     },
 
-    discardMessage: (serverId, chatId, clientId) => {
-      updateOutbox(serverId, (o) => o.filter((x) => x.client_id !== clientId));
+    discardMessage: async (serverId, chatId, clientId) => {
+      try { await saveOutbox(serverId, entries => entries.filter(entry => entry.client_id !== clientId)); }
+      catch (error) {
+        toast({ serverId, title: 'Message kept', body: error instanceof Error ? error.message : 'Could not save this deletion. Free local storage and try again.' });
+        return false;
+      }
       patch(serverId, (s) => ({
         messages: { ...s.messages, [chatId]: (s.messages[chatId] ?? []).filter((m) => !(m.id === clientId && isLocal(m))) },
       }));
+      return true;
     },
 
     updateDraftFiles: (serverId, chatId, fn) => {

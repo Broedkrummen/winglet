@@ -102,3 +102,12 @@ export async function cacheSetStrict(key: string, value: unknown): Promise<void>
   const raw = JSON.stringify(value);
   await ordered(async () => { await ready(); await db.setItemAsync(key, seal(key, raw)); });
 }
+
+/** A sync journal must not silently reset when its encrypted storage is unreadable. */
+export async function cacheGetStrict<T>(key: string, fallback: T): Promise<T> {
+  return ordered(async () => {
+    await ready();
+    const raw = await db.getItemAsync(key);
+    return raw === null ? fallback : JSON.parse(open(key, raw)) as T;
+  });
+}

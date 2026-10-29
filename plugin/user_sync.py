@@ -149,6 +149,13 @@ class UserSync:
                 "SELECT m.group_id FROM sync_members m JOIN devices d ON d.id=m.device_id "
                 "WHERE m.device_id=? AND m.active=1 AND d.role='owner' ORDER BY m.group_id", (device,))]
 
+    def members(self, group, device):
+        with self._transaction() as db:
+            self._member(db, group, device)
+            return [dict(row) for row in db.execute(
+                'SELECT d.id,d.name,d.platform,d.last_seen FROM sync_members m JOIN devices d ON d.id=m.device_id '
+                "WHERE m.group_id=? AND m.active=1 AND d.role='owner' ORDER BY d.name,d.id", (group,))]
+
     def listing(self, group, device, after_kind='', after_id=''):
         if not isinstance(after_kind, str) or not isinstance(after_id, str) or len(after_kind) > 160 or len(after_id) > 160:
             raise SyncError('Invalid sync cursor.')
@@ -205,7 +212,7 @@ class UserSync:
                          (group, kind, record_id)).fetchone()
         return {'revision': row['revision'], 'fields': json.loads(row['state'])} if row else {'revision': 0, 'fields': {}}
 
-    def write(self, group, device, kind, record_id, *, operation_id, base_revision, changes, resolve=False):
+    def write(self, group, device, kind, record_id, *, operation_id, base_revision, changes, resolve=False, base_fields=None):
         _identifier(operation_id)
         if type(resolve) is not bool:
             raise SyncError('Invalid resolution flag.')
@@ -213,13 +220,21 @@ class UserSync:
             raise SyncError('Invalid base revision.')
         if not isinstance(changes, dict) or not 1 <= len(changes) <= 100:
             raise SyncError('Expected 1 to 100 changed fields.')
+        if base_fields is not None and (not isinstance(base_fields, dict) or set(base_fields) != set(changes)
+                or any(type(v) is not int or not 0 <= v <= base_revision for v in base_fields.values())):
+            raise SyncError('Expected a base revision for each changed field.')
         for field, value in changes.items():
             _identifier(field)
+            if field in {'__proto__', 'prototype', 'constructor'}:
+                raise SyncError('Reserved sync field name.')
             if not isinstance(value, dict) or set(value) - {'value', 'deleted'} or type(value.get('deleted')) is not bool:
                 raise SyncError('Each field needs a deleted flag and optional JSON value.')
             if (not value['deleted'] and 'value' not in value) or (value['deleted'] and 'value' in value):
                 raise SyncError('Deleted fields cannot carry a value; live fields require one.')
-        fingerprint = hashlib.sha256(_json([kind, record_id, base_revision, changes, resolve]).encode()).hexdigest()
+        payload = [kind, record_id, base_revision, changes, resolve]
+        if base_fields is not None:
+            payload.append(base_fields)
+        fingerprint = hashlib.sha256(_json(payload).encode()).hexdigest()
         with self._transaction() as db:
             self._member(db, group, device)
             previous = db.execute('SELECT fingerprint,result FROM sync_operations WHERE group_id=? AND device_id=? '
@@ -235,7 +250,8 @@ class UserSync:
             for field, value in changes.items():
                 old = record['fields'].get(field)
                 candidate = {**value, 'device_id': device, 'operation_id': operation_id, 'at': time.time()}
-                if old and not resolve and (old['revision'] > base_revision or len(old['candidates']) > 1):
+                field_base = base_fields[field] if base_fields is not None else base_revision
+                if old and not resolve and (old['revision'] > field_base or len(old['candidates']) > 1):
                     candidates = old['candidates'] + [candidate]
                     # Equal values do not require a choice; keep the existing provenance.
                     unique = { _json({k: c[k] for k in ('value', 'deleted') if k in c}) for c in candidates }
@@ -244,6 +260,8 @@ class UserSync:
                 else:
                     candidates = [candidate]
                 record['fields'][field] = {'revision': revision, 'candidates': candidates}
+            if len(record['fields']) > 100:
+                raise SyncError('A sync record can contain at most 100 fields.', 413)
             record['revision'] = revision
             state = _json(record['fields'])
             result = _json(record)

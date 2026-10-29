@@ -54,3 +54,14 @@ export async function cacheSetStrict(key: string, value: unknown): Promise<void>
     tx.objectStore(STORE).put(value, key);
   });
 }
+
+export async function cacheGetStrict<T>(key: string, fallback: T): Promise<T> {
+  const db = await open();
+  if (!db) throw new Error('Offline storage unavailable');
+  return new Promise<T>((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readonly');
+    const request = tx.objectStore(STORE).get(key);
+    tx.oncomplete = () => resolve(request.result === undefined ? fallback : request.result as T);
+    tx.onerror = tx.onabort = () => reject(new Error('Offline storage unavailable'));
+  });
+}

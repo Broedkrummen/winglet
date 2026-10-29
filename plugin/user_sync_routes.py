@@ -14,6 +14,8 @@ async def _run(request, action):
     try:
         if action == 'groups':
             result = {'groups': await asyncio.to_thread(service.groups, device)}
+        elif action == 'members':
+            result = {'members': await asyncio.to_thread(service.members, group, device)}
         elif action == 'records':
             result = await asyncio.to_thread(service.listing, group, device,
                                              request.query.get('after_kind', ''), request.query.get('after_id', ''))
@@ -44,7 +46,7 @@ async def _run(request, action):
                 result = await asyncio.to_thread(service.claim_submission, group, device,
                     request.match_info['record_id'], body['expected_revision'])
             else:
-                allowed = {'operation_id', 'base_revision', 'changes', 'resolve'}
+                allowed = {'operation_id', 'base_revision', 'changes', 'resolve', 'base_fields'}
                 if set(body) - allowed or not {'operation_id', 'base_revision', 'changes'} <= body.keys():
                     raise SyncError('Invalid sync mutation fields.')
                 result = await asyncio.to_thread(service.write, group, device, request.match_info['kind'],
@@ -55,6 +57,7 @@ async def _run(request, action):
 
 
 async def h_user_sync_groups(request): return await _run(request, 'groups')
+async def h_user_sync_members(request): return await _run(request, 'members')
 async def h_user_sync_create(request): return await _run(request, 'create')
 async def h_user_sync_invite(request): return await _run(request, 'invite')
 async def h_user_sync_join(request): return await _run(request, 'join')
@@ -70,6 +73,7 @@ def register_routes(app):
     app.router.add_post('/api/user-sync', h_user_sync_create)
     app.router.add_post('/api/user-sync/join', h_user_sync_join)
     app.router.add_post('/api/user-sync/{group_id}/invite', h_user_sync_invite)
+    app.router.add_get('/api/user-sync/{group_id}/members', h_user_sync_members)
     app.router.add_post('/api/user-sync/{group_id}/revoke', h_user_sync_revoke)
     app.router.add_post('/api/user-sync/{group_id}/drafts/{record_id}/submit', h_user_sync_submit)
     app.router.add_get('/api/user-sync/{group_id}/records', h_user_sync_records)

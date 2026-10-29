@@ -1,4 +1,5 @@
 import { WearSecurityBridge } from '../features/wear/SecurityBridge';
+import { PersonalSyncBridge } from '../features/sync/Bridge';
 import { PushSecurityBridge } from '../features/encrypted-push/SecurityBridge';
 import { AssistantSecurityBridge } from '../features/android-assistant/SecurityBridge';
 import { phoneSecurityReady } from '../features/phone-tools/runtime';
@@ -112,6 +113,7 @@ function Navigator() {
       <AssistantSecurityBridge />
       <PushSecurityBridge />
       <WearSecurityBridge />
+      <PersonalSyncBridge />
       <AppNavigation>
       <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: t.colors.bg }, animation: 'slide_from_right' }}>
         {/* Under an open chat or screen, the tabs don't re-render; they catch up when you come back. */}

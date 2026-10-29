@@ -167,3 +167,24 @@ def test_submission_rejects_stale_or_conflicted_drafts(linked):
         service.claim_submission(group, a, 'chat-1', 1)
     with pytest.raises(SyncError, match='conflicting'):
         service.claim_submission(group, a, 'chat-1', conflict['revision'])
+
+
+def test_field_bases_do_not_silently_acknowledge_unseen_foreign_edits(linked):
+    _, service, group, a, b = linked
+    write(service, group, b, 'foreign-title', 0, title='remote')
+    own = write(service, group, a, 'own-text', 0, text='one')
+    changed = service.write(group, a, 'draft', 'chat-1', operation_id='queued-edit', base_revision=own['revision'],
+        base_fields={'text': own['fields']['text']['revision'], 'title': 0},
+        changes={'text': {'deleted': False, 'value': 'two'}, 'title': {'deleted': False, 'value': 'local'}})
+    assert len(changed['fields']['text']['candidates']) == 1
+    assert {c['value'] for c in changed['fields']['title']['candidates']} == {'remote', 'local'}
+
+
+def test_accumulated_record_field_limit_matches_client_and_rolls_back(linked):
+    _, service, group, a, _ = linked
+    service.write(group, a, 'preferences', 'app', operation_id='hundred-fields', base_revision=0,
+        changes={f'field{i}': {'deleted': False, 'value': i} for i in range(100)})
+    with pytest.raises(SyncError, match='at most 100'):
+        service.write(group, a, 'preferences', 'app', operation_id='overflow', base_revision=1,
+            changes={'extra': {'deleted': False, 'value': 'no'}})
+    assert service.read(group, a, 'preferences', 'app')['revision'] == 1

@@ -120,6 +120,7 @@ class Forbidden(PermissionError):
 #   owner_signed  an owner's verified device, with a signed request: every control action
 ROUTE_POLICY = {
     "h_user_sync_groups": "owner", "h_user_sync_records": "owner", "h_user_sync_read": "owner",
+    "h_user_sync_members": "owner",
     "h_user_sync_create": "owner_signed", "h_user_sync_invite": "owner_signed",
     "h_user_sync_join": "owner_signed", "h_user_sync_revoke": "owner_signed", "h_user_sync_write": "owner_signed",
     "h_user_sync_submit": "owner_signed",

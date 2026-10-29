@@ -370,6 +370,30 @@ class UserSync:
                 raise SyncError('Each field needs a deleted flag and optional JSON value.')
             if (not value['deleted'] and 'value' not in value) or (value['deleted'] and 'value' in value):
                 raise SyncError('Deleted fields cannot carry a value; live fields require one.')
+            if kind == 'bookmark':
+                if field not in {'source', 'snapshot', 'title', 'note', 'tags', 'removed'}:
+                    raise SyncError('Invalid bookmark field. Source text and credentials stay on the source server.')
+                if not value['deleted']:
+                    item = value['value']
+                    if field == 'source':
+                        if not isinstance(item, dict) or set(item) != {'server_id', 'server_fingerprint', 'chat_id', 'message_id'}:
+                            raise SyncError('A bookmark needs its exact source identity.')
+                        for part in item.values():
+                            _identifier(part)
+                    elif field == 'snapshot':
+                        if not isinstance(item, dict) or set(item) != {'id', 'sha256'}:
+                            raise SyncError('A bookmark snapshot contains only a source-local reference.')
+                        _identifier(item['id'])
+                        if not isinstance(item['sha256'], str) or len(item['sha256']) != 64 or any(c not in '0123456789abcdef' for c in item['sha256']):
+                            raise SyncError('Invalid bookmark snapshot hash.')
+                    elif field in {'title', 'note'}:
+                        if not isinstance(item, str) or len(item) > (160 if field == 'title' else 8000):
+                            raise SyncError('Bookmark title or note is too long.')
+                    elif field == 'tags':
+                        if not isinstance(item, list) or len(item) > 20 or any(not isinstance(tag, str) or not 1 <= len(tag) <= 64 for tag in item):
+                            raise SyncError('Use at most 20 bookmark tags of 1–64 characters.')
+                    elif type(item) is not bool:
+                        raise SyncError('Invalid bookmark removal flag.')
             if kind == 'read_position':
                 if field not in {'watermark', 'resume', 'server_id', 'server_fingerprint', 'chat_id'}:
                     raise SyncError('Invalid reading-state field.')

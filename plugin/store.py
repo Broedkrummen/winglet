@@ -44,6 +44,10 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS messages_chat ON messages (chat_id, created_at);
 -- Pages are read newest first by rowid; this index carries it, so a page never sorts the whole chat.
 CREATE INDEX IF NOT EXISTS messages_chat_rowid ON messages (chat_id);
+CREATE TABLE IF NOT EXISTS bookmark_snapshots (
+    id TEXT PRIMARY KEY, chat_id TEXT NOT NULL, message_id TEXT NOT NULL, sha256 TEXT NOT NULL,
+    role TEXT NOT NULL, text TEXT NOT NULL, truncated INTEGER NOT NULL, created_at REAL NOT NULL
+);
 -- A phone's resend of a send it never heard back about, however long it was offline, finds the original here.
 CREATE INDEX IF NOT EXISTS messages_client_id ON messages (chat_id, json_extract(meta, '$.client_id')) WHERE role = 'user';
 CREATE TABLE IF NOT EXISTS message_deletions (
@@ -523,6 +527,7 @@ class Store:
                        "SELECT id, chat_id, ? FROM messages WHERE chat_id = ?", (_now(), chat_id))
             self._exec("DELETE FROM messages WHERE chat_id = ?", (chat_id,))
             self._exec("DELETE FROM chat_branches WHERE chat_id = ?", (chat_id,))
+            self._exec("DELETE FROM bookmark_snapshots WHERE chat_id = ?", (chat_id,))
             return self._exec("DELETE FROM chats WHERE id = ?", (chat_id,)) == 1
 
     def _touch_chat(self, chat_id: str, preview: str, meta: Optional[Dict[str, Any]] = None) -> None:

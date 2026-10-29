@@ -219,7 +219,7 @@ def test_listing_is_bounded_and_cursor_does_not_skip_records(linked):
     _, service, group, a, _ = linked
     for index in range(101):
         service.write(group, a, 'bookmark', f'{index:03}', operation_id=f'op-{index}', base_revision=0,
-                      changes={'note': {'deleted': False, 'value': index}})
+                      changes={'note': {'deleted': False, 'value': str(index)}})
     first = service.listing(group, a)
     assert len(first['records']) == 100
     second = service.listing(group, a, first['next']['kind'], first['next']['id'])
@@ -268,3 +268,27 @@ def test_accumulated_record_field_limit_matches_client_and_rolls_back(linked):
         service.write(group, a, 'preferences', 'app', operation_id='overflow', base_revision=1,
             changes={'extra': {'deleted': False, 'value': 'no'}})
     assert service.read(group, a, 'preferences', 'app')['revision'] == 1
+
+@pytest.mark.parametrize('field,value', [
+    ('text', 'source contents'), ('source', {'server_id': 's', 'token': 'secret'}),
+    ('snapshot', {'id': 'snapshot', 'sha256': '0' * 64, 'text': 'cached private answer'}),
+    ('note', 4), ('tags', ['x' * 65]), ('removed', 'true'),
+])
+def test_bookmarks_reject_embedded_source_contents_credentials_and_invalid_metadata(linked, field, value):
+    _, service, group, a, _ = linked
+    with pytest.raises(SyncError):
+        service.write(group, a, 'bookmark', 'answer', operation_id='invalid', base_revision=0,
+                      changes={field: {'deleted': False, 'value': value}})
+
+
+def test_bookmark_notes_keep_concurrent_versions_for_explicit_choice(linked):
+    _, service, group, a, b = linked
+    source = {'server_id': 'server', 'server_fingerprint': 'fingerprint', 'chat_id': 'chat', 'message_id': 'message'}
+    first = service.write(group, a, 'bookmark', 'answer', operation_id='create', base_revision=0,
+                          changes={'source': {'deleted': False, 'value': source}, 'note': {'deleted': False, 'value': 'Original'}})
+    service.write(group, a, 'bookmark', 'answer', operation_id='desktop-note', base_revision=first['revision'],
+                  changes={'note': {'deleted': False, 'value': 'Desktop note'}})
+    conflict = service.write(group, b, 'bookmark', 'answer', operation_id='phone-note', base_revision=first['revision'],
+                             changes={'note': {'deleted': False, 'value': 'Phone note'}})
+    assert {item['value'] for item in conflict['fields']['note']['candidates']} == {'Desktop note', 'Phone note'}
+    assert conflict['fields']['source']['candidates'][0]['value'] == source

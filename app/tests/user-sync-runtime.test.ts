@@ -505,3 +505,28 @@ test('disconnect stops this session even when its durable configuration cannot b
   assert.equal(h.requests.length, before);
   stop();
 });
+
+test('bookmark editors retain viewed field bases across unseen updates and journal offline', async () => {
+  const h = harness();
+  await h.runtime.connectPersonalSync(h.server);
+  const candidate = (value: string) => ({ deleted: false, value, device_id: 'phone', operation_id: value, at: 1 });
+  h.records.set('bookmark/answer', { revision: 1, fields: { note: { revision: 1, candidates: [candidate('original')] } } });
+  await h.runtime.refreshPersonalSync();
+  const view = h.runtime.usePersonalSync.getState().bookmarks[0];
+  const scope = h.runtime.usePersonalSync.getState().scope;
+  h.records.set('bookmark/answer', { revision: 2, fields: { note: { revision: 2, candidates: [candidate('unseen remote edit')] } } });
+  await h.runtime.refreshPersonalSync();
+  h.useApp.setState({ network: false });
+  await h.runtime.savePersonalBookmark(scope, 'answer', { note: { deleted: false, value: 'local edit' } }, view.bases);
+  const saved = [...h.cache.values()].find((value: any) => value?.version === 1 && value.pending?.some((item: any) => item.kind === 'bookmark')) as any;
+  const pending = saved.pending.find((item: any) => item.kind === 'bookmark');
+  assert.equal(pending.mutation.base_fields.note, 1);
+  assert.equal(pending.mutation.changes.note.value, 'local edit');
+  assert.equal(h.runtime.usePersonalSync.getState().bookmarks[0].values.note.value, 'local edit');
+  h.useLock.setState({ locked: true });
+  await assert.rejects(h.runtime.savePersonalBookmark(scope, 'answer', { note: { deleted: true } }, view.bases), /unlock/);
+  h.useLock.setState({ locked: false });
+  await h.runtime.disconnectPersonalSync();
+  await assert.rejects(h.runtime.savePersonalBookmark(scope, 'answer', { note: { deleted: true } }, view.bases), /same sync home/);
+  assert.equal(h.runtime.usePersonalSync.getState().bookmarks.length, 0);
+});

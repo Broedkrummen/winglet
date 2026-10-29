@@ -16,9 +16,11 @@ import { emptyReplica, receive, recordKey, stage, SyncReplica, visibleValues, ty
 type Home = { serverId: string; deviceId: string; groupId: string };
 type SyncPage = { records: (RecordState & { kind: Kind; id: string })[]; next: { kind: string; id: string } | null };
 export type Conflict = { kind: Kind; id: string; field: string; revision: number; candidates: Candidate[] };
+export type PersonalRecord = { id: string; values: Record<string, Value>; bases: Record<string, number>; conflicted: boolean };
 type SyncState = { home?: Home; status: 'off' | 'ready' | 'syncing' | 'error' | 'offline' | 'locked';
-  error?: string; pending: number; conflicts: Conflict[]; deferredDrafts: number; deferredReading: number; lastSync?: number };
-export const usePersonalSync = create<SyncState>(() => ({ status: 'off', pending: 0, conflicts: [], deferredDrafts: 0, deferredReading: 0 }));
+  error?: string; pending: number; conflicts: Conflict[]; deferredDrafts: number; deferredReading: number; lastSync?: number;
+  scope?: string; bookmarks: PersonalRecord[] };
+export const usePersonalSync = create<SyncState>(() => ({ status: 'off', pending: 0, conflicts: [], deferredDrafts: 0, deferredReading: 0, bookmarks: [] }));
 const CONFIG = 'user-sync:home:v1';
 let replica: SyncReplica | undefined;
 let home: Home | undefined;
@@ -43,7 +45,34 @@ function publish() {
     for (const [field, value] of Object.entries(record.fields)) if (value.candidates.length > 1)
       conflicts.push({ kind, id, field, revision: record.revision, candidates: value.candidates });
   }
-  usePersonalSync.setState({ home, conflicts, pending: (replica?.state.pending.length ?? 0) + (replica?.state.recoveringDrafts?.length ?? 0) });
+  const ids = new Set<string>();
+  if (replica) {
+    for (const key of Object.keys(replica.state.records)) { const [kind, id] = JSON.parse(key); if (kind === 'bookmark') ids.add(id); }
+    for (const pending of replica.state.pending) if (pending.kind === 'bookmark') ids.add(pending.id);
+  }
+  const bookmarks = [...ids].map(id => {
+    const record = replica!.state.records[recordKey('bookmark', id)];
+    return { id, values: visibleValues(replica!.state, 'bookmark', id),
+      bases: Object.fromEntries(Object.entries(record?.fields ?? {}).map(([field, value]) => [field, value.revision])),
+      conflicted: Object.values(record?.fields ?? {}).some(value => value.candidates.length > 1) };
+  });
+  usePersonalSync.setState({ home, conflicts, bookmarks, scope: home ? `${epoch}:${journalKey(home)}` : undefined,
+    pending: (replica?.state.pending.length ?? 0) + (replica?.state.recoveringDrafts?.length ?? 0) });
+}
+
+/** Editors retain their viewed field bases; a later refresh must not rebase unseen changes. */
+export async function savePersonalBookmark(scope: string, id: string, changes: Record<string, Value>, bases: Record<string, number>) {
+  const engine = replica;
+  if (!engine || !scope || scope !== usePersonalSync.getState().scope || useLock.getState().locked)
+    throw new Error('Reconnect to the same sync home and unlock Winglet before saving. Your edits are kept.');
+  await engine.edit(state => {
+    if (engine !== replica || scope !== usePersonalSync.getState().scope || useLock.getState().locked)
+      throw new Error('The sync home changed. Your edits are kept.');
+    const key = recordKey('bookmark', id);
+    const next = stage({ ...state, observed: { ...state.observed, [key]: bases } }, 'bookmark', id, idempotencyKey(), changes);
+    return { ...next, observed: state.observed };
+  });
+  void refreshPersonalSync();
 }
 
 function fail(error: unknown) {
@@ -103,7 +132,7 @@ export async function disconnectPersonalSync() {
   replica = undefined;
   bootFailure = undefined;
   uncaptured.clear();
-  usePersonalSync.setState({ home: undefined, status: 'off', error: undefined, pending: 0, conflicts: [], deferredDrafts: 0, deferredReading: 0, lastSync: undefined });
+  usePersonalSync.setState({ home: undefined, scope: undefined, bookmarks: [], status: 'off', error: undefined, pending: 0, conflicts: [], deferredDrafts: 0, deferredReading: 0, lastSync: undefined });
   try { await cacheSetStrict(CONFIG, null); }
   catch {
     const error = new Error('Sync stopped for this session, but the disconnection could not be saved. '

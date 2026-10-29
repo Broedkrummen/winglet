@@ -19,7 +19,7 @@ export async function runCommand(id: CommandId, navigation: { home: () => void; 
     try { await startNewChat(server.id); } finally { creating = false; }
   } else {
     const path = id === 'commands' ? '/commands' : id === 'bots' ? '/bots' : id === 'chats' ? '/chats'
-      : id === 'inbox' ? '/inbox' : '/settings';
+      : id === 'inbox' ? '/inbox' : id === 'bookmarks' ? '/bookmarks' : '/settings';
     router.navigate(path);
   }
 }

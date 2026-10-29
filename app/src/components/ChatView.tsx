@@ -17,6 +17,7 @@ import { routineHref } from '../features/routine-history/model';
 import { mediaUrl } from '../lib/api';
 import { useLock } from '../lib/appLock';
 import { readingKey, visibleReading } from '../features/sync/reading';
+import { SaveBookmarkSheet } from '../features/bookmarks/SaveSheet';
 import { startNewChat } from '../lib/actions';
 import { projectOf } from '../features/projects/logic';
 import { connectionView } from '../lib/connection';
@@ -946,6 +947,7 @@ function MessageMenu({ server, message, busy, onClose, onReply, onQuote, onSelec
   const t = useTheme();
   const s = useStyles();
   const [last, setLast] = useState(message);
+  const [saving, setSaving] = useState(false);
   if (message && message !== last) setLast(message);
   const m = message ?? last;
   // Only while the menu is open, and without copying the chat: this runs on every store change.
@@ -965,9 +967,10 @@ function MessageMenu({ server, message, busy, onClose, onReply, onQuote, onSelec
   const branchable = canBranch(branchingState, m.id);
   const regenerable = canRegenerate(branchingState, m.id);
   return (
-    <Sheet visible={!!message} onClose={onClose} title="Message options" scrollable>
+    <><Sheet visible={!!message} onClose={onClose} title="Message options" scrollable>
       {m.text ? <Text style={s.menuPreview} numberOfLines={2}>{plainText(m.text)}</Text> : null}
       <SheetAction icon={<Reply size={20} color={t.colors.text} />} label="Reply" onPress={run(() => onReply(m))} />
+      {m.status === 'final' && (m.role === 'bot' || m.role === 'user') ? <SheetAction icon={<FileText />} label="Save answer" onPress={run(() => setSaving(true))} /> : null}
       {onQuote && canQuote(m) ? <SheetAction icon={<FileText size={20} color={t.colors.text} />} label="Ask about a quote" onPress={run(() => onQuote(m))} /> : null}
       {m.text ? <SheetAction icon={<Copy size={20} color={t.colors.text} />} label="Copy text" onPress={run(async () => {
         try {
@@ -1005,6 +1008,7 @@ function MessageMenu({ server, message, busy, onClose, onReply, onQuote, onSelec
         </>
       )}
     </Sheet>
+    {saving ? <SaveBookmarkSheet server={server} message={m} onClose={() => setSaving(false)} /> : null}</>
   );
 }
 

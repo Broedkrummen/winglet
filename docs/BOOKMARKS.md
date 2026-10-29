@@ -1,6 +1,6 @@
 # Saved answers and bookmarks
 
-Feature #4 is in progress under issue #15. This checkpoint adds source APIs and typed sync records; the Save action, library, note/tag editor and cross-device UI verification remain to be implemented.
+Feature #4 is in progress under issue #15. Source APIs, typed sync records, Save answer, the library and note/tag editing are connected. Signed-route browser checks cover desktop/phone sync, explicit concurrent choices, older-source pagination and revocation. Physical-device and wider interruption checks remain.
 
 ## Storage and access
 
@@ -17,6 +17,12 @@ Snapshots stay on the source server, behind the conversation's current access an
 
 Snapshots contain at most 8,192 Unicode characters (at most 32 KiB UTF-8) and explicitly report truncation. The installation stores at most 10,000 snapshots. Deleting a conversation atomically removes its snapshots; recreating the same conversation ID cannot expose the old contents. No route enumerates another device's private saved records.
 
-## Remaining UI integration
+## App workflow
 
-Use the canonical personal-sync journal for create/edit/remove and explicit concurrent choices. Save from Message options, optionally preview and create a bounded snapshot, then expose a searchable saved library and note/tag editing. Show source unavailable/changed/deleted states without falling back to a cached private snippet. Open a source through the existing focus/pagination path. Add discovery to Commands when the library exists. Verify save-on-phone/open-on-desktop, conflicting notes, source deletion, ACL revocation and offline recovery before calling the feature complete.
+Save answer is in Message options. Settings and Commands open a searchable library of personal titles, notes and tags. Editors retain their viewed field bases across background refresh, so competing edits become explicit choices in Sync settings. Incoming state does not replace form text. Offline edits use the canonical durable journal.
+
+The bookmark reference is journaled before any source snapshot is created. An unconfirmed snapshot remains discoverable through that reference, with explicit Retry snapshot creation. Retries use the original hash and ID; an edited source cannot silently become the saved version. Show removed bookmarks permits restoration and separate explicit snapshot release. Releasing text does not delete its original message or run a task.
+
+Original text is transient, scoped to the matching paired installation and checked again on opening or reloading. While visible, checks serialize every 15 seconds; failed access clears the text rather than using a persistent fallback. Lock, background, blur and endpoint changes hide it immediately. Remote revocation is learned on the next check; this is not a claim of instantaneous cross-server invalidation. Open original uses the existing focus/pagination path.
+
+Remaining checks include physical Android/iPhone sheet/sharing behavior, interruption and storage-failure combinations beyond the covered journal and failed-request cases, and broader native accessibility verification. No paid Hermes execution is needed to save or open a bookmark.

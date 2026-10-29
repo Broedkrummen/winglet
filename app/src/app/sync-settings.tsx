@@ -111,7 +111,7 @@ function ConflictChoice({ conflict, members, disabled, onChoose }: {
   const canCombine = conflict.candidates.every(candidate => !candidate.deleted && typeof candidate.value === 'string');
   return <View style={s.conflict}>
     <Text style={s.heading}>{label.charAt(0).toUpperCase() + label.slice(1)}</Text>
-    <Text style={s.context}>{conflict.kind === 'draft' ? `Draft · ${conflict.id}` : conflict.kind}</Text>
+    <Text style={s.context}>{conflict.kind === 'draft' ? `Draft · ${conflict.id}` : conflict.kind === 'bookmark' ? `Bookmark · ${conflict.id}` : conflict.kind}</Text>
     {conflict.candidates.map((candidate, index) => <View key={`${candidate.device_id}:${candidate.operation_id}:${index}`} style={s.candidate}>
       <Text style={s.context}>{members.find(member => member.id === candidate.device_id)?.name ?? 'Previously linked device'} · {new Date(candidate.at * 1000).toLocaleString()}</Text>
       <Text selectable numberOfLines={expanded ? undefined : 8} style={s.value}>{candidate.deleted ? 'Removed' : typeof candidate.value === 'string' ? candidate.value || '(empty)' : JSON.stringify(candidate.value, null, 2)}</Text>

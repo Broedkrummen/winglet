@@ -1,4 +1,4 @@
-export type CommandId = 'commands' | 'home' | 'chats' | 'inbox' | 'settings' | 'new-chat' | 'bots';
+export type CommandId = 'commands' | 'home' | 'chats' | 'inbox' | 'settings' | 'new-chat' | 'bots' | 'bookmarks';
 export type Command = { id: CommandId; label: string; keywords: string; key?: string; shift?: boolean };
 
 /** Shared discovery and shortcut registry; execution stays with the existing navigation actions. */
@@ -8,6 +8,7 @@ export const commands: readonly Command[] = [
   { id: 'chats', label: 'Conversations and search', keywords: 'chats messages find', key: 'f', shift: true },
   { id: 'inbox', label: 'Inbox', keywords: 'approvals questions waiting', key: 'i', shift: true },
   { id: 'settings', label: 'Settings', keywords: 'preferences appearance sync' },
+  { id: 'bookmarks', label: 'Saved answers', keywords: 'bookmarks notes tags snapshots' },
   { id: 'new-chat', label: 'New conversation', keywords: 'chat start', key: 'o', shift: true },
   { id: 'bots', label: 'Choose a bot', keywords: 'server switch agent' },
 ];

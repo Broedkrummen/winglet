@@ -71,6 +71,7 @@ export default function SettingsScreen() {
       <ListRow title="Appearance" value={`${themeLabel} · ${ACCENTS[prefs.accent].label}`} icon={<Palette />} onPress={() => router.push('/appearance')} />
       <ListRow title="Notifications" icon={<Bell />} onPress={() => router.push('/notifications')} />
       <ListRow title="Commands and shortcuts" subtitle="Find actions and keyboard shortcuts" onPress={() => router.push('/commands')} />
+      <ListRow title="Saved answers" subtitle="Bookmarks, notes and saved text" onPress={() => router.push('/bookmarks')} />
       <ListRow title="Sync" subtitle={sync.conflicts.length ? `${sync.conflicts.length} choices needed` : sync.home ? 'Devices linked to your Hermes home' : 'Connect your devices'} onPress={() => router.push('/sync-settings')} />
       {Platform.OS === 'android' ? <ListRow title="App lock" icon={<Fingerprint />}
         right={<Toggle label="App lock" value={prefs.appLock} onValueChange={async (on) => {

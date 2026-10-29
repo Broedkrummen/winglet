@@ -46,10 +46,42 @@ CREATE TABLE IF NOT EXISTS sync_submissions (
     submission_id TEXT NOT NULL UNIQUE, fingerprint TEXT NOT NULL, created_at REAL NOT NULL,
     PRIMARY KEY(group_id, record_id, generation)
 );
+CREATE TABLE IF NOT EXISTS sync_blobs (
+    group_id TEXT NOT NULL, id TEXT NOT NULL, sha256 TEXT NOT NULL, name TEXT NOT NULL,
+    mime TEXT NOT NULL, kind TEXT NOT NULL, size INTEGER NOT NULL, created_at REAL NOT NULL,
+    PRIMARY KEY(group_id,id)
+);
+CREATE TABLE IF NOT EXISTS sync_blob_refs (
+    group_id TEXT NOT NULL, record_id TEXT NOT NULL, blob_id TEXT NOT NULL,
+    PRIMARY KEY(group_id,record_id,blob_id)
+);
+CREATE TABLE IF NOT EXISTS sync_submission_blobs (
+    group_id TEXT NOT NULL, submission_id TEXT NOT NULL, blob_id TEXT NOT NULL,
+    PRIMARY KEY(group_id,submission_id,blob_id)
+);
+CREATE TABLE IF NOT EXISTS sync_submission_payloads (
+    group_id TEXT NOT NULL, submission_id TEXT NOT NULL, payload TEXT NOT NULL,
+    PRIMARY KEY(group_id,submission_id)
+);
+CREATE TABLE IF NOT EXISTS sync_submission_receipts (
+    group_id TEXT NOT NULL, submission_id TEXT NOT NULL, receipt TEXT NOT NULL,
+    device_id TEXT NOT NULL, created_at REAL NOT NULL,
+    PRIMARY KEY(group_id,submission_id)
+);
+CREATE TABLE IF NOT EXISTS sync_blob_usage (
+    group_id TEXT NOT NULL, blob_id TEXT NOT NULL, device_id TEXT NOT NULL,
+    size INTEGER NOT NULL, created_at REAL NOT NULL,
+    PRIMARY KEY(group_id,blob_id)
+);
+CREATE TABLE IF NOT EXISTS sync_submission_file_releases (
+    group_id TEXT NOT NULL, submission_id TEXT NOT NULL, device_id TEXT NOT NULL, created_at REAL NOT NULL,
+    PRIMARY KEY(group_id,submission_id)
+);
 """
 
 KINDS = frozenset({'preferences', 'draft', 'organization', 'bookmark', 'preset', 'read_position'})
 MAX_BYTES = 256 * 1024
+BLOB_FIELDS = ('id', 'sha256', 'name', 'mime', 'kind', 'size')
 
 
 def _json(value):
@@ -188,8 +220,8 @@ class UserSync:
             if generation.get('deleted', True):
                 raise SyncError('The draft needs a submission generation.')
             generation = _identifier(generation.get('value'))
-            fingerprint = hashlib.sha256(_json({key: {k: value[k] for k in ('deleted', 'value') if k in value}
-                for key, value in values.items()}).encode()).hexdigest()
+            snapshot = {key: {k: value[k] for k in ('deleted', 'value') if k in value} for key, value in values.items()}
+            fingerprint = hashlib.sha256(_json(snapshot).encode()).hexdigest()
             existing = db.execute('SELECT submission_id,fingerprint FROM sync_submissions '
                                   'WHERE group_id=? AND record_id=? AND generation=?',
                                   (group, record_id, generation)).fetchone()
@@ -197,11 +229,93 @@ class UserSync:
                 if existing['fingerprint'] != fingerprint:
                     raise SyncError('This draft generation was already submitted with different content. '
                                     'Start a new draft generation to send the edited message.', 409)
-                return {'submission_id': existing['submission_id'], 'revision': expected_revision}
+                result = {'submission_id': existing['submission_id'], 'revision': expected_revision}
+                settled = db.execute('SELECT receipt FROM sync_submission_receipts WHERE group_id=? AND submission_id=?',
+                                     (group, existing['submission_id'])).fetchone()
+                if settled:
+                    result['receipt'] = json.loads(settled['receipt'])
+                if db.execute('SELECT 1 FROM sync_submission_file_releases WHERE group_id=? AND submission_id=?',
+                              (group, existing['submission_id'])).fetchone():
+                    result['files_released'] = True
+                return result
             submission = str(uuid.uuid4())
             db.execute('INSERT INTO sync_submissions VALUES (?,?,?,?,?,?)',
                        (group, record_id, generation, submission, fingerprint, time.time()))
+            db.execute('INSERT INTO sync_submission_payloads VALUES (?,?,?)', (group, submission, _json(snapshot)))
+            for blob_id in self._file_refs(db, group, record['fields']):
+                db.execute('INSERT INTO sync_submission_blobs VALUES (?,?,?)', (group, submission, blob_id))
             return {'submission_id': submission, 'revision': expected_revision}
+
+    def settle_submission(self, group, device, record_id, submission_id, receipt):
+        """A linked device confirms its target message; this is not remote server attestation."""
+        if not isinstance(receipt, dict) or set(receipt) != {'server_id', 'chat_id', 'message_id', 'client_id'}:
+            raise SyncError('Expected a target message receipt.')
+        for value in receipt.values():
+            _identifier(value)
+        if receipt['client_id'] != submission_id:
+            raise SyncError('The receipt does not identify this submission.', 409)
+        encoded = _json(receipt)
+        with self._transaction() as db:
+            self._member(db, group, device)
+            row = db.execute('SELECT p.payload FROM sync_submission_payloads p JOIN sync_submissions s '
+                'ON s.group_id=p.group_id AND s.submission_id=p.submission_id '
+                'WHERE s.group_id=? AND s.record_id=? AND s.submission_id=?', (group, record_id, submission_id)).fetchone()
+            if not row:
+                raise SyncError('This submission snapshot is unavailable.', 404)
+            payload = json.loads(row['payload'])
+            for key in ('server_id', 'chat_id'):
+                field = payload.get(key, {})
+                if field.get('deleted', True) or field.get('value') != receipt[key]:
+                    raise SyncError('The receipt belongs to a different target.', 409)
+            previous = db.execute('SELECT receipt FROM sync_submission_receipts WHERE group_id=? AND submission_id=?',
+                                  (group, submission_id)).fetchone()
+            if previous and previous['receipt'] != encoded:
+                raise SyncError('A different target receipt was already recorded.', 409)
+            if not previous:
+                db.execute('INSERT INTO sync_submission_receipts VALUES (?,?,?,?,?)',
+                           (group, submission_id, encoded, device, time.time()))
+            db.execute('DELETE FROM sync_submission_blobs WHERE group_id=? AND submission_id=?', (group, submission_id))
+            return {'status': 'linked_device_confirmed', 'receipt': receipt}
+
+    def release_submission_files(self, group, device, record_id, submission_id, confirmation):
+        """Explicitly discard source retention; this never cancels work or authorizes a new run."""
+        if confirmation != 'release-retained-files-without-confirmed-delivery':
+            raise SyncError('Explicit confirmation is required to release unconfirmed source files.')
+        with self._transaction() as db:
+            self._member(db, group, device)
+            if not db.execute('SELECT 1 FROM sync_submissions WHERE group_id=? AND record_id=? AND submission_id=?',
+                              (group, record_id, submission_id)).fetchone():
+                raise SyncError('This submission is unavailable.', 404)
+            db.execute('INSERT OR IGNORE INTO sync_submission_file_releases VALUES (?,?,?,?)',
+                       (group, submission_id, device, time.time()))
+            db.execute('DELETE FROM sync_submission_blobs WHERE group_id=? AND submission_id=?', (group, submission_id))
+            return {'files_released': True, 'execution_cancelled': False}
+
+    @staticmethod
+    def _file_refs(db, group, fields):
+        ids = set()
+        for candidate in fields.get('files', {}).get('candidates', []):
+            if candidate['deleted']:
+                continue
+            files = candidate.get('value')
+            if not isinstance(files, list) or len(files) > 20:
+                raise SyncError('A draft can share at most 20 files.')
+            slots = set()
+            for item in files:
+                if not isinstance(item, dict) or set(item) != {*BLOB_FIELDS, 'slot'}:
+                    raise SyncError('Invalid shared file metadata.')
+                if type(item['size']) is not int or item['size'] <= 0:
+                    raise SyncError('Invalid shared file size.')
+                slot = _identifier(item['slot'])
+                blob_id = _identifier(item['id'])
+                row = db.execute('SELECT * FROM sync_blobs WHERE group_id=? AND id=?', (group, blob_id)).fetchone()
+                if not row or any(item[key] != row[key] for key in BLOB_FIELDS):
+                    raise SyncError('A shared file is unavailable. Keep your local file and upload it again.', 409)
+                if slot in slots:
+                    raise SyncError('Each shared file needs its own draft slot.')
+                slots.add(slot)
+                ids.add(blob_id)
+        return ids
 
     @staticmethod
     def _read(db, group, kind, record_id):
@@ -263,6 +377,11 @@ class UserSync:
             if len(record['fields']) > 100:
                 raise SyncError('A sync record can contain at most 100 fields.', 413)
             record['revision'] = revision
+            if kind == 'draft':
+                file_refs = self._file_refs(db, group, record['fields'])
+                db.execute('DELETE FROM sync_blob_refs WHERE group_id=? AND record_id=?', (group, record_id))
+                for blob_id in file_refs:
+                    db.execute('INSERT INTO sync_blob_refs VALUES (?,?,?)', (group, record_id, blob_id))
             state = _json(record['fields'])
             result = _json(record)
             db.execute('INSERT INTO sync_records VALUES (?,?,?,?,?) ON CONFLICT(group_id,kind,record_id) '

@@ -107,6 +107,12 @@ class MessageRejected(ValueError):
     """A message the server won't accept (bad attachments, reply to a missing message, ...)."""
 
 
+class UploadRefused(MessageRejected):
+    def __init__(self, reason: str, status: int):
+        super().__init__(reason)
+        self.status = status
+
+
 class Forbidden(PermissionError):
     """The device is paired but its role doesn't allow this."""
 
@@ -121,9 +127,15 @@ class Forbidden(PermissionError):
 ROUTE_POLICY = {
     "h_user_sync_groups": "owner", "h_user_sync_records": "owner", "h_user_sync_read": "owner",
     "h_user_sync_members": "owner",
+    "h_sync_blob_put": "owner_signed", "h_sync_blob_get": "owner",
+    "h_sync_materialize": "owner_signed",
+    "h_upload_hold": "owner_signed", "h_upload_release": "owner_signed",
+    "h_orphan_uploads": "owner",
     "h_user_sync_create": "owner_signed", "h_user_sync_invite": "owner_signed",
     "h_user_sync_join": "owner_signed", "h_user_sync_revoke": "owner_signed", "h_user_sync_write": "owner_signed",
     "h_user_sync_submit": "owner_signed",
+    "h_user_sync_settle": "owner_signed",
+    "h_user_sync_release_files": "owner_signed",
     "h_wear_links": "device", "h_wear_link_create": "signed", "h_wear_link_delete": "signed", "h_wear_relay": "public",
     "h_encrypted_push_get": "device", "h_encrypted_push_put": "signed", "h_encrypted_push_delete": "signed",
     "h_phone_tools": "device", "h_phone_tools_put": "signed", "h_phone_tools_revoke": "signed",
@@ -278,6 +290,9 @@ class Hub:
         self.max_upload_bytes = _env_mb("WINGLET_MAX_UPLOAD_MB", 50)
         self.device_daily_upload_bytes = _env_mb("WINGLET_DAILY_UPLOAD_MB", 500)
         self.total_upload_bytes = _env_mb("WINGLET_UPLOAD_STORAGE_MB", 4096)
+        from .sync_blobs import SyncBlobs
+        self.sync_blobs = SyncBlobs(self.user_sync, Path(store.path).with_name(Path(store.path).name + '.sync-blobs'),
+            max_file_bytes=self.max_upload_bytes, total_bytes=self.total_upload_bytes, daily_bytes=self.device_daily_upload_bytes)
         # Optional providers installed by the adapter (the hub never imports Hermes).
         self.commands_provider: Optional[Callable[[], List[Dict[str, Any]]]] = None
         # Resolves a typed command or alias to Hermes's canonical name ("" when unknown).
@@ -495,6 +510,10 @@ class Hub:
         context_insights_routes.register_routes(app)
         from . import user_sync_routes
         user_sync_routes.register_routes(app)
+        from . import sync_blobs_routes
+        sync_blobs_routes.register_routes(app)
+        from . import upload_holds_routes
+        upload_holds_routes.register_routes(app)
         r.add_get("/{tail:.*}", self.h_static)
         app.on_startup.append(self._start_janitor)
         app.on_shutdown.append(self._close_sockets)
@@ -551,10 +570,14 @@ class Hub:
     def sweep_uploads(self, now: Optional[float] = None) -> int:
         """Delete uploads that were never sent within a day: drafts abandoned, sends that never happened."""
         removed = 0
-        for row in self.store.stale_uploads((now or time.time()) - UNSENT_UPLOAD_SECONDS):
-            self._remove_upload(row)
-            removed += 1
-        return removed
+        cutoff = (time.time() if now is None else now) - UNSENT_UPLOAD_SECONDS
+        for row in self.store.stale_uploads(cutoff):
+            with self.store.transaction():
+                current = self.store.get_upload(row['id'])
+                if current and current['message_id'] is None and current['created_at'] < cutoff and not self.store.upload_held(row['id']):
+                    self._remove_upload(current)
+                    removed += 1
+        return removed + self.sync_blobs.sweep(now)
 
     def _remove_upload(self, row: Dict[str, Any]) -> None:
         directory = (self.media_dir / row["id"]).resolve()
@@ -624,6 +647,11 @@ class Hub:
         if problem is not None:
             return problem
         if level in ("signed", "owner_signed"):
+            if name in ('h_sync_blob_put', 'h_sync_materialize'):
+                if request.content_length is not None and request.content_length > self.max_upload_bytes:
+                    return _error(413, 'This file exceeds the per-file upload limit.')
+                # Raw owner signatures read the body; keep ordinary JSON requests at 2 MiB.
+                request = request.clone(client_max_size=self.max_upload_bytes + 1)
             problem = await self._signature_problem(request, device)
             if problem:
                 logger.warning("[winglet] refused %s %s from %s: %s", request.method, request.path, device["name"], problem)
@@ -1351,9 +1379,9 @@ class Hub:
         device = self._require(request)
         chat_id = request.match_info["chat_id"]
         self._visible_chat(device, chat_id)
-        day_used = self.store.upload_bytes_since(device["id"], time.time() - 86400)
+        day_used = self.store.upload_bytes_since(device["id"], time.time() - 86400) + self.sync_blobs.daily_bytes(device['id'], time.time() - 86400)
         day_left = self.device_daily_upload_bytes - day_used
-        store_left = self.total_upload_bytes - self.store.total_upload_bytes()
+        store_left = self.total_upload_bytes - self.store.total_upload_bytes() - self.sync_blobs.total_bytes()
         if day_left <= 0:
             return _error(429, "You've reached today's upload limit for this device. Try again tomorrow.")
         if store_left <= 0:
@@ -1392,13 +1420,25 @@ class Hub:
                 if voice:
                     mime = uploads.voice_mime(mime)
                 partial.rename(directory / name)
-                row = self.store.add_upload(upload_id, device["id"], chat_id, name, mime, uploads.kind_of(mime, voice), size)
+                with self.store.transaction():
+                    current = self.store.get_device(device['id'])
+                    if not self.can_see(current, self.store.get_chat(chat_id)) or not self._in_bot(chat_id):
+                        raise UploadRefused('This device or target chat is no longer available. The file was not accepted.', 403)
+                    # Other normal or synced transfers may have finished while this stream arrived.
+                    if self.store.upload_bytes_since(device['id'], time.time() - 86400) + self.sync_blobs.daily_bytes(device['id'], time.time() - 86400) + size > self.device_daily_upload_bytes:
+                        raise UploadRefused("You've reached today's upload limit for this device.", 429)
+                    if self.store.total_upload_bytes() + self.sync_blobs.total_bytes() + size > self.total_upload_bytes:
+                        raise UploadRefused('The server upload storage is full. Your file was not accepted.', 507)
+                    row = self.store.add_upload(upload_id, device["id"], chat_id, name, mime, uploads.kind_of(mime, voice), size)
                 return _json({"upload": self._upload_public(row)})
         except _TooLarge:
             shutil.rmtree(directory, ignore_errors=True)
             mb = limit // (1024 * 1024)
             reason = "the per-file limit" if limit == self.max_upload_bytes else "what's left of today's or the server's allowance"
             return _error(413, f"That file is larger than {mb} MB, {reason}.")
+        except UploadRefused as exc:
+            shutil.rmtree(directory, ignore_errors=True)
+            return _error(exc.status, str(exc))
         except MessageRejected as exc:
             shutil.rmtree(directory, ignore_errors=True)
             return _error(400, str(exc))

@@ -101,12 +101,12 @@ export function newSigningKey(rnd: Random = randomBytes): { secret: string; publ
   return { secret: b64e(secret), public: b64e(ed25519.getPublicKey(secret)) };
 }
 
-export function signingPayload(method: string, path: string, body: string, deviceId: string, time: string, nonce: string): Uint8Array {
-  return te.encode(['winglet-sig-v1', method.toUpperCase(), path, hex(sha256(te.encode(body))), deviceId, time, nonce].join('\n'));
+export function signingPayload(method: string, path: string, body: string | Uint8Array, deviceId: string, time: string, nonce: string): Uint8Array {
+  return te.encode(['winglet-sig-v1', method.toUpperCase(), path, hex(sha256(typeof body === 'string' ? te.encode(body) : body)), deviceId, time, nonce].join('\n'));
 }
 
 /** Headers that prove an owner action came from this phone, now, once. */
-export function signedHeaders(secret: string, deviceId: string, method: string, path: string, body: string,
+export function signedHeaders(secret: string, deviceId: string, method: string, path: string, body: string | Uint8Array,
   now = Date.now(), rnd: Random = randomBytes): Record<string, string> {
   const time = String(Math.floor(now / 1000));
   const nonce = b64e(rnd(18));

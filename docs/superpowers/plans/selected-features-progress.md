@@ -6,7 +6,7 @@ This ledger reports actual delivery, not intention. No selected feature is compl
 
 | IDs | Tracking issue | Current evidence / remaining work |
 | --- | --- | --- |
-| 1 | #14 | Server membership, invitations/revocation, field conflicts, CAS resolution, durable retries and submission IDs implemented. Settings now links a home; portable preferences and text drafts sync through a durable client journal with explicit conflict choices and active-composer deferral. Two isolated browser clients verified linking, choosing a theme conflict and later theme propagation. Attachment ownership, target-chat send integration, reply/read/resume state, remaining libraries and physical-device verification remain. |
+| 1 | #14 | Server membership, invitations/revocation, conflicts, portable preferences and text drafts are connected to Settings. Private blob staging, candidate/submission pins, independently paired target copies, owner recovery of lost-device files and source-retention settlement are now server/library-tested. Two target pairings using the same home claim produce one message and one synthetic adapter dispatch. Composer/file/reply/claim wiring, generation lifecycle, read/resume state, remaining libraries and physical-device verification remain. See `docs/USER_SYNC.md` for the current transport contract and next integration steps. |
 | 3, 4, 5, 7 | #15 | Pending results, bookmarks, presets and keyboard implementation. |
 | 6 | #16 | Pending notification implementation. |
 | 10, 12 | #17 | Isolated Hermes checkout prepared; native boundary inspection complete. Enforcement, durable pause, receipts and Winglet UI remain. |
@@ -35,4 +35,12 @@ Web and Android exports passed. The first Windows Android compiler process crash
 
 Disposable local browser QA used two isolated Chromium contexts (desktop and phone width), real signed routes, two synthetic owner devices and no provider calls. Linking, explicit theme-conflict selection and subsequent theme propagation passed with no page errors. Batched light/dark screenshots were inspected. The first browser run exposed source metadata accidentally included in a chosen value; request normalization and a regression test fixed it before the passing confirmation. The local QA fixtures/screenshots are ignored under `.pytest_cache/sync-browser-qa`; they are not product data.
 
-Physical Android/iPhone, patched native runtime, attachment/send integration and paid-call verification are not claimed. Feature 1 and the overall 18-feature plan remain incomplete.
+Physical Android/iPhone, patched native runtime, Composer attachment/send integration and paid-call verification are not claimed. Feature 1 and the overall 18-feature plan remain incomplete.
+
+## File transport checkpoint
+
+Private bytes are outside the public media directory and reauthorize every group read. Immutable metadata excludes URLs, credentials and auto-send flags. Actual signed HTTP tests cover files above 2 MiB, digest/permission/quota refusals, conflict retention, target copy ownership, same-ID duplicate submissions, safe cleanup and explicit lost-device recovery. Normal uploads now recheck authority and combined quotas at commit; the shared upload helper includes child-profile scope.
+
+The client transport library verifies exact bytes before writing an independently paired target. Binary request signatures use the existing protocol and are tested for non-UTF8 data and typed-array offsets. Target copies carry retention IDs; unconfirmed source files remain pinned until a confirmed target receipt or explicit file-retention discard. Such a discard does not cancel execution.
+
+Final transport checkpoint: **696 Python tests passed (31 skipped), 490 app tests passed, TypeScript passed, web/Android exports passed**. All 40 bundled files match the final web export by SHA-256; bundle and third-party notices checks passed. Signed query components now preserve apostrophes and parentheses without URL-parser rewrites. No new UI surface was changed in this transport step; the previous browser visual evidence remains limited to settings/text sync.

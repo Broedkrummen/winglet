@@ -45,6 +45,14 @@ async def _run(request, action):
                     raise SyncError('Expected the exact draft revision.')
                 result = await asyncio.to_thread(service.claim_submission, group, device,
                     request.match_info['record_id'], body['expected_revision'])
+            elif action == 'settle':
+                result = await asyncio.to_thread(service.settle_submission, group, device,
+                    request.match_info['record_id'], request.match_info['submission_id'], body)
+            elif action == 'release_files':
+                if set(body) != {'confirmation'}:
+                    raise SyncError('Expected explicit source-file release confirmation.')
+                result = await asyncio.to_thread(service.release_submission_files, group, device,
+                    request.match_info['record_id'], request.match_info['submission_id'], body['confirmation'])
             else:
                 allowed = {'operation_id', 'base_revision', 'changes', 'resolve', 'base_fields'}
                 if set(body) - allowed or not {'operation_id', 'base_revision', 'changes'} <= body.keys():
@@ -66,6 +74,8 @@ async def h_user_sync_records(request): return await _run(request, 'records')
 async def h_user_sync_read(request): return await _run(request, 'read')
 async def h_user_sync_write(request): return await _run(request, 'write')
 async def h_user_sync_submit(request): return await _run(request, 'submit')
+async def h_user_sync_settle(request): return await _run(request, 'settle')
+async def h_user_sync_release_files(request): return await _run(request, 'release_files')
 
 
 def register_routes(app):
@@ -76,6 +86,8 @@ def register_routes(app):
     app.router.add_get('/api/user-sync/{group_id}/members', h_user_sync_members)
     app.router.add_post('/api/user-sync/{group_id}/revoke', h_user_sync_revoke)
     app.router.add_post('/api/user-sync/{group_id}/drafts/{record_id}/submit', h_user_sync_submit)
+    app.router.add_post('/api/user-sync/{group_id}/drafts/{record_id}/submissions/{submission_id}/delivered', h_user_sync_settle)
+    app.router.add_post('/api/user-sync/{group_id}/drafts/{record_id}/submissions/{submission_id}/release-files', h_user_sync_release_files)
     app.router.add_get('/api/user-sync/{group_id}/records', h_user_sync_records)
     app.router.add_get('/api/user-sync/{group_id}/records/{kind}/{record_id}', h_user_sync_read)
     app.router.add_post('/api/user-sync/{group_id}/records/{kind}/{record_id}', h_user_sync_write)

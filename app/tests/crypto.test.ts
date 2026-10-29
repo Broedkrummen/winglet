@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { test } from 'node:test';
@@ -18,6 +19,12 @@ vm.runInNewContext(ts.transpileModule(readFileSync(new URL('../src/lib/crypto.ts
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText, { exports, require: (m: string) => modules[m], TextEncoder, Uint8Array, btoa, atob, Date, Math, JSON, String, Array });
 const c = exports;
+
+test('binary owner signatures hash exact bytes, including non-UTF8 data and view offsets', () => {
+  const bytes = new Uint8Array([99, 0, 255, 128, 1, 99]).subarray(1, 5);
+  const payload = new TextDecoder().decode(c.signingPayload('PUT', '/api/file', bytes, 'device', '1', 'nonce'));
+  assert.equal(payload.split('\n')[3], createHash('sha256').update(bytes).digest('hex'));
+});
 
 /** Deterministic "randomness", so the vector file is reproducible. */
 function counter(seed: number) {

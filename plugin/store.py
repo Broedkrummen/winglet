@@ -261,7 +261,11 @@ class Store:
                 raise
             else:
                 if own:
-                    self._db.commit()
+                    try:
+                        self._db.commit()
+                    except BaseException:
+                        self._db.rollback()
+                        raise
 
     # -- key/value ---------------------------------------------------------------
 

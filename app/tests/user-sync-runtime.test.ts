@@ -14,14 +14,18 @@ const defaults = { view: 'simple', botOpening: 'last', lastChatByBot: {}, voiceL
   haptics: true, sounds: true, busyMode: 'steer', appLock: true, updateCheck: true, mainBot: '', sidebar: 'auto',
   pinnedChats: [], archivedChats: [], favoriteModels: [], recentModels: [] };
 
-function harness() {
-  const cache = new Map<string, any>();
+function harness(initialCache?: Map<string, any>) {
+  const cache = initialCache ?? new Map<string, any>();
   const records = new Map<string, model.RecordState>();
   const requests: { path: string; body?: any }[] = [];
-  const server = { id: 'home', deviceId: 'desktop', url: 'https://home.test', token: 'local-secret', bot: { title: 'Hermes' } };
+  const server = { id: 'home', deviceId: 'desktop', fingerprint: 'fixture-fingerprint', url: 'https://home.test', token: 'local-secret', bot: { title: 'Hermes' } };
   const useApp = create<any>((set: any) => ({ servers: [server], ready: true, foreground: true, network: true,
-    selection: { serverId: 'home' }, drafts: {}, visibleChat: undefined,
+    selection: { serverId: 'home' }, drafts: {}, draftFiles: {}, replyTo: {}, runtime: {}, visibleChat: undefined,
     setDraft: (serverId: string, chatId: string, text: string) => set((state: any) => ({ drafts: { ...state.drafts, [`${serverId}:${chatId}`]: text } })),
+    updateDraftFiles: (serverId: string, chatId: string, fn: (files: any[]) => any[]) => set((state: any) => ({ draftFiles: {
+      ...state.draftFiles, [`${serverId}:${chatId}`]: fn(state.draftFiles[`${serverId}:${chatId}`] ?? []),
+    } })),
+    setReplyTo: (serverId: string, chatId: string, reply: any) => set((state: any) => ({ replyTo: { ...state.replyTo, [`${serverId}:${chatId}`]: reply } })),
   }));
   const usePrefs = create<any>((set: any) => ({ prefs: { ...defaults }, update: (patch: any) => set((state: any) => ({ prefs: { ...state.prefs, ...patch } })) }));
   const useLock = create<any>(() => ({ locked: false }));
@@ -29,6 +33,10 @@ function harness() {
   let rejectResolution = false;
   let failStorage = false;
   let resolutionGate: (() => Promise<void>) | undefined;
+  let claimGate: (() => Promise<void>) | undefined;
+  let materializeGate: (() => Promise<void>) | undefined;
+  let invalidClaim = false;
+  const transfers: any[] = [];
   let nonce = 0;
   const transport = async (_server: unknown, path: string) => {
     requests.push({ path });
@@ -42,6 +50,11 @@ function harness() {
   const signed = async (_server: unknown, _method: unknown, path: string, body: any) => {
     requests.push({ path, body: copy(body) });
     if (path === '/api/user-sync' || path.endsWith('/join')) return { group_id: 'private' };
+    if (path.endsWith('/submit')) {
+      if (claimGate) await claimGate();
+      const id = decodeURIComponent(path.split('/drafts/')[1].split('/submit')[0]);
+      return invalidClaim ? {} : { submission_id: 'shared-claim-id', revision: records.get(`draft/${id}`)!.revision };
+    }
     if (!path.includes('/records/')) return {};
     if (body.resolve && resolutionGate) await resolutionGate();
     if (body.resolve && rejectResolution) throw new ApiError(409);
@@ -51,11 +64,28 @@ function harness() {
     for (const [field, value] of Object.entries(body.changes)) next.fields[field] = {
       revision: next.revision, candidates: [{ ...value as model.Value, device_id: 'desktop', operation_id: body.operation_id, at: 1 }],
     };
+    if (key.startsWith('draft/') && !next.fields.generation) next.fields.generation = {
+      revision: next.revision, candidates: [{ deleted: false, value: 'generation-one', device_id: 'desktop', operation_id: body.operation_id, at: 1 }],
+    };
     records.set(key, copy(next));
     return next;
   };
   const modules: Record<string, unknown> = {
-    zustand: { create }, '../../lib/api': { api: transport, signedApi: signed, ApiError },
+    zustand: { create }, '../../lib/api': { api: transport, signedApi: signed, ApiError, encodeApiComponent: encodeURIComponent },
+    './fileTransfer': {
+      validateSyncFile: () => {}, stagingHoldId: () => 'source-hold',
+      stageSyncFile: async (_home: any, _group: any, _target: any, _chat: any, file: any, check: () => void) => {
+        check(); transfers.push({ kind: 'stage', slot: file.localId });
+        return { id: 'a'.repeat(64), sha256: 'b'.repeat(64), name: file.name, mime: file.mime, kind: file.kind, size: file.size, slot: file.localId };
+      },
+      materializeSyncFile: async (_home: any, _group: any, _target: any, _chat: any, file: any, check: () => void) => {
+        check(); transfers.push({ kind: 'materialize', slot: file.slot });
+        if (materializeGate) await materializeGate();
+        check();
+        return { id: `target-${file.slot}`, url: '/api/media/fixture/file', name: file.name, mime: file.mime, kind: file.kind,
+          size: file.size, hold_id: `target-hold-${file.slot}` };
+      },
+    },
     '../../lib/cache': { cacheGetStrict: async (key: string, fallback: any) => cache.has(key) ? copy(cache.get(key)) : fallback,
       cacheSetStrict: async (key: string, value: any) => { if (failStorage) throw new Error('disk full'); cache.set(key, copy(value)); } },
     '../../lib/control': { idempotencyKey: () => `operation-${++nonce}` },
@@ -70,7 +100,16 @@ function harness() {
     if (!(name in modules)) throw new Error(`Unexpected module ${name}`);
     return modules[name];
   }, console, setTimeout, clearTimeout }, { filename: 'user-sync-runtime.js' });
-  return { runtime: exports, useApp, usePrefs, useLock, cache, records, requests, server,
+  const gate = (assign: (value: () => Promise<void>) => void) => {
+    let entered!: () => void, release!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const wait = new Promise<void>(resolve => { release = resolve; });
+    assign(async () => { entered(); await wait; });
+    return { started, release };
+  };
+  return { runtime: exports, useApp, usePrefs, useLock, cache, records, requests, server, transfers,
+    deferClaim: () => gate(value => { claimGate = value; }),
+    deferMaterialize: () => gate(value => { materializeGate = value; }), invalidClaim: () => { invalidClaim = true; },
     rejectResolution: () => { rejectResolution = true; }, failStorage: (value: boolean) => { failStorage = value; },
     deferResolution: () => {
       let entered!: () => void;
@@ -85,6 +124,127 @@ function harness() {
 function remoteField(value: model.Json, revision: number): model.RecordState['fields'][string] {
   return { revision, candidates: [{ deleted: false, value, device_id: 'phone', operation_id: `remote-${revision}`, at: 2 }] };
 }
+
+test('explicit Send freezes reply and steering prefix under the shared submission ID', async () => {
+  const h = harness();
+  await h.runtime.connectPersonalSync(h.server);
+  const reply = { id: 'message-1', text: 'quoted', role: 'bot' };
+  const result = await h.runtime.prepareSyncedDraft('home', 'chat', 'continue', '/steer ', [], reply);
+  assert.equal(result.clientId, 'shared-claim-id');
+  const fields = h.records.get('draft/home:chat')!.fields;
+  assert.equal(fields.send_prefix.candidates[0].value, '/steer ');
+  assert.equal(fields.text.candidates[0].value, 'continue');
+  assert.deepEqual(fields.reply.candidates[0].value, reply);
+  assert.ok(!h.requests.some(request => request.path.endsWith('/messages')));
+});
+
+test('typing during a shared claim is kept behind the frozen submission and replayed afterward', async () => {
+  const h = harness();
+  const stop = h.runtime.subscribePersonalSync();
+  h.useApp.getState().setDraft('home', 'chat', 'original');
+  await h.runtime.connectPersonalSync(h.server);
+  const gate = h.deferClaim();
+  const preparation = h.runtime.prepareSyncedDraft('home', 'chat', 'original', '', []);
+  await gate.started;
+  h.useApp.getState().setDraft('home', 'chat', 'next thought');
+  await tick();
+  assert.equal(h.records.get('draft/home:chat')!.fields.text.candidates[0].value, 'original');
+  const journal = [...h.cache].find(([key]) => key.startsWith('user-sync:journal:'))![1];
+  assert.equal(journal.deferredDrafts['home:chat'].text.value, 'next thought');
+  gate.release();
+  assert.equal((await preparation).clientId, 'shared-claim-id');
+  await h.runtime.refreshPersonalSync();
+  assert.equal(h.records.get('draft/home:chat')!.fields.text.candidates[0].value, 'next thought');
+  assert.equal(h.useApp.getState().drafts['home:chat'], 'next thought');
+  stop();
+});
+
+test('an unverifiable submission response refuses Send without inventing another ID', async () => {
+  const h = harness();
+  await h.runtime.connectPersonalSync(h.server);
+  h.invalidClaim();
+  await assert.rejects(h.runtime.prepareSyncedDraft('home', 'chat', 'keep me', '', []), /exact draft revision/);
+  const journal = [...h.cache].find(([key]) => key.startsWith('user-sync:journal:'))![1];
+  assert.equal(Object.keys(journal.claims ?? {}).length, 0);
+  assert.equal(h.requests.filter(request => request.path.endsWith('/submit')).length, 1);
+});
+
+function sharedDraft(h: ReturnType<typeof harness>) {
+  const file = { id: 'a'.repeat(64), sha256: 'b'.repeat(64), name: 'notes.txt', mime: 'text/plain', kind: 'file', size: 5, slot: 'slot-one' };
+  const fields = Object.fromEntries(Object.entries({ text: 'from phone', files: [file], files_ready: true,
+    server_id: 'home', chat_id: 'chat', server_fingerprint: h.server.fingerprint,
+    reply: { id: 'message-1', text: 'quote', role: 'bot' }, generation: 'remote-generation',
+  }).map(([key, value]) => [key, remoteField(value as model.Json, 1)]));
+  h.records.set('draft/home:chat', { revision: 1, fields });
+}
+
+test('incoming attachments wait for the active composer, then materialize with reply and without auto-send', async () => {
+  const h = harness();
+  await h.runtime.connectPersonalSync(h.server);
+  sharedDraft(h);
+  h.useApp.setState({ visibleChat: { serverId: 'home', chatId: 'chat' } });
+  await h.runtime.refreshPersonalSync();
+  assert.equal(h.transfers.length, 0);
+  assert.equal(h.runtime.usePersonalSync.getState().deferredDrafts, 1);
+  h.useApp.setState({ visibleChat: undefined });
+  await h.runtime.applyDeferredDrafts();
+  assert.equal(h.useApp.getState().drafts['home:chat'], 'from phone');
+  const file = h.useApp.getState().draftFiles['home:chat'][0];
+  assert.equal(file.upload.id, 'target-slot-one');
+  assert.equal(file.autoSend, undefined);
+  assert.equal(h.useApp.getState().replyTo['home:chat'].id, 'message-1');
+});
+
+test('typing during attachment download keeps the local draft instead of applying the older snapshot', async () => {
+  const h = harness();
+  await h.runtime.connectPersonalSync(h.server);
+  sharedDraft(h);
+  const gate = h.deferMaterialize();
+  const refresh = h.runtime.refreshPersonalSync();
+  await gate.started;
+  h.useApp.getState().setDraft('home', 'chat', 'typed during transfer');
+  gate.release();
+  await refresh;
+  assert.equal(h.useApp.getState().drafts['home:chat'], 'typed during transfer');
+  assert.equal(h.useApp.getState().draftFiles['home:chat'], undefined);
+});
+
+test('restart disagreement preserves both durable snapshots without rebasing one over the other', async () => {
+  const first = harness();
+  const stop = first.runtime.subscribePersonalSync();
+  first.useApp.getState().setDraft('home', 'chat', 'initial');
+  await first.runtime.connectPersonalSync(first.server);
+  first.useApp.setState({ network: false });
+  first.useApp.getState().setDraft('home', 'chat', 'journal version');
+  await tick();
+  stop();
+  const restarted = harness(first.cache);
+  restarted.useApp.getState().setDraft('home', 'chat', 'core cache version');
+  await restarted.runtime.bootPersonalSync();
+  const journal = [...restarted.cache].find(([key]) => key.startsWith('user-sync:journal:'))![1];
+  const edits = journal.pending.filter((p: model.Pending) => p.kind === 'draft' && p.id === 'home:chat');
+  assert.equal(edits[0].mutation.changes.text.value, 'journal version');
+  const recovery = edits.at(-1);
+  assert.equal(recovery.mutation.changes.text.value, 'core cache version');
+  assert.equal(recovery.mutation.base_fields.text, 0);
+  assert.equal(recovery.prepared, true);
+  assert.deepEqual(recovery.predecessors, {});
+});
+
+test('a changed target pairing during a download cannot receive its stale draft result', async () => {
+  const h = harness();
+  await h.runtime.connectPersonalSync(h.server);
+  sharedDraft(h);
+  const gate = h.deferMaterialize();
+  const refresh = h.runtime.refreshPersonalSync();
+  await gate.started;
+  h.useApp.setState({ servers: [{ ...h.server, fingerprint: 'replacement-installation' }] });
+  gate.release();
+  await refresh;
+  assert.equal(h.useApp.getState().draftFiles['home:chat'], undefined);
+  assert.equal(h.useApp.getState().drafts['home:chat'], undefined);
+  assert.equal(h.runtime.usePersonalSync.getState().status, 'error');
+});
 
 test('incoming portable settings apply without synchronizing biometric configuration or leaking pairing credentials', async () => {
   const h = harness();

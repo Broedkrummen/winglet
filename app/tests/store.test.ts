@@ -24,6 +24,7 @@ function harness(os = 'web') {
   const cache = new Map<string, any>();
   let strictWrite = async (key: string, value: any) => { cache.set(key, structuredClone(value)); };
   let persisted: any;
+  let prepareSyncedDraft: (...args: any[]) => Promise<any> = async () => undefined;
   class FakeSocket {
     readyState = 1;
     sent: any[] = [];
@@ -99,12 +100,14 @@ function harness(os = 'web') {
       setJSON: async (key: string, value: any) => { if (key === 'winglet.servers') persisted = value; } },
   });
   const { sendDraft } = compile('../src/lib/attach.ts', {
+    '../features/sync/runtime': { prepareSyncedDraft: (...args: any[]) => prepareSyncedDraft(...args) },
     'react-native': { Platform: { OS: os } }, './haptics': { haptic: { light() {}, error() {} } },
     './media': {}, './store': { useApp: store },
   });
   const tick = () => new Promise(resolve => setImmediate(resolve));
   return {
     sendDraft, setStrictWrite: (write: typeof strictWrite) => { strictWrite = write; },
+    setSyncPreparation: (prepare: typeof prepareSyncedDraft) => { prepareSyncedDraft = prepare; },
     store, cache, played, phoneCalls, taskModel, setRequest: (fn: typeof request) => { request = fn; },
     setRecovery: (fn: typeof recoveryRequest) => { recoveryRequest = fn; },
     disconnect: () => { socket.readyState = 3; socket.onclose?.({ code: 1006 }); },
@@ -317,6 +320,33 @@ test('failed durable acceptance keeps text, files and reply without claiming a q
   assert.equal(h.cache.get('outbox:s')[0].attachments[0].id, 'file');
   assert.equal(h.cache.get('outbox:s')[0].reply_to.id, 'reply');
   assert.equal(h.store.getState().drafts['s:general'], undefined);
+});
+
+test('a shared draft uses its claimed ID and target copies only after durable outbox acceptance', async () => {
+  const h = harness();
+  await h.connect(); h.disconnect();
+  const state = h.store.getState();
+  state.setDraft('s', 'general', 'Shared');
+  state.updateDraftFiles('s', 'general', () => [{ localId: 'pick', status: 'ready', upload: { id: 'source' } }]);
+  h.setSyncPreparation(async () => ({ clientId: 'shared-submission', attachments: [{ id: 'target-copy' }] }));
+  h.setStrictWrite(async () => { throw new Error('disk full'); });
+  assert.equal(await h.sendDraft('s', 'general', 'Shared'), false);
+  assert.equal(h.store.getState().drafts['s:general'], 'Shared');
+  assert.equal(h.outbox().length, 0);
+  h.setStrictWrite(async (key, value) => { h.cache.set(key, structuredClone(value)); });
+  assert.equal(await h.sendDraft('s', 'general', 'Shared'), true);
+  assert.equal(h.outbox()[0].client_id, 'shared-submission');
+  assert.equal(h.outbox()[0].attachments[0].id, 'target-copy');
+});
+
+test('failed shared preparation keeps the composition and never queues a fallback send', async () => {
+  const h = harness();
+  await h.connect(); h.disconnect();
+  h.store.getState().setDraft('s', 'general', 'Keep me');
+  h.setSyncPreparation(async () => { throw new Error('home unavailable'); });
+  assert.equal(await h.sendDraft('s', 'general', 'Keep me'), false);
+  assert.equal(h.store.getState().drafts['s:general'], 'Keep me');
+  assert.equal(h.outbox().length, 0);
 });
 
 test('oversized text and busy-mode prefixes retain the full draft without queueing', async () => {

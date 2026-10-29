@@ -22,6 +22,27 @@ def write(service, group, device, op, base, **values):
                          base_revision=base, changes={k: {'deleted': False, 'value': v} for k, v in values.items()})
 
 
+def test_server_generations_survive_concurrent_edits_and_rotate_only_after_claimed_content_changes(linked):
+    _, service, group, a, b = linked
+    first = write(service, group, a, 'initial', 0, text='hello', files_ready=True)
+    generation = first['fields']['generation']['candidates'][0]['value']
+    same = write(service, group, b, 'same-text', 0, text='hello')
+    assert same['fields']['generation']['candidates'][0]['value'] == generation
+    claim = service.claim_submission(group, a, 'chat-1', same['revision'])
+    unchanged = write(service, group, b, 'no-content-change', same['revision'], files_ready=True)
+    assert service.claim_submission(group, b, 'chat-1', unchanged['revision'])['submission_id'] == claim['submission_id']
+    changed = write(service, group, a, 'next-message', unchanged['revision'], text='another message')
+    assert changed['fields']['generation']['candidates'][0]['value'] != generation
+    assert service.claim_submission(group, a, 'chat-1', changed['revision'])['submission_id'] != claim['submission_id']
+
+
+def test_unfinished_file_preparation_cannot_be_claimed(linked):
+    _, service, group, a, _ = linked
+    draft = write(service, group, a, 'pending-file', 0, text='with file', files_ready=False)
+    with pytest.raises(SyncError, match='attachments'):
+        service.claim_submission(group, a, 'chat-1', draft['revision'])
+
+
 def test_disjoint_changes_merge_but_competing_text_requires_choice(linked):
     _, service, group, a, b = linked
     write(service, group, a, 'text-a', 0, text='hello')
@@ -153,8 +174,7 @@ def test_shared_draft_submission_is_stable_without_enqueuing_work(linked):
     assert service.claim_submission(group, b, 'chat-1', draft['revision']) == first
     assert store._db.execute('SELECT COUNT(*) FROM messages').fetchone()[0] == 0
     edited = write(service, group, a, 'edit', draft['revision'], text='new content')
-    with pytest.raises(SyncError, match='different content'):
-        service.claim_submission(group, a, 'chat-1', edited['revision'])
+    assert service.claim_submission(group, a, 'chat-1', edited['revision'])['submission_id'] != first['submission_id']
     fresh = write(service, group, a, 'new-generation', edited['revision'], generation='composition-2')
     assert service.claim_submission(group, a, 'chat-1', fresh['revision'])['submission_id'] != first['submission_id']
 

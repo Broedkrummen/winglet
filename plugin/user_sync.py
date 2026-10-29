@@ -82,6 +82,13 @@ CREATE TABLE IF NOT EXISTS sync_submission_file_releases (
 KINDS = frozenset({'preferences', 'draft', 'organization', 'bookmark', 'preset', 'read_position'})
 MAX_BYTES = 256 * 1024
 BLOB_FIELDS = ('id', 'sha256', 'name', 'mime', 'kind', 'size')
+DRAFT_CONTENT = frozenset({'text', 'files', 'files_ready', 'reply', 'send_prefix', 'server_id', 'chat_id', 'server_fingerprint'})
+
+
+def _draft_content(fields):
+    return _json({key: [{k: candidate[k] for k in ('deleted', 'value') if k in candidate}
+                        for candidate in field['candidates']]
+                  for key, field in fields.items() if key in DRAFT_CONTENT})
 
 
 def _json(value):
@@ -108,16 +115,8 @@ class UserSync:
 
     @contextmanager
     def _transaction(self):
-        with self.store._lock:
-            db = self.store._db
-            db.execute('BEGIN IMMEDIATE')
-            try:
-                yield db
-            except BaseException:
-                db.rollback()
-                raise
-            else:
-                db.commit()
+        with self.store.transaction():
+            yield self.store._db
 
     @staticmethod
     def _member(db, group, device):
@@ -216,6 +215,9 @@ class UserSync:
             if any(len(field['candidates']) != 1 for field in record['fields'].values()):
                 raise SyncError('Choose the conflicting draft values before sending.', 409)
             values = {key: field['candidates'][0] for key, field in record['fields'].items()}
+            ready = values.get('files_ready')
+            if ready and not ready['deleted'] and ready.get('value') is not True:
+                raise SyncError('Finish preparing the draft attachments before sending.', 409)
             generation = values.get('generation', {})
             if generation.get('deleted', True):
                 raise SyncError('The draft needs a submission generation.')
@@ -361,6 +363,8 @@ class UserSync:
             if base_revision > record['revision'] or (resolve and base_revision != record['revision']):
                 raise SyncError('Refresh before resolving these changes.', 409)
             revision = record['revision'] + 1
+            old_content = _draft_content(record['fields']) if kind == 'draft' else None
+            old_generation = record['fields'].get('generation')
             for field, value in changes.items():
                 old = record['fields'].get(field)
                 candidate = {**value, 'device_id': device, 'operation_id': operation_id, 'at': time.time()}
@@ -374,6 +378,19 @@ class UserSync:
                 else:
                     candidates = [candidate]
                 record['fields'][field] = {'revision': revision, 'candidates': candidates}
+            if kind == 'draft':
+                generation = record['fields'].get('generation')
+                claimed = False
+                if old_generation and generation == old_generation and len(generation['candidates']) == 1:
+                    previous_generation = generation['candidates'][0]
+                    if not previous_generation['deleted']:
+                        claimed = db.execute('SELECT 1 FROM sync_submissions WHERE group_id=? AND record_id=? AND generation=?',
+                            (group, record_id, previous_generation['value'])).fetchone() is not None
+                unambiguous = all(len(field['candidates']) == 1 for key, field in record['fields'].items() if key in DRAFT_CONTENT)
+                if generation is None or (claimed and unambiguous and old_content != _draft_content(record['fields'])):
+                    record['fields']['generation'] = {'revision': revision, 'candidates': [{
+                        'deleted': False, 'value': str(uuid.uuid4()), 'device_id': device,
+                        'operation_id': operation_id, 'at': time.time()}]}
             if len(record['fields']) > 100:
                 raise SyncError('A sync record can contain at most 100 fields.', 413)
             record['revision'] = revision

@@ -22,17 +22,20 @@ export function stagingHoldId(target: Server, chatId: string, file: DraftFile): 
 }
 
 /** Stage immutable bytes at the home; never copy another server's URL or credentials into a record. */
-export async function stageSyncFile(home: Server, groupId: string, target: Server, chatId: string, file: DraftFile): Promise<SyncFile> {
+export async function stageSyncFile(home: Server, groupId: string, target: Server, chatId: string, file: DraftFile, check: () => void = () => {}): Promise<SyncFile> {
   if (file.status !== 'ready' || !file.upload || file.autoSend) throw new Error('Wait for the file upload to finish before sharing this draft.');
   if (!file.upload.url.startsWith(`/api/media/${encodeURIComponent(file.upload.id)}/`))
     throw new Error('This file does not have a private server upload to stage. Attach it again.');
   // Retention is established before reading; a later outage cannot expire the only server copy.
+  check();
   await signedApi(target, 'POST', `/api/chats/${encodeApiComponent(chatId)}/uploads/hold`,
     { upload_ids: [file.upload.id], hold_id: stagingHoldId(target, chatId, file) });
+  check();
   const bytes = await apiBytes(target, file.upload.url);
   if (bytes.length !== file.upload.size) throw new Error('The source file size changed. Keep the original and attach it again.');
   const hash = digest(bytes);
   const path = `/api/user-sync/${encodeApiComponent(groupId)}/blobs/${hash}?name=${encodeApiComponent(file.upload.name)}&voice=${file.kind === 'voice' ? 1 : 0}`;
+  check();
   const { blob } = await signedBytesApi<{ blob: SyncBlob }>(home, path, bytes);
   const result = { ...blob, slot: file.localId };
   validateSyncFile(result);
@@ -41,12 +44,14 @@ export async function stageSyncFile(home: Server, groupId: string, target: Serve
 }
 
 /** A receiving device uses its own target pairing, and verifies bytes before any target upload. */
-export async function materializeSyncFile(home: Server, groupId: string, target: Server, chatId: string, file: SyncFile): Promise<Upload & { hold_id: string }> {
+export async function materializeSyncFile(home: Server, groupId: string, target: Server, chatId: string, file: SyncFile, check: () => void = () => {}): Promise<Upload & { hold_id: string }> {
   validateSyncFile(file);
+  check();
   const bytes = await apiBytes(home, `/api/user-sync/${encodeApiComponent(groupId)}/blobs/${file.id}`);
   if (bytes.length !== file.size || digest(bytes) !== file.sha256) throw new Error('The shared file failed its integrity check. Nothing was uploaded to the target.');
   const path = `/api/chats/${encodeApiComponent(chatId)}/staged-files/${file.id}?slot=${encodeApiComponent(file.slot)}&sha256=${file.sha256}`
     + `&name=${encodeApiComponent(file.name)}&voice=${file.kind === 'voice' ? 1 : 0}`;
+  check();
   const { upload } = await signedBytesApi<{ upload: Upload & { hold_id: string } }>(target, path, bytes);
   if (!upload?.id || !upload.hold_id || upload.size !== file.size || upload.name !== file.name || upload.mime !== file.mime || upload.kind !== file.kind)
     throw new Error('The target did not confirm a retained file copy. Your shared original is kept.');

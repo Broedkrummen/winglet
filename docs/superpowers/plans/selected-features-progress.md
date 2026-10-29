@@ -6,7 +6,7 @@ This ledger reports actual delivery, not intention. No selected feature is compl
 
 | IDs | Tracking issue | Current evidence / remaining work |
 | --- | --- | --- |
-| 1 | #14 | Server membership, invitations/revocation, conflicts, portable preferences and text drafts are connected to Settings. Private blob staging, candidate/submission pins, independently paired target copies, owner recovery of lost-device files and source-retention settlement are now server/library-tested. Two target pairings using the same home claim produce one message and one synthetic adapter dispatch. Composer/file/reply/claim wiring, generation lifecycle, read/resume state, remaining libraries and physical-device verification remain. See `docs/USER_SYNC.md` for the current transport contract and next integration steps. |
+| 1 | #14 | Membership, preferences, text/file drafts, reply context and explicit shared-ID Composer Send are connected. Tests cover generation lifecycle, typing during claim/download, strict outbox acceptance, endpoint changes, restart disagreements and failed target commits. Two target pairings using the same home claim produce one message and one synthetic adapter dispatch. Retained-file recovery controls, complete restart/file recovery, read/resume state, remaining libraries and browser/physical-device verification remain. See `docs/USER_SYNC.md`. |
 | 3, 4, 5, 7 | #15 | Pending results, bookmarks, presets and keyboard implementation. |
 | 6 | #16 | Pending notification implementation. |
 | 10, 12 | #17 | Isolated Hermes checkout prepared; native boundary inspection complete. Enforcement, durable pause, receipts and Winglet UI remain. |
@@ -44,3 +44,13 @@ Private bytes are outside the public media directory and reauthorize every group
 The client transport library verifies exact bytes before writing an independently paired target. Binary request signatures use the existing protocol and are tested for non-UTF8 data and typed-array offsets. Target copies carry retention IDs; unconfirmed source files remain pinned until a confirmed target receipt or explicit file-retention discard. Such a discard does not cancel execution.
 
 Final transport checkpoint: **696 Python tests passed (31 skipped), 490 app tests passed, TypeScript passed, web/Android exports passed**. All 40 bundled files match the final web export by SHA-256; bundle and third-party notices checks passed. Signed query components now preserve apostrophes and parentheses without URL-parser rewrites. No new UI surface was changed in this transport step; the previous browser visual evidence remains limited to settings/text sync.
+
+## Composer integration checkpoint
+
+Manual draft files and reply context now replicate through the private transport. Explicit Send freezes the composition, validates a canonical shared submission ID and hands retained target copies to the existing durable local outbox. Continued typing stays journaled separately while the frozen claim is pending. Unverifiable claims do not create fallback IDs. Actual matching target messages permit source/duplicate hold settlement; local pending messages do not.
+
+The server supplies draft generations and rotates them after claimed content changes. Restart cache disagreements preserve both candidates without predecessor rebasing. Receiving files rechecks edits, lock and endpoint identity after asynchronous work. Bulk writes occur outside SQLite; admission and atomic rename remain transactional. Commit failure rolls back and removes the new target copy.
+
+Settings copy/loading-state updates and two-browser file/send verification are still pending. No UI component source changed in this checkpoint. Earlier screenshot evidence does not establish Composer integration behavior. Feature #1 remains incomplete.
+
+Validation: **700 Python tests passed, 31 skipped; 499 app tests passed; TypeScript, web/Android exports, bundle references and third-party notices passed**. All 40 bundled files match the web export by SHA-256. Exports do not establish physical-device behavior; no native runtime installation or paid-call test occurred.

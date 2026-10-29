@@ -577,6 +577,11 @@ class Hub:
                 if current and current['message_id'] is None and current['created_at'] < cutoff and not self.store.upload_held(row['id']):
                     self._remove_upload(current)
                     removed += 1
+        # Interrupted raw-copy staging is not a public media directory or a live upload.
+        if self.media_dir.is_dir():
+            for partial in self.media_dir.glob('*.partial'):
+                if re.fullmatch(r'[0-9a-f]{32}\.partial', partial.name) and partial.is_file() and partial.stat().st_mtime < cutoff:
+                    partial.unlink()
         return removed + self.sync_blobs.sweep(now)
 
     def _remove_upload(self, row: Dict[str, Any]) -> None:

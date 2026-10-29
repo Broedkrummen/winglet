@@ -3,6 +3,7 @@ import { haptic } from './haptics';
 import { preparePhoto, uploadFile, type PickedFile, type UploadHandle } from './media';
 import { useApp } from './store';
 import type { AttachmentKind, DraftFile } from './types';
+import { prepareSyncedDraft } from '../features/sync/runtime';
 
 // Uploads in flight, so they can be cancelled; and the original picks, so a failure can be retried.
 const handles = new Map<string, UploadHandle>();
@@ -88,7 +89,7 @@ export function removeFile(serverId: string, chatId: string, localId: string) {
 
 /** Whether the composer can send: some text or a file, and nothing still uploading. */
 export function canSend(text: string, files: DraftFile[]): boolean {
-  if (files.some((f) => f.status === 'uploading')) return false;
+  if (files.some((f) => f.status !== 'ready')) return false;
   return !!text.trim() || files.some((f) => f.status === 'ready');
 }
 
@@ -96,11 +97,19 @@ export function canSend(text: string, files: DraftFile[]): boolean {
 export async function sendDraft(serverId: string, chatId: string, text: string, prefix = '') {
   const state = useApp.getState();
   const key = `${serverId}:${chatId}`;
+  if (!canSend(text, state.draftFiles[key] ?? [])) return false;
   const files = (state.draftFiles[key] ?? []).filter((f) => f.status === 'ready' && f.upload);
   const replyTo = state.replyTo[key];
   const body = prefix && text.trim() ? `${prefix} ${text.trim()}` : text.trim();
   if (!body && !files.length) return false;
-  const queued = await state.sendMessage(serverId, chatId, body, { attachments: files.map((f) => f.upload!), replyTo, waitForDelivery: false });
+  let prepared;
+  try { prepared = await prepareSyncedDraft(serverId, chatId, text, prefix, files, replyTo); }
+  catch (error) {
+    useApp.getState().toast({ serverId, title: 'Draft not sent', body: error instanceof Error ? error.message : 'Sync could not verify this draft. Your composition is kept.' });
+    return false;
+  }
+  const queued = await state.sendMessage(serverId, chatId, body, { clientId: prepared?.clientId,
+    attachments: prepared?.attachments ?? files.map((f) => f.upload!), replyTo, waitForDelivery: false });
   if (!queued) return false;
   const current = useApp.getState();
   if (current.drafts[key] === text) current.setDraft(serverId, chatId, '');

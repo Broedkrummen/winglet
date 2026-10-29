@@ -900,8 +900,9 @@ export const useApp = create<AppState>((set, get) => {
         toast({ serverId, title: 'Message too long', body: limitError });
         return false;
       }
-      if (retryClientId && get().runtime[serverId]?.messages[chatId]?.some((m) =>
-        !isLocal(m) && m.meta?.client_id === retryClientId)) return true;
+      const knownClientId = retryClientId ?? o.clientId;
+      if (knownClientId && get().runtime[serverId]?.messages[chatId]?.some((m) =>
+        !isLocal(m) && m.meta?.client_id === knownClientId)) return true;
       // A retry reuses the original id so the server can tell it already has the message.
       const clientId = retryClientId ?? o.clientId ?? `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
       // Hands-free turns belong to this live session. They never enter the durable offline outbox.

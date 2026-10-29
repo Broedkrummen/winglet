@@ -1,6 +1,6 @@
 # Personal sync: implementation contract
 
-The approved scope is in `superpowers/plans/selected-features-implementation.md`; actual delivery is tracked in the companion progress ledger. Settings and text drafts are connected to the client today. The file transport described here is implemented and tested at the service/library level; Composer and outbox integration is still pending.
+The approved scope is in `superpowers/plans/selected-features-implementation.md`; actual delivery is tracked in the companion progress ledger. Settings, text/file drafts and reply context are connected to the client. Explicit Composer Send claims the frozen draft before durable local outbox acceptance. Browser/device verification and recovery controls remain; feature #1 is incomplete.
 
 ## Authority and bytes
 
@@ -40,16 +40,21 @@ The delivered receipt is a linked device's confirmation of its target message, *
 
 Quota, integrity, authorization and transfer failures keep the local/shared source. This is not an unlimited archive or a backup feature.
 
-## Remaining client integration
+## Composer integration
 
-1. Add local-only cached shared-file metadata scoped by home/group, source upload and slot. Observe completed draft uploads and reply context as part of one composition; exclude automatic voice work.
-2. Stage source bytes with `stageSyncFile`, retaining the source before the first read. Persist manifest changes through the existing strict journal. Failed staging must remain visible and recoverable after restart.
-3. Materialize with `materializeSyncFile` using the receiving device's own target pairing. Do not hold the global `applying` flag across network awaits. Recheck local intent, active composer, lock and home identity before applying asynchronous results.
-4. Track which file/reply revisions the person actually saw. Defer differing incoming compositions while active; a later edit must not acknowledge unseen remote values.
-5. Freeze actual sent body (including Guide/Queue prefix), reply, target and blob manifest before claiming. Implement canonical generation creation/advancement so later intentional drafts get new generations, while concurrent attempts of the same generation reuse its ID.
-6. Pass the claimed ID as existing `SendOptions.clientId`. Keep runnable outboxes device-local and clear the composer only after strict local outbox acceptance. An unavailable/unverifiable home cannot authorize a new fallback send ID.
-7. Carry existing retention IDs through the local outbox; do not release/reacquire a different hold with a cleanup gap. Settle only after a matching target message is confirmed, release unused duplicate copies, and keep ambiguous outcomes explicit. Local discard persistence must be confirmed before file retention is retired.
-8. Connect orphan-file recovery and explicit unconfirmed-retention release to reviewable controls. Source-file release must never be presented as Stop or cancellation of already-admitted work.
-9. Before automatic background materialization, move bulk file writes outside long SQLite critical sections, retaining final transactional authority/quota/idempotency checks. Validate restart, revocation and concurrent copies at that boundary.
+Ready manual attachments are staged under a source retention hold. The local strict journal stores home/group-scoped metadata; records contain only immutable manifests. Receiving devices materialize through their own target pairing. Automatic voice sends are excluded. Different incoming text, files or reply context wait while the composer is active; asynchronous completion rechecks local edits, membership context, lock and both endpoint identities before applying. Observed revisions advance only for applied or proven own values.
+
+Explicit Send freezes text, actual steering/queue prefix, reply, target identity and complete manifest. The home supplies a canonical generation on first write and advances it after an already-claimed composition meaningfully changes. An unfinished file preparation or unresolved conflict cannot be claimed. The client validates the exact returned revision/ID and persists its claim before passing that ID and retained target copies into the existing outbox. An unavailable or unverifiable home blocks this shared send; it does not invent another ID.
+
+Typing during preparation is journaled separately until the frozen claim binds, then replayed as subsequent composition changes. On restart, disagreement between the ordinary draft cache and sync journal is submitted as an unobserved recovery candidate with immutable zero field bases, preserving both versions for explicit resolution. Runnable outboxes stay local. A confirmed target user message matching the shared client ID permits settlement and duplicate/source hold release; a merely local pending message does not.
+
+Bulk byte writes happen before SQLite transactions. Final admission rechecks authorization, quota and idempotency; atomic rename and metadata occur under the transaction. Failed commits roll back and remove newly created target copies. Retries repair an existing verified copy without changing its identity.
+
+## Remaining integration and verification
+
+1. Add reviewable retained-file recovery/release controls, including removed attachments and abandoned claims. Confirm local discard persistence before retiring retention; never label source-file release as task cancellation.
+2. Complete full restart/file recovery, including stale source uploads already claimed by a previous message and all attachment/reply cache disagreements. Verify claim settlement and unused-copy release across real reconnects.
+3. Update loading/status copy and run bounded desktop/phone light/dark browser checks for file Send, conflict recovery and active edits. Physical Android/iPhone checks remain separate from exports.
+4. Connect read/resume state and the remaining portable libraries in the approved plan.
 
 These are remaining steps in feature #1, not a reduction of the approved 18-feature scope.

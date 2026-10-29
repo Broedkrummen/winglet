@@ -2,6 +2,7 @@
 import hashlib
 import json
 import time
+from contextlib import contextmanager
 
 import aiohttp
 import pytest
@@ -37,6 +38,46 @@ def write_files(hub, group, phone, blob, revision=0, op='files', deleted=False):
     return hub.user_sync.write(group, phone.id, 'draft', 'general', operation_id=op, base_revision=revision,
         changes={'files': {'deleted': True} if deleted else {'deleted': False, 'value': [{**blob, 'slot': 'file-1'}]},
                  'generation': {'deleted': False, 'value': 'draft-1'}})
+
+
+def test_target_staging_writes_outside_transaction_and_rechecks_revocation(hub, monkeypatch):
+    from plugin import sync_materialize
+    device = hub.store.add_device('Desktop')[0]
+    hub.store.add_device('Other owner')
+    original = sync_materialize.staged_bytes
+
+    @contextmanager
+    def revoke_during_bulk_write(root, data):
+        assert not hub.store._db.in_transaction
+        with original(root, data) as staged:
+            hub.store.remove_device(device['id'], keep_an_owner=True)
+            yield staged
+
+    monkeypatch.setattr(sync_materialize, 'staged_bytes', revoke_during_bulk_write)
+    with pytest.raises(SyncError, match='no longer available'):
+        sync_materialize.materialize(hub, device, hub.store.get_chat('general'), DIGEST, 'slot', DIGEST, 'file.pdf', DATA)
+    assert hub.store.total_upload_bytes() == 0
+    assert not list(hub.media_dir.iterdir())
+
+
+def test_target_commit_failure_rolls_back_metadata_and_removes_only_its_new_copy(hub, monkeypatch):
+    from plugin.sync_materialize import materialize
+    device = hub.store.add_device('Desktop')[0]
+    connection = hub.store._db
+
+    class FailedCommit:
+        def __getattr__(self, name):
+            return getattr(connection, name)
+
+        def commit(self):
+            raise OSError('synthetic commit failure')
+
+    monkeypatch.setattr(hub.store, '_db', FailedCommit())
+    with pytest.raises(OSError, match='synthetic commit failure'):
+        materialize(hub, device, hub.store.get_chat('general'), DIGEST, 'slot', DIGEST, 'file.pdf', DATA)
+    assert not connection.in_transaction
+    assert hub.store.total_upload_bytes() == 0
+    assert not list(hub.media_dir.iterdir())
 
 
 async def test_private_bytes_require_signed_upload_and_explicit_group_membership(client, hub):

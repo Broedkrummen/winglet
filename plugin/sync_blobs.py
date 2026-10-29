@@ -7,6 +7,7 @@ import os
 import re
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 from . import uploads
@@ -20,6 +21,23 @@ def _hash(value):
     if not isinstance(value, str) or not re.fullmatch('[0-9a-f]{64}', value):
         raise SyncError('Invalid file digest.')
     return value
+
+
+@contextmanager
+def staged_bytes(root, data):
+    """Bulk writes stay outside SQLite; only the final atomic rename needs its lock."""
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    temporary = root / f'{uuid.uuid4().hex}.partial'
+    created = False
+    try:
+        with temporary.open('xb') as out:
+            created = True
+            out.write(data)
+        os.chmod(temporary, 0o600)
+        yield temporary
+    finally:
+        if created:
+            temporary.unlink(missing_ok=True)
 
 
 class SyncBlobs:
@@ -53,6 +71,8 @@ class SyncBlobs:
         blob_id = hashlib.sha256(json.dumps([digest, name, bool(voice)], separators=(',', ':')).encode()).hexdigest()
         with self.sync._transaction() as db:
             self.sync._member(db, group, device)
+        with staged_bytes(self.root, data) as temporary, self.sync._transaction() as db:
+            self.sync._member(db, group, device)
             old = db.execute('SELECT * FROM sync_blobs WHERE group_id=? AND id=?', (group, blob_id)).fetchone()
             since = time.time() - 86400
             used = self.daily_bytes(device, since) + self.sync.store.upload_bytes_since(device, since)
@@ -65,15 +85,7 @@ class SyncBlobs:
             total = self.total_bytes() + self.sync.store.total_upload_bytes()
             if total + (0 if exists else len(data)) > self.max_total_bytes:
                 raise SyncError('The server upload storage is full. Your local file has not been removed.', 507)
-            self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
-            temporary = self.root / f'{uuid.uuid4().hex}.partial'
-            try:
-                with temporary.open('xb') as out:
-                    out.write(data)
-                os.chmod(temporary, 0o600)
-                os.replace(temporary, self.root / blob_id)
-            finally:
-                temporary.unlink(missing_ok=True)
+            os.replace(temporary, self.root / blob_id)
             db.execute('INSERT INTO sync_blobs VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(group_id,id) '
                        'DO UPDATE SET created_at=excluded.created_at',
                        (group, blob_id, digest, name, mime, uploads.kind_of(mime, voice), len(data), time.time()))

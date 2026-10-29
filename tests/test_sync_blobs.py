@@ -145,6 +145,32 @@ async def test_retention_release_rechecks_bot_scope_after_reading_body(client, h
     assert hub.store.upload_held('moved-file')
 
 
+async def test_saved_message_upload_can_stage_only_for_its_original_pairing_without_a_second_hold(client, hub):
+    owner = await pair_phone(client, hub, 'Original pairing')
+    other = await pair_phone(client, hub, 'Another pairing')
+    directory = hub.media_dir / 'sent-source'
+    directory.mkdir(parents=True)
+    (directory / 'file.pdf').write_bytes(DATA)
+    hub.store.add_upload('sent-source', owner.id, 'general', 'file.pdf', 'application/pdf', 'file', len(DATA))
+    message = hub.store.add_message('general', 'user', 'original sent attachment')
+    hub.store.claim_uploads(['sent-source'], owner.id, 'general', message['id'])
+    path = '/api/chats/general/uploads/hold'
+    strict = {'hold_id': 'recovery-stage', 'upload_ids': ['sent-source']}
+    body = json.dumps(strict).encode()
+    assert (await client.post(path, data=body, headers=owner.signed('POST', path, body))).status == 409
+    body = json.dumps({**strict, 'allow_message_backed': True}).encode()
+    assert (await client.post(path, data=body, headers=other.signed('POST', path, body))).status == 409
+    response = await client.post(path, data=body, headers=owner.signed('POST', path, body))
+    assert response.status == 200 and (await response.json())['message_backed'] == ['sent-source']
+    assert not hub.store.upload_held('sent-source')
+    assert hub.store.get_upload('sent-source')['message_id'] == message['id']
+    group = hub.user_sync.create(owner.id)['group_id']
+    source = hub._upload_public(hub.store.get_upload('sent-source'))
+    data = await (await client.get(source['url'], headers=owner.auth)).read()
+    staged = await put(client, owner, f'/api/user-sync/{group}/blobs/{DIGEST}?name=file.pdf', data)
+    assert staged.status == 200
+
+
 async def test_private_bytes_require_signed_upload_and_explicit_group_membership(client, hub):
     a = await pair_phone(client, hub, 'Desktop')
     b = await pair_phone(client, hub, 'Phone')

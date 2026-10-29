@@ -9,10 +9,11 @@ async def _hold(request, release=False):
     hub, device, chat = _chat_for(request)
     try:
         body = await request.json()
-        allowed = ({'hold_id'}, {'hold_id', 'source_device'}, {'hold_id', 'upload_id', 'expected_version'}) if release else ({'hold_id', 'upload_ids'},)
+        allowed = ({'hold_id'}, {'hold_id', 'source_device'}, {'hold_id', 'upload_id', 'expected_version'}) if release else ({'hold_id', 'upload_ids'}, {'hold_id', 'upload_ids', 'allow_message_backed'})
         if not isinstance(body, dict) or set(body) not in allowed:
             raise SyncError('Invalid upload retention request.')
         hold_id = _identifier(body['hold_id'])
+        message_backed = []
         with hub.store.transaction():
             # Body streaming may outlive a chat's visibility or bot scope.
             hub, device, chat = _chat_for(request)
@@ -34,9 +35,23 @@ async def _hold(request, release=False):
                     raise SyncError('Expected 1 to 20 upload IDs.')
                 for upload_id in ids:
                     _identifier(upload_id)
-                if not hub.store.hold_uploads(ids, device['id'], chat['id'], hold_id):
+                if 'allow_message_backed' in body:
+                    if body['allow_message_backed'] is not True:
+                        raise SyncError('Invalid message-backed source request.')
+                    actor = hub.store.get_device(device['id'])
+                    rows = [hub.store.get_upload(upload_id) for upload_id in ids]
+                    if not actor or actor['role'] != 'owner' or any(row is None or row['device_id'] != actor['id'] or row['chat_id'] != chat['id'] for row in rows):
+                        raise SyncError('This source upload is no longer available to this pairing.', 409)
+                    message_backed = [row['id'] for row in rows if row['message_id'] is not None]
+                    for row in rows:
+                        if row['message_id'] is not None:
+                            message = hub.store.get_message(row['message_id'])
+                            if not message or message['chat_id'] != chat['id']:
+                                raise SyncError('The message backing this saved source is unavailable.', 409)
+                    ids = [upload_id for upload_id in ids if upload_id not in message_backed]
+                if ids and not hub.store.hold_uploads(ids, device['id'], chat['id'], hold_id):
                     raise SyncError('An upload expired, belongs to another device, or is held by another message. Upload it again.', 409)
-        return web.json_response({'retained': not release}, headers={'Cache-Control': 'no-store'})
+        return web.json_response({'retained': not release, **({'message_backed': message_backed} if message_backed else {})}, headers={'Cache-Control': 'no-store'})
     except (ValueError, TypeError) as exc:
         return web.json_response({'error': str(exc) if isinstance(exc, SyncError) else 'Invalid upload retention request.'},
                                  status=exc.status if isinstance(exc, SyncError) else 400)

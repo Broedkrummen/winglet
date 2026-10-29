@@ -274,11 +274,45 @@ test('restart disagreement preserves both durable snapshots without rebasing one
   const journal = [...restarted.cache].find(([key]) => key.startsWith('user-sync:journal:'))![1];
   const edits = journal.pending.filter((p: model.Pending) => p.kind === 'draft' && p.id === 'home:chat');
   assert.equal(edits[0].mutation.changes.text.value, 'journal version');
-  const recovery = edits.at(-1);
-  assert.equal(recovery.mutation.changes.text.value, 'core cache version');
-  assert.equal(recovery.mutation.base_fields.text, 0);
-  assert.equal(recovery.prepared, true);
-  assert.deepEqual(recovery.predecessors, {});
+  assert.equal(journal.recoveringDrafts[0].fields.text.value, 'core cache version');
+  await restarted.runtime.refreshPersonalSync();
+  const recovery = restarted.requests.find(request => request.body?.changes?.text?.value === 'core cache version')!.body;
+  assert.equal(recovery.base_fields.text, 0);
+  assert.equal(recovery.base_revision, 0);
+});
+
+test('restart journals reply and uncached file snapshots offline before allowing incoming replacement', async () => {
+  const first = harness();
+  await first.runtime.connectPersonalSync(first.server);
+  const restarted = harness(first.cache);
+  const file = { localId: 'saved-file', name: 'saved.txt', mime: 'text/plain', kind: 'file', size: 1, progress: 1, status: 'ready',
+    upload: { id: 'source', url: '/api/media/source/saved.txt', name: 'saved.txt', size: 1, mime: 'text/plain', kind: 'file' } };
+  restarted.useApp.setState({ network: false, draftFiles: { 'home:chat': [file] },
+    replyTo: { 'home:chat': { id: 'quote', text: 'saved quote', role: 'bot' } } });
+  await restarted.runtime.bootPersonalSync();
+  await restarted.runtime.refreshPersonalSync();
+  assert.equal(restarted.transfers.length, 0);
+  const journal = [...restarted.cache].find(([key]) => key.startsWith('user-sync:journal:'))![1];
+  assert.equal(journal.recoveringDrafts[0].files[0].upload.id, 'source');
+  assert.equal(journal.recoveringDrafts[0].fields.reply.value.id, 'quote');
+  restarted.useApp.setState({ network: true });
+  await restarted.runtime.refreshPersonalSync();
+  assert.equal(restarted.transfers[0].kind, 'stage');
+  const request = restarted.requests.find(item => item.body?.changes?.files?.value?.[0]?.slot === 'saved-file')!;
+  assert.equal(request.body.base_fields.files, 0);
+  assert.equal(request.body.base_fields.reply, 0);
+  assert.equal(request.body.changes.reply.value.id, 'quote');
+  assert.ok(!JSON.stringify(request.body).includes('/api/media/'));
+});
+
+test('a previously observed cleared draft is preserved as a recovery choice after restart', async () => {
+  const first = harness();
+  first.useApp.getState().setDraft('home', 'chat', 'previous text');
+  await first.runtime.connectPersonalSync(first.server);
+  const restarted = harness(first.cache);
+  await restarted.runtime.bootPersonalSync();
+  const journal = [...restarted.cache].find(([key]) => key.startsWith('user-sync:journal:'))![1];
+  assert.equal(journal.recoveringDrafts.find((item: model.DraftRecovery) => item.id === 'home:chat').fields.text.value, '');
 });
 
 test('a changed target pairing during a download cannot receive its stale draft result', async () => {

@@ -126,3 +126,22 @@ test('staging retains the source first and publishes only immutable metadata, ne
   await assert.rejects(transfer.stageSyncFile(home, 'group', target, 'chat', { ...file, autoSend: true }), /upload to finish/);
   assert.equal(calls.length, 3);
 });
+
+test('a saved sent-file source uses an explicit owner-checked message-backed fallback after strict retention refuses', async () => {
+  const bytes = new TextEncoder().encode('sent source');
+  const hash = Array.from(sha256(bytes), b => b.toString(16).padStart(2, '0')).join('');
+  class ApiError extends Error { status = 409; }
+  const bodies: any[] = [];
+  const transfer = compile('../src/features/sync/fileTransfer.ts', { '@noble/hashes/sha2.js': { sha256 }, '../../lib/api': {
+    ApiError, encodeApiComponent: encodeURIComponent,
+    signedApi: async (_s: any, _m: any, _p: any, body: any) => { bodies.push(body); if (!body.allow_message_backed) throw new ApiError('already sent'); return { message_backed: ['sent'] }; },
+    apiBytes: async () => bytes,
+    signedBytesApi: async () => ({ blob: { id: 'a'.repeat(64), sha256: hash, name: 'sent.txt', size: bytes.length, mime: 'text/plain', kind: 'file' } }),
+  } });
+  const result = await transfer.stageSyncFile({ id: 'home' }, 'group', { id: 'target' }, 'chat', {
+    status: 'ready', localId: 'saved', kind: 'file', upload: { id: 'sent', url: '/api/media/sent/sent.txt', name: 'sent.txt', size: bytes.length },
+  });
+  assert.equal(bodies.length, 2);
+  assert.equal(bodies[1].allow_message_backed, true);
+  assert.equal(result.sha256, hash);
+});

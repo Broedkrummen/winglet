@@ -78,3 +78,20 @@ def test_all_sync_routes_have_explicit_permission_policies():
     assert ROUTE_POLICY['h_user_sync_read'] == 'owner'
     for name in ('create', 'invite', 'join', 'revoke', 'write', 'submit'):
         assert ROUTE_POLICY[f'h_user_sync_{name}'] == 'owner_signed'
+
+async def test_preset_history_is_private_and_rechecks_membership(client, hub):
+    from test_presets import definition
+    a = await pair_phone(client, hub)
+    b = await pair_phone(client, hub)
+    group = (await (await post(client, a, '/api/user-sync', {})).json())['group_id']
+    preset = definition()
+    path = f'/api/user-sync/{group}/records/preset/research'
+    response = await post(client, a, path, {'operation_id': 'preset-create', 'base_revision': 0,
+                                          'changes': {'definition': {'deleted': False, 'value': preset}}})
+    assert response.status == 200
+    history = f'/api/user-sync/{group}/presets/research/versions/{preset["version"]}'
+    response = await client.get(history, headers=a.auth)
+    assert response.status == 200 and response.headers['Cache-Control'] == 'no-store'
+    assert (await response.json())['definition'] == preset
+    assert (await client.get(history, headers=b.auth)).status == 403
+    assert (await client.get(history + '-missing', headers=a.auth)).status == 404

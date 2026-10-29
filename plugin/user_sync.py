@@ -41,6 +41,10 @@ CREATE TABLE IF NOT EXISTS sync_operations (
     fingerprint TEXT NOT NULL, result TEXT NOT NULL,
     PRIMARY KEY(group_id, device_id, operation_id)
 );
+CREATE TABLE IF NOT EXISTS sync_preset_versions (
+    group_id TEXT NOT NULL, record_id TEXT NOT NULL, version TEXT NOT NULL, definition TEXT NOT NULL,
+    PRIMARY KEY(group_id, record_id, version)
+);
 CREATE TABLE IF NOT EXISTS sync_submissions (
     group_id TEXT NOT NULL, record_id TEXT NOT NULL, generation TEXT NOT NULL,
     submission_id TEXT NOT NULL UNIQUE, fingerprint TEXT NOT NULL, created_at REAL NOT NULL,
@@ -173,6 +177,17 @@ class UserSync:
         with self._transaction() as db:
             self._member(db, group, device)
             return self._read(db, group, kind, record_id)
+
+    def preset_version(self, group, device, record_id, version):
+        _identifier(record_id)
+        _identifier(version)
+        with self._transaction() as db:
+            self._member(db, group, device)
+            row = db.execute('SELECT definition FROM sync_preset_versions WHERE group_id=? AND record_id=? AND version=?',
+                             (group, record_id, version)).fetchone()
+            if not row:
+                raise SyncError('This preset version is unavailable.', 404)
+            return {'definition': json.loads(row['definition'])}
 
     def groups(self, device):
         with self._transaction() as db:
@@ -370,6 +385,19 @@ class UserSync:
                 raise SyncError('Each field needs a deleted flag and optional JSON value.')
             if (not value['deleted'] and 'value' not in value) or (value['deleted'] and 'value' in value):
                 raise SyncError('Deleted fields cannot carry a value; live fields require one.')
+            if kind == 'preset':
+                if field not in {'definition', 'removed'}:
+                    raise SyncError('Invalid task preset field.')
+                if not value['deleted']:
+                    if field == 'removed':
+                        if type(value['value']) is not bool:
+                            raise SyncError('Invalid preset removal flag.')
+                    else:
+                        from .presets import validate_definition
+                        try:
+                            validate_definition(value['value'])
+                        except ValueError as exc:
+                            raise SyncError(str(exc)) from exc
             if kind == 'bookmark':
                 if field not in {'source', 'snapshot', 'title', 'note', 'tags', 'removed'}:
                     raise SyncError('Invalid bookmark field. Source text and credentials stay on the source server.')
@@ -425,6 +453,19 @@ class UserSync:
             record = self._read(db, group, kind, record_id)
             if base_revision > record['revision'] or (resolve and base_revision != record['revision']):
                 raise SyncError('Refresh before resolving these changes.', 409)
+            definition = changes.get('definition') if kind == 'preset' else None
+            if definition and not definition['deleted']:
+                value = definition['value']
+                encoded = _json(value)
+                prior = db.execute('SELECT definition FROM sync_preset_versions WHERE group_id=? AND record_id=? AND version=?',
+                                   (group, record_id, value['version'])).fetchone()
+                if prior and prior['definition'] != encoded:
+                    raise SyncError('This preset version already has different contents. Create a new version.', 409)
+                if not prior:
+                    count = db.execute('SELECT COUNT(*) FROM sync_preset_versions WHERE group_id=?', (group,)).fetchone()[0]
+                    if count >= 10000:
+                        raise SyncError('This sync group has reached its 10,000 preset-version limit. Existing versions are kept.', 413)
+                    db.execute('INSERT INTO sync_preset_versions VALUES (?,?,?,?)', (group, record_id, value['version'], encoded))
             revision = record['revision'] + 1
             old_content = _draft_content(record['fields']) if kind == 'draft' else None
             old_generation = record['fields'].get('generation')

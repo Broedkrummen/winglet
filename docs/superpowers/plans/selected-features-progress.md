@@ -7,7 +7,8 @@ This ledger reports actual delivery, not intention. No selected feature is compl
 | IDs | Tracking issue | Current evidence / remaining work |
 | --- | --- | --- |
 | 1 | #14 | Membership, preferences, text/file drafts, reply context, explicit shared-ID Composer Send, retained-file review, restart candidate preservation and read/resume state are connected. Signed-route browser checks cover desktop/phone recovery and explicit older-history resume. Terminal recovery choices, portable libraries and physical-device verification remain. See `docs/USER_SYNC.md`. |
-| 3, 5 | #15 | Pending results and presets. |
+| 3 | #15 | Pending results library. |
+| 5 | #15 | Typed preset definitions/rendering and immutable private version history implemented. Editor/library, target validation, reviewable draft application and execution snapshots remain; see `docs/PRESETS.md`. |
 | 4 | #15 | Save answer, synced library/notes/tags, explicit note choices, source-local snapshots, transient ACL-checked previews and old-message focus are connected. Desktop/phone browser checks pass, including failed snapshot retry and revocation. Physical-device and broader interruption checks remain; see `docs/BOOKMARKS.md`. |
 | 7 | #15 | Searchable commands, shared dispatch, bot picker, shortcut hints and protected input contexts implemented. Selected-feature actions will join as their surfaces land; physical keyboard/native checks remain. See the keyboard checkpoint below. |
 | 6 | #16 | Pending notification implementation. |
@@ -112,3 +113,9 @@ Save answer in Message options now journals a source reference, title, note and 
 Source text stays transient. Opening/reloading checks the matching paired installation; serialized 15-second checks learn remote revocations. Blur, background, lock or endpoint changes hide text immediately, and access failure removes it without a persistent fallback. Source edits, deletion and truncation remain distinct. Open original uses existing paginated focus.
 
 Validation: **529 app tests passed**, TypeScript passed and web export passed. Python is unchanged from the prior **723 passed, 31 skipped** checkpoint. Signed-route desktop/phone browser checks verified saves in both directions, competing offline notes and explicit choice propagation, old-message pagination in both views, edited/deleted source states, revocation hiding text while preserving personal notes, interrupted snapshot recovery, removal, release and restoration. The bounded light/dark inspection found unlabeled visual switches; existing labeled rows fixed them in one batch and the confirmation passed. No page errors. Physical Android/iPhone and broader interruption/native accessibility combinations remain unverified. The approved 18-feature scope remains incomplete.
+
+## Preset definition and version-history checkpoint
+
+Typed task definitions validate text/number/boolean/choice inputs, defaults, placeholders and bounded output. Substitution is a single literal pass and never executes input text or changes settings. Definitions carry optional exact model/reasoning/project/capability references without permission grants. Meaningful changes require a new immutable version; private group history retains old definitions and rechecks membership on each no-store read.
+
+Validation: **736 Python tests passed, 31 skipped**. Tests cover missing/invalid inputs, large and nonfinite numbers, literal nested-looking input, expanded output limits, unknown permission/config fields, version reuse refusal, old-version retention and private historical reads. The app remains at the verified **529-pass** bookmark checkpoint; its final TypeScript, web and Android exports passed. All 40 packaged web files match the web export, with bundle references and notices checks passing. No preset UI, apply-to-draft path or send-time snapshot is claimed yet; feature #5 and the approved 18-feature scope remain incomplete.

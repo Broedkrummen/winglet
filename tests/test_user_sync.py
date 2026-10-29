@@ -292,3 +292,22 @@ def test_bookmark_notes_keep_concurrent_versions_for_explicit_choice(linked):
                              changes={'note': {'deleted': False, 'value': 'Phone note'}})
     assert {item['value'] for item in conflict['fields']['note']['candidates']} == {'Desktop note', 'Phone note'}
     assert conflict['fields']['source']['candidates'][0]['value'] == source
+
+def test_preset_versions_are_immutable_and_old_definitions_survive_edits(linked):
+    from test_presets import definition
+    _, service, group, a, b = linked
+    original = definition()
+    first = service.write(group, a, 'preset', 'research', operation_id='create-preset', base_revision=0,
+                          changes={'definition': {'deleted': False, 'value': original}})
+    changed = {**original, 'name': 'Different task'}
+    with pytest.raises(SyncError, match='new version'):
+        service.write(group, a, 'preset', 'research', operation_id='reuse-version', base_revision=first['revision'],
+                      changes={'definition': {'deleted': False, 'value': changed}})
+    changed['version'] = 'version-two'
+    service.write(group, b, 'preset', 'research', operation_id='edit-preset', base_revision=first['revision'],
+                  changes={'definition': {'deleted': False, 'value': changed}})
+    assert service.preset_version(group, a, 'research', original['version'])['definition'] == original
+    assert service.preset_version(group, b, 'research', changed['version'])['definition'] == changed
+    service.revoke(group, a, b)
+    with pytest.raises(SyncError):
+        service.preset_version(group, b, 'research', original['version'])

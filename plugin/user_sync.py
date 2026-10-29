@@ -199,6 +199,29 @@ class UserSync:
                                  'fields': json.loads(r['state'])} for r in rows[:100]],
                     'next': {'kind': rows[99]['kind'], 'id': rows[99]['record_id']} if len(rows) > 100 else None}
 
+    def submissions(self, group, device, after=''):
+        if not isinstance(after, str) or len(after) > 160:
+            raise SyncError('Invalid submission cursor.')
+        with self._transaction() as db:
+            self._member(db, group, device)
+            rows = db.execute('SELECT s.submission_id,s.record_id,s.created_at,p.payload,'
+                'EXISTS(SELECT 1 FROM sync_submission_receipts r WHERE r.group_id=s.group_id AND r.submission_id=s.submission_id) AS delivered,'
+                'EXISTS(SELECT 1 FROM sync_submission_file_releases f WHERE f.group_id=s.group_id AND f.submission_id=s.submission_id) AS released '
+                'FROM sync_submissions s JOIN sync_submission_payloads p ON p.group_id=s.group_id AND p.submission_id=s.submission_id '
+                'WHERE s.group_id=? AND s.submission_id>? ORDER BY s.submission_id LIMIT 21', (group, after)).fetchall()
+            result = []
+            for row in rows[:20]:
+                payload = json.loads(row['payload'])
+                def value(key, fallback):
+                    field = payload.get(key, {})
+                    return fallback if field.get('deleted', True) else field.get('value', fallback)
+                text = value('text', '')
+                result.append({'id': row['submission_id'], 'record_id': row['record_id'], 'created_at': row['created_at'],
+                    'server_id': value('server_id', ''), 'chat_id': value('chat_id', ''),
+                    'preview': text[:240] if isinstance(text, str) else '', 'files': value('files', []),
+                    'delivery_confirmed': bool(row['delivered']), 'files_released': bool(row['released'])})
+            return {'submissions': result, 'next': rows[19]['submission_id'] if len(rows) > 20 else None}
+
     def claim_submission(self, group, device, record_id, expected_revision):
         """Return one stable send ID for an explicitly submitted draft generation.
 

@@ -42,6 +42,8 @@ async def test_explicit_linking_signed_mutation_and_revoke(client, hub):
     assert response.status == 200
     assert (await client.get(path, headers=b.auth)).status == 403
     assert (await client.get(f'/api/user-sync/{group}/members', headers=b.auth)).status == 403
+    listing = f'/api/user-sync/{group}/submissions'
+    assert (await client.get(listing, headers=b.auth)).status == 403
     assert (await (await client.get('/api/user-sync', headers=b.auth)).json()) == {'groups': []}
     invite = await post(client, a, f'/api/user-sync/{group}/invite', {})
     token = (await invite.json())['token']
@@ -54,8 +56,12 @@ async def test_explicit_linking_signed_mutation_and_revoke(client, hub):
     first = await (await post(client, a, submit, {'expected_revision': 1})).json()
     second = await (await post(client, b, submit, {'expected_revision': 1})).json()
     assert first['submission_id'] == second['submission_id']
+    response = await client.get(listing, headers=b.auth)
+    assert response.headers['Cache-Control'] == 'no-store'
+    assert (await response.json())['submissions'][0]['id'] == first['submission_id']
     assert (await post(client, a, f'/api/user-sync/{group}/revoke', {'device_id': b.id})).status == 200
     assert (await client.get(path, headers=b.auth)).status == 403
+    assert (await client.get(listing, headers=b.auth)).status == 403
 
 
 async def test_invalid_mutation_and_unknown_fields_do_not_write(client, hub):

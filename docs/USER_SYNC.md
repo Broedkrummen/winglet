@@ -23,10 +23,13 @@ All paths are relative to their own paired server. Bot selection remains inside 
 | `DELETE /api/chats/{chat}/uploads/hold` | Signed owner; `{hold_id}` releases own retention. `{hold_id, source_device}` permits explicit recovery cleanup only after that source pairing was removed. |
 | `GET /api/uploads/retained?after=...` | Owner; bounded, bot-scoped recovery listing for files held by removed devices. Export/recover or explicitly discard before releasing. |
 | `POST /api/user-sync/{group}/drafts/{record}/submit` | Signed group member; `{expected_revision}` claims one stable submission ID for the exact conflict-free generation. It enqueues no work. |
+| `GET /api/user-sync/{group}/submissions?after=...` | Current owner/group member; at most 20 frozen submission summaries, bounded text preview and file descriptors, plus linked-device confirmation/release status. No executable outbox or credentials. |
 | `POST .../drafts/{record}/submissions/{submission}/delivered` | Signed group member; target-bound `{server_id, chat_id, message_id, client_id}` records linked-device confirmation and retires submission pins. |
 | `POST .../drafts/{record}/submissions/{submission}/release-files` | Explicit unconfirmed source-retention discard; requires `confirmation: release-retained-files-without-confirmed-delivery`. This does not cancel execution, erase a claim or authorize another run. |
 
 The delivered receipt is a linked device's confirmation of its target message, **not** cryptographic remote-server attestation or proof that Hermes completed execution. The home checks its frozen target snapshot and the exact submission client ID. A conflicting receipt cannot replace the first recorded receipt.
+
+Settings → Sync → Shared submission recovery lists submissions from all explicitly linked devices, including those no longer available locally. Private Download reads authenticated home bytes and verifies their size and digest before exporting. Browser export uses a local object URL; native export uses a unique cache directory cleaned after sharing or failure. Explicit Release shared source retention retires only the submission's home pins. It neither discards local outboxes/holds nor cancels execution, erases the stable ID or authorizes a new send. Live draft references can continue to pin the same blob. Files already reclaimed after release can no longer be downloaded from that source.
 
 ## Retention and limits
 
@@ -52,7 +55,7 @@ Bulk byte writes happen before SQLite transactions. Final admission rechecks aut
 
 ## Remaining integration and verification
 
-1. Extend retained-file recovery beyond the shipped removed-device Download/Release controls to current-device removed attachments and abandoned claims. Failed-message discard now commits its outbox removal strictly and preserves the message on storage failure. Do not retire retention before confirmed discard; never label source-file release as task cancellation.
+1. Extend retained-file recovery to current-device removed attachments and unused local target/source copies. Group-wide abandoned-submission review, private Download and explicit shared-pin Release are connected; local holds intentionally remain independently protected. Failed-message discard commits its outbox removal strictly and preserves the message on storage failure. Do not retire local retention before confirmed discard; never label source-file release as task cancellation.
 2. Complete full restart/file recovery, including stale source uploads already claimed by a previous message and all attachment/reply cache disagreements. Verify claim settlement and unused-copy release across real reconnects.
 3. Extend browser verification to all restart/recovery and active-edit cases. Current checks cover settings in light/dark desktop/phone layouts, removed-device Download/Release, receiving a manual attachment, reopening after persistence, and concurrent Send producing one actual target message. Loading/status copy reflects file/reply sync. Physical Android/iPhone checks remain separate from exports.
 4. Connect read/resume state and the remaining portable libraries in the approved plan.

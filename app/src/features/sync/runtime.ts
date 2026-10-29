@@ -6,7 +6,7 @@ import { useLock } from '../../lib/appLock';
 import { usePrefs } from '../../lib/prefs';
 import { draftKey, useApp } from '../../lib/store';
 import type { DraftFile, ReplyRef, Server, Upload } from '../../lib/types';
-import { materializeSyncFile, stageSyncFile, stagingHoldId, validateSyncFile, type SyncFile } from './fileTransfer';
+import { materializeSyncFile, readSyncFile, stageSyncFile, stagingHoldId, validateSyncFile, type SyncFile } from './fileTransfer';
 import { changedValues, portablePreferences, preferencePatch } from './preferences';
 import { emptyReplica, receive, recordKey, stage, SyncReplica, visibleValues, type Candidate, type Kind, type RecordState,
   type Json, type Pending, type Replica, type Value } from './model';
@@ -546,6 +546,36 @@ export async function personalSyncMembers(): Promise<SyncMember[]> {
   const server = serverFor();
   if (!server) return [];
   return (await api<{ members: SyncMember[] }>(server, path('/members'))).members;
+}
+
+export type SharedSubmission = { id: string; record_id: string; created_at: number; server_id: string; chat_id: string;
+  preview: string; files: SyncFile[]; delivery_confirmed: boolean; files_released: boolean };
+export async function personalSubmissions(after?: string): Promise<{ submissions: SharedSubmission[]; next: string | null }> {
+  const config = home, engine = replica, server = serverFor();
+  if (!config || !engine || !server || !allowed()) throw new Error('Reconnect and unlock your sync home before reviewing retained submissions.');
+  const result = await api<{ submissions: SharedSubmission[]; next: string | null }>(server,
+    path(`/submissions${after ? `?after=${encodeApiComponent(after)}` : ''}`));
+  if (home !== config || replica !== engine || serverFor() !== server || !allowed())
+    throw new Error('Your sync connection changed. Refresh before reviewing submissions.');
+  return result;
+}
+
+export async function releaseSharedSubmissionFiles(submission: SharedSubmission) {
+  const config = home, engine = replica, server = serverFor();
+  if (!config || !engine || !server || !allowed()) throw new Error('Reconnect and unlock your sync home before releasing shared retention.');
+  await signedApi(server, 'POST', path(`/drafts/${encodeApiComponent(submission.record_id)}/submissions/${encodeApiComponent(submission.id)}/release-files`),
+    { confirmation: 'release-retained-files-without-confirmed-delivery' });
+  // Only home pins are released. Local draft/outbox files and the submission ID stay intact.
+}
+
+export async function sharedSubmissionFile(file: SyncFile): Promise<Uint8Array> {
+  const config = home, engine = replica, server = serverFor();
+  const check = () => {
+    if (!config || !engine || !server || home !== config || replica !== engine || serverFor() !== server || !allowed())
+      throw new Error('Reconnect and unlock the same sync home before downloading this file.');
+  };
+  check();
+  return readSyncFile(server!, config!.groupId, file, check);
 }
 
 export async function revokePersonalDevice(deviceId: string) {

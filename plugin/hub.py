@@ -126,7 +126,7 @@ class Forbidden(PermissionError):
 #   owner_signed  an owner's verified device, with a signed request: every control action
 ROUTE_POLICY = {
     "h_user_sync_groups": "owner", "h_user_sync_records": "owner", "h_user_sync_read": "owner",
-    "h_user_sync_members": "owner",
+    "h_user_sync_members": "owner", "h_user_sync_submissions": "owner",
     "h_sync_blob_put": "owner_signed", "h_sync_blob_get": "owner",
     "h_sync_materialize": "owner_signed",
     "h_upload_hold": "owner_signed", "h_upload_release": "owner_signed",

@@ -52,6 +52,29 @@ def test_equal_value_replay_does_not_make_a_later_observed_edit_conflict(linked)
     assert [c['value'] for c in edited['fields']['text']['candidates']] == ['intentional change']
 
 
+def test_submissions_are_private_paginated_and_show_retention_without_claiming_execution(linked):
+    _, service, group, a, b = linked
+    ids = []
+    for index in range(23):
+        revision = service.read(group, a, 'draft', 'chat-1')['revision']
+        draft = write(service, group, a, f'edit-{index}', revision, text=str(index) + 'x' * 500,
+                      server_id='target', chat_id='general')
+        ids.append(service.claim_submission(group, a, 'chat-1', draft['revision'])['submission_id'])
+    first = service.submissions(group, b)
+    second = service.submissions(group, b, first['next'])
+    assert len(first['submissions']) == 20 and len(second['submissions']) == 3
+    assert {s['id'] for s in first['submissions'] + second['submissions']} == set(ids)
+    sample = first['submissions'][0]
+    assert len(sample['preview']) == 240
+    assert sample['server_id'] == 'target' and sample['chat_id'] == 'general'
+    assert sample['delivery_confirmed'] is False and sample['files_released'] is False
+    service.release_submission_files(group, b, 'chat-1', sample['id'], 'release-retained-files-without-confirmed-delivery')
+    assert service.submissions(group, b)['submissions'][0]['files_released'] is True
+    service.revoke(group, a, b)
+    with pytest.raises(SyncError):
+        service.submissions(group, b)
+
+
 def test_disjoint_changes_merge_but_competing_text_requires_choice(linked):
     _, service, group, a, b = linked
     write(service, group, a, 'text-a', 0, text='hello')

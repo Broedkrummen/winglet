@@ -35,12 +35,17 @@ function harness(initialCache?: Map<string, any>) {
   let resolutionGate: (() => Promise<void>) | undefined;
   let claimGate: (() => Promise<void>) | undefined;
   let materializeGate: (() => Promise<void>) | undefined;
+  let submissionsGate: (() => Promise<void>) | undefined;
   let invalidClaim = false;
   const transfers: any[] = [];
   let nonce = 0;
   const transport = async (_server: unknown, path: string) => {
     requests.push({ path });
     if (path.endsWith('/members')) return { members: [] };
+    if (path.includes('/submissions')) {
+      if (submissionsGate) await submissionsGate();
+      return { submissions: [], next: null };
+    }
     if (/\/records\//.test(path)) return records.get(decodeURIComponent(path.split('/records/')[1]));
     return { records: [...records].map(([key, value]) => {
       const slash = key.indexOf('/');
@@ -110,6 +115,7 @@ function harness(initialCache?: Map<string, any>) {
   return { runtime: exports, useApp, usePrefs, useLock, cache, records, requests, server, transfers,
     deferClaim: () => gate(value => { claimGate = value; }),
     deferMaterialize: () => gate(value => { materializeGate = value; }), invalidClaim: () => { invalidClaim = true; },
+    deferSubmissions: () => gate(value => { submissionsGate = value; }),
     rejectResolution: () => { rejectResolution = true; }, failStorage: (value: boolean) => { failStorage = value; },
     deferResolution: () => {
       let entered!: () => void;
@@ -124,6 +130,27 @@ function harness(initialCache?: Map<string, any>) {
 function remoteField(value: model.Json, revision: number): model.RecordState['fields'][string] {
   return { revision, candidates: [{ deleted: false, value, device_id: 'phone', operation_id: `remote-${revision}`, at: 2 }] };
 }
+
+test('submission recovery refuses a listing that arrives after the home is disconnected', async () => {
+  const h = harness();
+  await h.runtime.connectPersonalSync(h.server);
+  const gate = h.deferSubmissions();
+  const listing = h.runtime.personalSubmissions();
+  await gate.started;
+  await h.runtime.disconnectPersonalSync();
+  gate.release();
+  await assert.rejects(listing, /connection changed/);
+});
+
+test('explicit shared source release uses the existing claim and cannot enqueue or cancel work', async () => {
+  const h = harness();
+  await h.runtime.connectPersonalSync(h.server);
+  await h.runtime.releaseSharedSubmissionFiles({ id: 'claimed-id', record_id: 'home:chat' });
+  const request = h.requests.at(-1)!;
+  assert.ok(request.path.endsWith('/drafts/home%3Achat/submissions/claimed-id/release-files'));
+  assert.equal(request.body.confirmation, 'release-retained-files-without-confirmed-delivery');
+  assert.ok(!h.requests.some(item => item.path.endsWith('/messages') || item.path.endsWith('/stop')));
+});
 
 test('explicit Send freezes reply and steering prefix under the shared submission ID', async () => {
   const h = harness();

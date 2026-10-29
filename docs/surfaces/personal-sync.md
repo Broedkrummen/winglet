@@ -14,6 +14,7 @@ One person links desktop and phone to one designated Hermes sync home. Being ano
 - Conflicts show each exact candidate, its device and timestamp. Expand long values; select a candidate or combine text. A stale choice must refresh the conflict rather than silently win.
 - Keep unresolved choices discoverable in the Settings row. Never steal typing focus or navigate in response to incoming state.
 - Below setup, expose retained-file recovery for removed pairings on each paired bot. Load explicitly, paginate, offer Download before an explicit two-step Release. Explain that storage release neither stops execution nor proves delivery. Hide results while locked and reject stale paired endpoints.
+- Shared submission recovery lists bounded frozen previews from the private sync group. Label target-message confirmation separately from task completion. Offer private file Download and explicit shared-source-pin Release; explain that local drafts, outboxes and copies have separate retention. Preserve stable submission identifiers and pagination. Clear displayed summaries when the home or lock changes.
 
 ## Boundaries
 

@@ -45,10 +45,7 @@ export async function stageSyncFile(home: Server, groupId: string, target: Serve
 
 /** A receiving device uses its own target pairing, and verifies bytes before any target upload. */
 export async function materializeSyncFile(home: Server, groupId: string, target: Server, chatId: string, file: SyncFile, check: () => void = () => {}): Promise<Upload & { hold_id: string }> {
-  validateSyncFile(file);
-  check();
-  const bytes = await apiBytes(home, `/api/user-sync/${encodeApiComponent(groupId)}/blobs/${file.id}`);
-  if (bytes.length !== file.size || digest(bytes) !== file.sha256) throw new Error('The shared file failed its integrity check. Nothing was uploaded to the target.');
+  const bytes = await readSyncFile(home, groupId, file, check);
   const path = `/api/chats/${encodeApiComponent(chatId)}/staged-files/${file.id}?slot=${encodeApiComponent(file.slot)}&sha256=${file.sha256}`
     + `&name=${encodeApiComponent(file.name)}&voice=${file.kind === 'voice' ? 1 : 0}`;
   check();
@@ -56,4 +53,14 @@ export async function materializeSyncFile(home: Server, groupId: string, target:
   if (!upload?.id || !upload.hold_id || upload.size !== file.size || upload.name !== file.name || upload.mime !== file.mime || upload.kind !== file.kind)
     throw new Error('The target did not confirm a retained file copy. Your shared original is kept.');
   return upload;
+}
+
+/** Export and target materialization use the same authenticated, integrity-checked bytes. */
+export async function readSyncFile(home: Server, groupId: string, file: SyncFile, check: () => void = () => {}): Promise<Uint8Array<ArrayBuffer>> {
+  validateSyncFile(file);
+  check();
+  const bytes = await apiBytes(home, `/api/user-sync/${encodeApiComponent(groupId)}/blobs/${file.id}`);
+  if (bytes.length !== file.size || digest(bytes) !== file.sha256) throw new Error('The shared file failed its integrity check. Your source is kept.');
+  check();
+  return bytes;
 }

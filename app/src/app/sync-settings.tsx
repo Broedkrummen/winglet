@@ -11,6 +11,7 @@ import { connectPersonalSync, disconnectPersonalSync, invitePersonalDevice, pers
   type Conflict, type SyncMember } from '../features/sync/runtime';
 import type { Value } from '../features/sync/model';
 import { RetainedFiles } from '../features/sync/RetainedFiles';
+import { SubmissionRecovery } from '../features/sync/SubmissionRecovery';
 
 export default function SyncSettings() {
   const s = useStyles();
@@ -92,6 +93,7 @@ export default function SyncSettings() {
       <ConfirmButton title="Disconnect sync home" confirmTitle="Disconnect? Local drafts and the recovery journal will stay on this device."
         onConfirm={() => run(disconnectPersonalSync)} loading={busy} />
     </>}
+    <SubmissionRecovery />
     <RetainedFiles />
   </Screen>;
 }

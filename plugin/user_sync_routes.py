@@ -16,6 +16,8 @@ async def _run(request, action):
             result = {'groups': await asyncio.to_thread(service.groups, device)}
         elif action == 'members':
             result = {'members': await asyncio.to_thread(service.members, group, device)}
+        elif action == 'submissions':
+            result = await asyncio.to_thread(service.submissions, group, device, request.query.get('after', ''))
         elif action == 'records':
             result = await asyncio.to_thread(service.listing, group, device,
                                              request.query.get('after_kind', ''), request.query.get('after_id', ''))
@@ -66,6 +68,7 @@ async def _run(request, action):
 
 async def h_user_sync_groups(request): return await _run(request, 'groups')
 async def h_user_sync_members(request): return await _run(request, 'members')
+async def h_user_sync_submissions(request): return await _run(request, 'submissions')
 async def h_user_sync_create(request): return await _run(request, 'create')
 async def h_user_sync_invite(request): return await _run(request, 'invite')
 async def h_user_sync_join(request): return await _run(request, 'join')
@@ -84,6 +87,7 @@ def register_routes(app):
     app.router.add_post('/api/user-sync/join', h_user_sync_join)
     app.router.add_post('/api/user-sync/{group_id}/invite', h_user_sync_invite)
     app.router.add_get('/api/user-sync/{group_id}/members', h_user_sync_members)
+    app.router.add_get('/api/user-sync/{group_id}/submissions', h_user_sync_submissions)
     app.router.add_post('/api/user-sync/{group_id}/revoke', h_user_sync_revoke)
     app.router.add_post('/api/user-sync/{group_id}/drafts/{record_id}/submit', h_user_sync_submit)
     app.router.add_post('/api/user-sync/{group_id}/drafts/{record_id}/submissions/{submission_id}/delivered', h_user_sync_settle)

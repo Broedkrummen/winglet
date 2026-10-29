@@ -37,7 +37,10 @@ function harness(request: (...args: any[]) => Promise<any>) {
     '../lib/modelOptions': models,
     '../lib/prefs': { usePrefs },
     '../lib/motion': { useReducedMotion: () => true },
-    '../lib/api': { api: request, ApiError: class extends Error {} },
+    '../lib/api': { signedApi: (server: any, method: string, path: string, data: any) => {
+      assert.equal(method, 'POST');
+      return request(server, path, { method, body: JSON.stringify(data) });
+    }, ApiError: class extends Error {} },
     '../lib/store': { useApp: app, isOwner: () => true },
     '../lib/themeContext': { makeStyles: () => () => any, useTheme: () => any },
   };

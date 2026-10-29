@@ -54,7 +54,7 @@ export function ProjectPicker({ server, chatId, onDone }: {
     const label = project ? project.name : 'No project';
     const sub = project ? `${project.private ? 'Only you' : 'Shared'}, ${projectCountLabel(project)}` : 'Just in Chats';
     return (
-      <Tap key={key} feedback="selection" accessibilityRole="radio" accessibilityState={{ selected, busy: busy === key }}
+      <Tap key={key} feedback="selection" accessibilityRole="radio" accessibilityState={{ checked: selected, busy: busy === key }} aria-checked={selected}
         accessibilityLabel={`${label}. ${sub}${selected ? '. Current project' : ''}`} disabled={!!busy}
         onPress={() => move(project)} style={({ pressed, hovered }) => [s.row, (pressed || hovered) && { backgroundColor: t.colors.pressed }]}>
         <View style={s.icon}>

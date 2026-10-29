@@ -159,7 +159,7 @@ async def test_encrypted_delivery_keeps_mutes_and_foreground_message_deduplicati
 async def test_webpush_guard_version_is_negotiated_and_scope_is_derived(tmp_path,monkeypatch):
     store=Store(tmp_path/'web.db');hub=Hub(store,web_root=tmp_path/'web')
     device,_=store.add_device('Web','web')
-    subscription=enrollment()['subscription'];store.add_push_sub(device['id'],'webpush',subscription['endpoint'],{**subscription,'guard_v':1})
+    subscription=enrollment(endpoint='https://fcm.googleapis.com/fixture')['subscription'];store.add_push_sub(device['id'],'webpush',subscription['endpoint'],{**subscription,'guard_v':1})
     captured=[]
     async def send(client,sub,note,*args,**kwargs):captured.append(note);return 201
     monkeypatch.setattr('plugin.webpush.send',send)

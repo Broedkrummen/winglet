@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import vm from 'node:vm';
 import { test } from 'node:test';
 import ts from 'typescript';
@@ -70,6 +71,26 @@ test('a destructive button asks for a second tap, and forgets after a few second
   ui.render('ConfirmButton', props).props.onPress();
   assert.equal(done, 1);
   assert.equal(ui.render('ConfirmButton', props).props.title, 'Remove key');
+});
+
+test('segmented radio options expose checked states', () => {
+  const ui = loadUi();
+  const out = ui.render('Segmented', { label: 'Mode', value: 'a', onChange: () => {},
+    options: [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }] });
+  const radios = out.props.children[1];
+  assert.equal(radios[0].props.accessibilityState.checked, true);
+  assert.equal(radios[1].props.accessibilityState.checked, false);
+  // React Native Web 0.21 forwards aria-checked, not accessibilityState.checked.
+  const require = createRequire(import.meta.url);
+  const React = require('react');
+  const { renderToStaticMarkup } = require('react-dom/server');
+  const { Pressable } = require('react-native-web');
+  const markup = radios.map((radio: any) => renderToStaticMarkup(React.createElement(Pressable, {
+    accessibilityRole: radio.props.accessibilityRole, accessibilityState: radio.props.accessibilityState,
+    'aria-checked': radio.props['aria-checked'],
+  }))).join('');
+  assert.match(markup, /aria-checked="true"/);
+  assert.match(markup, /aria-checked="false"/);
 });
 
 test('the search box shows a clear button once something is typed', () => {

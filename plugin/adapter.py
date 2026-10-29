@@ -442,13 +442,15 @@ class WingletAdapter(BasePlatformAdapter):
                     logger.debug('Routine delivery history is not available yet', exc_info=True)
             link = {'routine_id': job_id, **({'run_id': run_id} if run_id else {})}
             message = await hub.post_message(chat_id, text, push=False, meta={'routine': name, **link})
+            if message is None:
+                return SendResult(success=True)
             await hub.add_inbox("result", chat_id, f"Routine result: {name}"[:120] if name else "Routine result", text,
                                 {"message_id": message["id"], "job_id": job_id, **link})
         elif metadata.get("expect_edits"):
             message = await hub.post_message(chat_id, text, status="streaming")
         else:
             message = await hub.post_message(chat_id, text)
-        return SendResult(success=True, message_id=message["id"])
+        return SendResult(success=True, message_id=message["id"] if message else None)
 
     async def edit_message(self, chat_id: str, message_id: str, content: str, *,
                            finalize: bool = False) -> SendResult:
@@ -498,7 +500,7 @@ class WingletAdapter(BasePlatformAdapter):
             {"current_model": current_model or "", "current_provider": current_provider or "",
              "current_label": hermes_api.provider_label(current_provider or ""), "providers": offered},
             on_model_selected)
-        return SendResult(success=True, message_id=message["id"])
+        return SendResult(success=True, message_id=message["id"] if message else None)
 
     async def send_choice_picker(self, chat_id: str, title: str, choices: list, session_key: str, on_choice_selected,
                                  metadata: Optional[Dict[str, Any]] = None) -> SendResult:
@@ -511,7 +513,7 @@ class WingletAdapter(BasePlatformAdapter):
             return SendResult(success=False, error="No choices")
         message = await hub.post_picker(str(chat_id), "choice", _strip_cursor(title or "Choose"), {"choices": options},
                                         on_choice_selected)
-        return SendResult(success=True, message_id=message["id"])
+        return SendResult(success=True, message_id=message["id"] if message else None)
 
     async def send_slash_confirm(self, chat_id: str, title: str, message: str, session_key: str, confirm_id: str,
                                  metadata: Optional[Dict[str, Any]] = None) -> SendResult:
@@ -529,7 +531,7 @@ class WingletAdapter(BasePlatformAdapter):
                 {"value": "once", "label": "Approve once"}, {"value": "always", "label": "Always approve"},
                 {"value": "cancel", "label": "Cancel"}]},
             resolve, ttl=300)
-        return SendResult(success=True, message_id=posted["id"])
+        return SendResult(success=True, message_id=posted["id"] if posted else None)
 
     def toolsets_for_source(self, source) -> Optional[List[str]]:
         """A member's tools, when an owner has limited them, as the list Hermes starts from. Hermes adds
@@ -707,8 +709,9 @@ class WingletAdapter(BasePlatformAdapter):
             if message is not None:
                 return SendResult(success=True, message_id=cached)
         message = await hub.post_message(chat_id, text, role="system", meta={"status_key": str(status_key)}, push=False)
-        self._status_ids[key] = message["id"]
-        return SendResult(success=True, message_id=message["id"])
+        if message is not None:
+            self._status_ids[key] = message["id"]
+        return SendResult(success=True, message_id=message["id"] if message else None)
 
     async def delete_message(self, chat_id: str, message_id: str) -> bool:
         return bool(self._hub and await self._hub.delete_message(message_id))
@@ -775,9 +778,11 @@ class WingletAdapter(BasePlatformAdapter):
             {"command": prompt.command, "description": prompt.description, "choices": prompt.choices,
              "labels": labels, "styles": styles, "session_key": prompt.session_key,
              "request_id": request_id, "smart_denied": prompt.smart_denied})
+        if item is None:
+            return SendResult(success=True)
         message = await hub.post_message(prompt.chat_id, prompt.description or "Approval needed", role="system",
                                          meta={"inbox_id": item["id"], "kind": "approval"}, push=False)
-        return SendResult(success=True, message_id=message["id"])
+        return SendResult(success=True, message_id=message["id"] if message else None)
 
     async def send_clarify(self, chat_id: str, question: str, choices: Optional[list], clarify_id: str,
                            session_key: str, metadata: Optional[Dict[str, Any]] = None) -> SendResult:
@@ -796,9 +801,11 @@ class WingletAdapter(BasePlatformAdapter):
             "question", chat_id, "Question", question,
             {"question": question, "choices": [str(c) for c in (choices or [])], "clarify_id": clarify_id,
              "session_key": session_key, "multi_select": multi})
+        if item is None:
+            return SendResult(success=True)
         message = await hub.post_message(chat_id, question, role="system",
                                          meta={"inbox_id": item["id"], "kind": "question"}, push=False)
-        return SendResult(success=True, message_id=message["id"])
+        return SendResult(success=True, message_id=message["id"] if message else None)
 
     async def retire_clarify_card(self, clarify_id: str, notice: Optional[str] = None) -> None:
         hub = self._hub
@@ -856,7 +863,7 @@ class WingletAdapter(BasePlatformAdapter):
         except OSError as exc:
             return SendResult(success=False, error=f"could not read {path}: {exc}")
         message = await hub.post_message(chat_id, caption or "", meta={"attachments": [attachment]})
-        return SendResult(success=True, message_id=message["id"])
+        return SendResult(success=True, message_id=message["id"] if message else None)
 
     async def send_image(self, chat_id: str, image_url: str, caption: Optional[str] = None,
                          reply_to: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None) -> SendResult:

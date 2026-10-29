@@ -4,6 +4,20 @@ Every Winglet approval card stores the ID of the exact Hermes request it display
 card resolves only that ID. Command text, queue order, and the number of pending requests never
 establish identity.
 
+Positive approvals require an owner device's verified signing key and a fresh signed HTTP request.
+The WebSocket cannot approve commands. Owners may still deny without a signature, and older
+signed notification links remain deny-only. An unverified owner must scan a fresh owner code before
+approving; replacing a verified device key requires both an appropriate code and a request signed
+by its current key. Owner picker selections, including slash-command confirmations, also require
+signed requests. Typed `/approve` fallback commands also require signed HTTP and are never queued
+offline. If a verified device loses its signing key, it must be paired again instead of
+replacing that key with a code alone.
+
+Browser Web Push subscriptions are limited to Google FCM, Mozilla, Apple and Windows push service
+hosts over HTTPS on the default port. Previously stored browser subscriptions to other hosts are
+dropped when delivery is attempted. Encrypted Android push continues to use the server's configured
+ntfy relay.
+
 ## Compatibility with current Hermes
 
 Current Hermes calls `WingletAdapter.send_exec_approval` synchronously from

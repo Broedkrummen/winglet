@@ -914,7 +914,7 @@ export const useApp = create<AppState>((set, get) => {
         const data = await signedApi<{ message: Message }>(server, 'POST', `/api/chats/${encodeURIComponent(chatId)}/messages`,
           { text: text.trim(), client_id: clientId });
         if (get().servers.some((s) => s.id === serverId)) upsertMessage(serverId, chatId, data.message);
-        return;
+        return true;
       }
       // Hands-free turns belong to this live session. They never enter the durable offline outbox.
       if (o.liveOnly) {
